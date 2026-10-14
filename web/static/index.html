@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Pool</title>
+<meta name="description" content="8-ball, 9-ball and practice with real spin, jump shots and a CPU opponent with 10 skill levels.">
+<meta name="theme-color" content="#0B2419">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Pool">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0A0F12; color: #DDE3E8; overflow: hidden;
+    font-family: -apple-system, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  #game { display: none; position: fixed; left: 0; top: 0; touch-action: none; }
+  #menu { position: fixed; inset: 0; display: flex; justify-content: center; align-items: flex-start; overflow-y: auto;
+    -webkit-overflow-scrolling: touch; background: linear-gradient(135deg, #0F3D27, #0B2419 55%, #0A0F12);
+    padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); box-sizing: border-box; }
+  .card { background: rgba(21,27,32,0.92); border: 1px solid rgba(255,255,255,0.2); border-radius: 20px;
+    padding: 22px 24px; width: 100%; max-width: 560px; box-sizing: border-box; margin: auto 0; }
+  h1 { margin: 0; text-align: center; letter-spacing: 0.25em; font: bold 38px "Arial Narrow", "Roboto Condensed", Arial, sans-serif; color: #fff; }
+  .sub { margin: 2px 0 10px; text-align: center; color: #9AA7B1; font-size: 14px; }
+  .sec { margin: 16px 0 6px; color: #7F8C96; font: bold 11.5px "Arial Narrow", Arial, sans-serif; letter-spacing: 0.12em; }
+  .seg { display: flex; background: #0E1215; border-radius: 12px; padding: 4px; gap: 4px; }
+  .seg button { flex: 1; height: 42px; border: 0; border-radius: 9px; background: transparent; color: #9AA7B1;
+    font: bold 15px "Arial Narrow", Arial, sans-serif; }
+  .seg button.on { background: #2F8F5B; color: #fff; }
+  .val { color: #fff; font: bold 15px "Arial Narrow", Arial, sans-serif; margin: 2px 0; }
+  input[type=range] { width: 100%; accent-color: #F2C94C; height: 32px; }
+  input[type=range]:disabled { opacity: 0.35; }
+  .row { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; font-size: 15px; }
+  .row input { width: 20px; height: 20px; accent-color: #2F8F5B; }
+  .rec { font-size: 14px; line-height: 1.5; }
+  .link { background: none; border: 0; color: #EB5757; padding: 8px 0 2px; font-size: 13px; }
+  .play { width: 100%; height: 54px; margin-top: 18px; border: 0; border-radius: 14px; background: #F2C94C; color: #1A1A1A;
+    font: bold 20px "Arial Narrow", Arial, sans-serif; letter-spacing: 0.15em; }
+  .help { color: #8A97A1; font-size: 12.5px; line-height: 1.45; margin: 14px 0 0; }
+  #iosHint { color: #F2C94C; }
+  #pause { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); justify-content: center; align-items: center; z-index: 5; }
+  #pause .card { max-width: 300px; text-align: center; }
+  #pause h2 { margin: 0 0 12px; color: #fff; }
+  #pause button { display: block; width: 100%; height: 46px; margin-top: 10px; border: 0; border-radius: 12px; background: #39434C;
+    color: #fff; font: bold 16px "Arial Narrow", Arial, sans-serif; }
+  #pause button#resume { background: #F2C94C; color: #1A1A1A; }
+</style>
+</head>
+<body>
+<div id="menu">
+  <div class="card">
+    <h1>POOL</h1>
+    <p class="sub">8-Ball · 9-Ball · practice · real spin</p>
+
+    <div class="sec">GAME</div>
+    <div class="seg" id="seg-mode"><button>8-Ball</button><button>9-Ball</button><button>Practice</button></div>
+
+    <div id="matchOpts">
+      <div class="sec">OPPONENT</div>
+      <div class="seg" id="seg-opp"><button>Computer</button><button>Pass &amp; Play</button></div>
+
+      <div id="skillBlock">
+        <div class="sec">COMPUTER SKILL</div>
+        <div class="val" id="skillLabel"></div>
+        <input type="range" id="skill" min="1" max="10" step="1">
+      </div>
+
+      <div class="sec">SHOT CLOCK</div>
+      <label class="row"><input type="checkbox" id="clockOn"> Time limit for each shot</label>
+      <div class="val" id="clockLabel"></div>
+      <input type="range" id="clockSec" min="10" max="120" step="5">
+
+      <div class="sec">YOUR RECORD</div>
+      <div class="rec" id="record"></div>
+      <button class="link" id="resetRec">Reset record</button>
+    </div>
+
+    <label class="row"><input type="checkbox" id="sound"> Sound effects</label>
+    <button class="play" id="play">PLAY</button>
+
+    <p class="help" id="iosHint">On iPhone: tap the Share button, then <b>Add to Home Screen</b> to install Pool like an app (full screen, works offline).</p>
+    <p class="help">Turn your phone sideways to play. Drag on the table to aim, fine-tune with the wheel, touch the
+      cue ball on the right to add spin, raise the cue angle for a jump shot, then pull the power bar down and let go
+      to shoot. With ball in hand, drag the cue ball to place it. You can hold the power bar and aim with another finger.</p>
+  </div>
+</div>
+
+<canvas id="game"></canvas>
+
+<div id="pause">
+  <div class="card">
+    <h2>Paused</h2>
+    <button id="resume">Resume</button>
+    <button id="restart">Restart rack</button>
+    <button id="quit">Quit to menu</button>
+  </div>
+</div>
+
+<script src="pool.js"></script>
+</body>
+</html>

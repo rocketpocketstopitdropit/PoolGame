@@ -1,0 +1,16 @@
+{
+  "name": "Pool",
+  "short_name": "Pool",
+  "description": "8-ball, 9-ball and practice with real spin, jump shots and a CPU opponent.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0B2419",
+  "theme_color": "#0B2419",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

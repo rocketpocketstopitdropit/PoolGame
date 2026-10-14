@@ -1,0 +1,50 @@
+name: Web version
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The web version is compiled from the same game-engine code as the Android app.
+      - name: Get the Kotlin compiler
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/kc.zip" https://github.com/JetBrains/kotlin/releases/download/v2.1.21/kotlin-compiler-2.1.21.zip
+          unzip -q "$RUNNER_TEMP/kc.zip" -d "$RUNNER_TEMP"
+
+      - name: Build the web version
+        run: KOTLIN_HOME="$RUNNER_TEMP/kotlinc" bash web/build.sh
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/build/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -13,6 +13,15 @@ no image or sound assets (balls are rendered per-pixel and sounds are synthesize
 Command line: `./gradlew installDebug` (APK at `app/build/outputs/apk/debug/`).
 Engine unit tests: `./gradlew test`.
 
+### Web version (iPhone, any browser)
+
+`web/` is a browser version built from the **same game-engine code** (`app/src/main/java/com/poolgame/app/core`)
+compiled to JavaScript, plus a canvas screen in `web/src`. `.github/workflows/pages.yml` builds it on every push
+and publishes it with GitHub Pages at **https://rocketpocketstopitdropit.github.io/PoolGame/**.
+On iPhone: open the link in Safari → Share → *Add to Home Screen* for a full-screen, offline-capable app icon.
+If the phone is in portrait (e.g. rotation lock), the game draws sideways so it fills the screen held horizontally.
+Local build: `KOTLIN_HOME=/path/to/kotlinc web/build.sh` → `web/build/site`.
+
 ### Building on GitHub (no Android Studio)
 
 Push this folder to a GitHub repository. `.github/workflows/build.yml` runs on every push: it runs

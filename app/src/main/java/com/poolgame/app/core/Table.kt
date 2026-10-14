@@ -1,6 +1,10 @@
 package com.poolgame.app.core
 
+import kotlin.math.PI
 import kotlin.math.sqrt
+
+/** Degrees to radians (the engine is plain Kotlin so it also compiles for the web version). */
+fun toRad(deg: Double) = deg * PI / 180.0
 
 /**
  * Physical constants and table geometry. Units are SI (meters, seconds).

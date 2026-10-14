@@ -3,6 +3,7 @@ package com.poolgame.app.core
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.sign
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -96,7 +97,7 @@ class World {
         val m = hypot(a, b)
         if (m > P.MAX_TIP) { a *= P.MAX_TIP / m; b *= P.MAX_TIP / m }
         val dx = cos(angle); val dy = sin(angle)
-        val el = elevation.coerceIn(0.0, Math.toRadians(P.MAX_ELEVATION))
+        val el = elevation.coerceIn(0.0, toRad(P.MAX_ELEVATION))
         val down = speed * sin(el)
         // Part of the horizontal speed is lost to slate friction during the bounce.
         val h = speed * cos(el) * (1.0 - 0.3 * sin(el))
@@ -176,7 +177,7 @@ class World {
             b.wx = b.vy / r; b.wy = -b.vx / r
         }
         val dz = P.SPIN_DECEL * dt
-        b.wz = if (abs(b.wz) <= dz) 0.0 else b.wz - Math.signum(b.wz) * dz
+        b.wz = if (abs(b.wz) <= dz) 0.0 else b.wz - sign(b.wz) * dz
         if (abs(b.vx) + abs(b.vy) < 0.004 && r * (abs(b.wx) + abs(b.wy)) < 0.004) b.stop()
     }
 

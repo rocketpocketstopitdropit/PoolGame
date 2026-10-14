@@ -1,5 +1,6 @@
 package com.poolgame.app.core
 
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -11,6 +12,7 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
+import kotlin.time.TimeSource
 
 class Plan(
     val angle: Double,
@@ -38,19 +40,21 @@ class Cand(
  *  - whether it plays safeties when nothing is makeable
  * Every candidate is checked by running the real physics engine on a copy of the table.
  */
-class Ai(val level: Int, seed: Long = System.nanoTime()) {
+class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
     private val rng = Random(seed)
-    val aimSigma = Math.toRadians(1.8 * 0.72.pow(level - 1))
+    val aimSigma = toRad(1.8 * 0.72.pow(level - 1))
     private val speedSigma = 0.14 * 0.8.pow(level - 1)
     private val spinSigma = 0.10 * 0.8.pow(level - 1)
     private val posWeight = if (level <= 2) 0.0 else 0.1 * level
-    private var deadline = 0L
+    private var started = TimeSource.Monotonic.markNow()
+    private var budget = 0L
     private var sim: Match? = null
     var simulations = 0
         private set
 
     fun plan(m: Match, budgetMs: Long = 2500): Plan {
-        deadline = System.nanoTime() + budgetMs * 1_000_000L
+        started = TimeSource.Monotonic.markNow()
+        budget = budgetMs
         simulations = 0
         val ideal = choose(m)
         return Plan(
@@ -62,10 +66,10 @@ class Ai(val level: Int, seed: Long = System.nanoTime()) {
         )
     }
 
-    private fun timeUp() = System.nanoTime() > deadline
+    private fun timeUp() = started.elapsedNow().inWholeMilliseconds > budget
     private fun gauss(): Double {
         val u1 = rng.nextDouble(1e-12, 1.0); val u2 = rng.nextDouble()
-        return sqrt(-2 * kotlin.math.ln(u1)) * cos(2 * Math.PI * u2)
+        return sqrt(-2 * kotlin.math.ln(u1)) * cos(2 * PI * u2)
     }
 
     // ------------------------------------------------------------------ top level
@@ -115,7 +119,7 @@ class Ai(val level: Int, seed: Long = System.nanoTime()) {
         val c = w.balls[0]
         if (!c.onTable) return out
         val r = P.R
-        val minCos = cos(Math.toRadians(80.0))
+        val minCos = cos(toRad(80.0))
         for (t in m.legalTargets(player)) {
             val tb = w.balls[t]
             if (!tb.onTable) continue
@@ -197,11 +201,11 @@ class Ai(val level: Int, seed: Long = System.nanoTime()) {
                 if (!w.pathClear(tb.x, tb.y, pk.aimX, pk.aimY, 0, t)) continue
                 val gx = tb.x - ux * 2 * r; val gy = tb.y - uy * 2 * r
                 for (cutDeg in cuts) for (d in dists) {
-                    val a = atan2(uy, ux) + Math.toRadians(cutDeg)
+                    val a = atan2(uy, ux) + toRad(cutDeg)
                     val px = gx - cos(a) * d; val py = gy - sin(a) * d
                     if (!work.canPlaceCue(px, py)) continue
                     if (!w.pathClear(px, py, gx, gy, 0, t)) continue
-                    var s = prob(cos(Math.toRadians(cutDeg)), d, d2, min(pk.tolerance, margin), aimSigma)
+                    var s = prob(cos(toRad(cutDeg)), d, d2, min(pk.tolerance, margin), aimSigma)
                     if (level >= 6 && cutDeg != 0.0 && abs(cutDeg) < 15) s *= 1.04  // a little angle helps position
                     if (s > best) { best = s; bx = px; by = py }
                 }
@@ -305,7 +309,7 @@ class Ai(val level: Int, seed: Long = System.nanoTime()) {
             val (kick, kickScore) = kickSearch(work)
             if (kick != null && (best == null || kickScore > bestScore)) best = kick
         }
-        return best ?: Plan(rng.nextDouble(0.0, 2 * Math.PI), 2.0, 0.0, 0.0, "desperation")
+        return best ?: Plan(rng.nextDouble(0.0, 2 * PI), 2.0, 0.0, 0.0, "desperation")
     }
 
     /** Hit a legal ball at varying thickness and speed; prefer leaving the opponent nothing. */
@@ -343,7 +347,7 @@ class Ai(val level: Int, seed: Long = System.nanoTime()) {
         val steps = if (level >= 6) 180 else 90
         for (i in 0 until steps) {
             if (timeUp() && best != null) break
-            val angle = 2 * Math.PI * i / steps
+            val angle = 2 * PI * i / steps
             val e = evaluate(work, angle, 3.0, 0.0, 0.0)
             if (e.value > bestScore) { bestScore = e.value; best = Plan(angle, 3.0, 0.0, 0.0, "kick") }
         }
