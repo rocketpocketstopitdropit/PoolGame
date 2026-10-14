@@ -18,6 +18,8 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import com.poolgame.app.core.Ai
+import com.poolgame.app.core.GameSave
+import com.poolgame.app.core.GameSettings
 import com.poolgame.app.core.GameMode
 import com.poolgame.app.core.Group
 import com.poolgame.app.core.Match
@@ -48,6 +50,9 @@ class GameView(
     soundOn: Boolean,
     private val shotClock: Int,          // seconds per shot, 0 = off
     private val practice: Boolean,       // free practice: no rules, move any ball
+    aimSensitivity: Int,                 // fine-aim wheel speed, 1..10
+    var showPrediction: Boolean,         // draw where the balls will go (otherwise just an aim line)
+    resume: String?,                     // a saved game to continue, or null for a new game
     private val host: Host
 ) : View(context), Choreographer.FrameCallback {
 
@@ -100,6 +105,12 @@ class GameView(
     private var trayR = 0f
     private var movingBall = -1
 
+    // Fine-aim wheel: level 5 is ~0.01 degrees per dp of finger travel; each step is 1.6x.
+    private val wheelRadPerDp = 0.0002 * Math.pow(1.6, (aimSensitivity.coerceIn(1, 10) - 5).toDouble())
+
+    // Saving: the game as it stood at the start of the current turn.
+    private var turnSave: String? = null
+
     // Shot clock
     private var clockStarted = false
     private var clockLeft = 0.0
@@ -128,6 +139,7 @@ class GameView(
 
     // Aim prediction (runs the real physics for the first part of the shot)
     private val prediction = Prediction()
+    private val hit = DoubleArray(4)
     private val scratchWorld = World()
     private val predKey = DoubleArray(9) { Double.NaN }
 
@@ -177,7 +189,7 @@ class GameView(
     init {
         isFocusable = true
         balls.plain = practice
-        newGame(0)
+        if (resume == null || !resumeGame(resume)) newGame(0)
     }
 
     private fun makeListener() = object : WorldListener {
@@ -217,6 +229,39 @@ class GameView(
 
     fun restart() = newGame(breaker)
 
+    fun isPractice() = practice
+
+    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practice, breaker)
+
+    private fun resumeGame(text: String): Boolean {
+        val st = GameSave.readSettings(text) ?: return false
+        val m = Match(mode, names)
+        if (!GameSave.restore(text, m)) return false
+        generation++
+        breaker = st.breaker
+        match = m
+        match.world.trackOrientation = true
+        match.world.listener = makeListener()
+        sinks.clear()
+        spinX = 0f; spinY = 0f; power = 0f; elevDeg = 0f
+        gameOverTitle = ""; recordLine = ""
+        message = if (practice) "Practice · hold any ball to move it" else "Game resumed · " + match.message
+        startTurn()
+        return true
+    }
+
+    /**
+     * The game to save when leaving it, or null when it's over. A shot that is still rolling is
+     * undone (the saved game is from the start of that turn).
+     */
+    fun saveState(): String? {
+        if (match.winner >= 0 || phase == Phase.OVER) return null
+        return when (phase) {
+            Phase.HUMAN, Phase.PAUSE -> GameSave.write(match, settings())
+            else -> turnSave ?: GameSave.write(match, settings())
+        }
+    }
+
     private fun startTurn() {
         if (match.winner >= 0) {
             phase = Phase.OVER
@@ -232,6 +277,7 @@ class GameView(
         }
         power = 0f
         elevDeg = 0f
+        turnSave = GameSave.write(match, settings())
         if (isCpu(match.current)) {
             phase = Phase.CPU_THINK
             thinkingSince = System.nanoTime()
@@ -283,6 +329,7 @@ class GameView(
 
     private fun shoot(angle: Double, speed: Double, side: Double, vert: Double, elev: Double) {
         if (practice) practiceSnapshot = World().also { it.copyFrom(match.world) }
+        turnSave = GameSave.write(match, settings())
         sfx.strike(speed)
         match.shoot(angle, speed, side, vert, elev)
         phase = Phase.RUNNING
@@ -556,14 +603,16 @@ class GameView(
         c.drawRect(sx(0.0), sy(0.0), sx(0.025), sy(P.W), p)
         p.shader = null
 
+        // Pockets: the hole is drawn exactly the size of the drop zone, outlined in a bright ring —
+        // once a ball's centre crosses that ring, it falls in.
+        val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f * dp; color = 0xFFF2E3B3.toInt() }
         for (pk in Table.pockets) {
-            val r = ((pk.capR + 0.004) * scale).toFloat()
-            p.color = 0xFF2A1A10.toInt()
-            c.drawCircle(sx(pk.cx), sy(pk.cy), r + 3 * dp, p)
-            p.shader = RadialGradient(sx(pk.cx), sy(pk.cy), r, intArrayOf(0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF1B1B1B.toInt()),
-                floatArrayOf(0f, 0.75f, 1f), Shader.TileMode.CLAMP)
+            val r = (pk.capR * scale).toFloat()
+            p.shader = RadialGradient(sx(pk.cx), sy(pk.cy), r, intArrayOf(0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF141414.toInt()),
+                floatArrayOf(0f, 0.8f, 1f), Shader.TileMode.CLAMP)
             c.drawCircle(sx(pk.cx), sy(pk.cy), r, p)
             p.shader = null
+            c.drawCircle(sx(pk.cx), sy(pk.cy), r, ring)
         }
         val nose = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f * dp; color = 0xFF0E4A2D.toInt(); strokeCap = Paint.Cap.ROUND }
         for (sg in Table.segs) c.drawLine(sx(sg.ax), sy(sg.ay), sx(sg.bx), sy(sg.by), nose)
@@ -694,6 +743,16 @@ class GameView(
     private fun drawGuide(canvas: Canvas) {
         val c = match.world.balls[0]
         if (!c.onTable) return
+        if (!showPrediction) {
+            // Aim line only: straight from the cue ball to the cushion, no contact or paths.
+            match.world.railPoint(aimAngle, hit)
+            guide.strokeWidth = 1.7f * dp
+            guide.pathEffect = dash
+            guide.color = 0x90FFFFFF.toInt()
+            canvas.drawLine(sx(c.x), sy(c.y), sx(hit[0]), sy(hit[1]), guide)
+            guide.pathEffect = null
+            return
+        }
         updatePrediction()
         val pr = prediction
         if (pr.cueN < 2) return
@@ -1157,7 +1216,7 @@ class GameView(
                 val d = y - ptrLastY[id]
                 ptrLastY[id] = y
                 wheelOffset += d
-                aimAngle += d / dp * 0.0002   // ~0.01 degree per dp of finger travel
+                aimAngle += d / dp * wheelRadPerDp
             }
             Touch.MOVE_CUE -> {
                 dragX = x; dragY = y

@@ -2,6 +2,8 @@ package com.poolgame.web
 
 import com.poolgame.app.core.Ai
 import com.poolgame.app.core.GameMode
+import com.poolgame.app.core.GameSave
+import com.poolgame.app.core.GameSettings
 import com.poolgame.app.core.Group
 import com.poolgame.app.core.Match
 import com.poolgame.app.core.P
@@ -36,6 +38,9 @@ class Game(
     private val cpuLevel: Int,
     private val shotClock: Int,
     private val practice: Boolean,
+    aimSensitivity: Int,
+    var showPrediction: Boolean,
+    resume: String?,
     private val sfx: Sounds,
     private val host: GameHost
 ) {
@@ -71,6 +76,10 @@ class Game(
     private val trayIds = IntArray(15); private val trayX = DoubleArray(15)
     private var trayN = 0; private var trayY = 0.0; private var trayR = 0.0
     private var movingBall = -1
+
+    private val wheelRadPerPx = 0.0002 * 1.6.pow((aimSensitivity.coerceIn(1, 10) - 5).toDouble())
+    private var turnSave: String? = null
+    private val hit = DoubleArray(4)
 
     private var clockStarted = false
     private var clockLeft = 0.0
@@ -129,7 +138,7 @@ class Game(
 
     init {
         balls.plain = practice
-        newGame(0)
+        if (resume == null || !resumeGame(resume)) newGame(0)
     }
 
     private fun makeListener() = object : WorldListener {
@@ -168,6 +177,36 @@ class Game(
 
     fun restart() = newGame(breaker)
 
+    fun isPractice() = practice
+
+    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practice, breaker)
+
+    private fun resumeGame(text: String): Boolean {
+        val st = GameSave.readSettings(text) ?: return false
+        val m = Match(mode, names)
+        if (!GameSave.restore(text, m)) return false
+        generation++
+        breaker = st.breaker
+        match = m
+        match.world.trackOrientation = true
+        match.world.listener = makeListener()
+        sinks.clear()
+        spinX = 0.0; spinY = 0.0; power = 0.0; elevDeg = 0.0
+        gameOverTitle = ""; recordLine = ""
+        message = if (practice) "Practice · hold any ball to move it" else "Game resumed · " + match.message
+        startTurn()
+        return true
+    }
+
+    /** The game to save when leaving it, or null when it's over. A rolling shot is undone. */
+    fun saveState(): String? {
+        if (match.winner >= 0 || phase == Phase.OVER) return null
+        return when (phase) {
+            Phase.HUMAN, Phase.PAUSE -> GameSave.write(match, settings())
+            else -> turnSave ?: GameSave.write(match, settings())
+        }
+    }
+
     private fun startTurn() {
         if (match.winner >= 0) {
             phase = Phase.OVER
@@ -183,6 +222,7 @@ class Game(
         }
         power = 0.0
         elevDeg = 0.0
+        turnSave = GameSave.write(match, settings())
         if (isCpu(match.current)) {
             phase = Phase.CPU_THINK
             thinkingSince = now()
@@ -233,6 +273,7 @@ class Game(
 
     private fun shoot(angle: Double, speed: Double, side: Double, vert: Double, elev: Double) {
         if (practice) practiceSnapshot = World().also { it.copyFrom(match.world) }
+        turnSave = GameSave.write(match, settings())
         sfx.strike(speed)
         match.shoot(angle, speed, side, vert, elev)
         phase = Phase.RUNNING
@@ -457,12 +498,14 @@ class Game(
         sh2.addColorStop(0.0, "rgba(0,0,0,0.27)"); sh2.addColorStop(1.0, "rgba(0,0,0,0)")
         c.fillStyle = sh2; c.fillRect(sx(0.0), sy(0.0), 0.025 * scale, P.W * scale)
 
+        // Pockets: the hole is exactly the drop zone, outlined in a bright ring.
         for (pk in Table.pockets) {
-            val pr = (pk.capR + 0.004) * scale
-            c.fillStyle = "#2A1A10"; c.circle(sx(pk.cx), sy(pk.cy), pr + 3); c.fill()
+            val pr = pk.capR * scale
             val hole = c.createRadialGradient(sx(pk.cx), sy(pk.cy), 0.0, sx(pk.cx), sy(pk.cy), pr)
-            hole.addColorStop(0.0, "#000"); hole.addColorStop(0.75, "#000"); hole.addColorStop(1.0, "#1B1B1B")
+            hole.addColorStop(0.0, "#000"); hole.addColorStop(0.8, "#000"); hole.addColorStop(1.0, "#141414")
             c.fillStyle = hole; c.circle(sx(pk.cx), sy(pk.cy), pr); c.fill()
+            c.strokeStyle = "#F2E3B3"; c.lineWidth = 2.0
+            c.circle(sx(pk.cx), sy(pk.cy), pr); c.stroke()
         }
         c.strokeStyle = "#0E4A2D"; c.lineWidth = 2.0; c.lineCap = "round"
         for (sg in Table.segs) c.line(sx(sg.ax), sy(sg.ay), sx(sg.bx), sy(sg.by))
@@ -560,7 +603,16 @@ class Game(
     }
 
     private fun drawGuide(ctx: Ctx2D) {
-        if (!match.world.balls[0].onTable) return
+        val c = match.world.balls[0]
+        if (!c.onTable) return
+        if (!showPrediction) {
+            match.world.railPoint(aimAngle, hit)
+            ctx.lineWidth = 1.7; ctx.lineCap = "round"
+            ctx.setLineDash(dash); ctx.strokeStyle = "rgba(255,255,255,0.56)"
+            ctx.line(sx(c.x), sy(c.y), sx(hit[0]), sy(hit[1]))
+            ctx.setLineDash(noDash)
+            return
+        }
         updatePrediction()
         val pr = prediction
         if (pr.cueN < 2) return
@@ -914,7 +966,7 @@ class Game(
                 val d = y - ptrLastY[id]
                 ptrLastY[id] = y
                 wheelOffset += d
-                aimAngle += d * 0.0002
+                aimAngle += d * wheelRadPerPx
             }
             Touch.MOVE_CUE -> {
                 dragX = x; dragY = y

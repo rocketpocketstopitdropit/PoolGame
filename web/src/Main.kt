@@ -1,6 +1,7 @@
 package com.poolgame.web
 
 import com.poolgame.app.core.GameMode
+import com.poolgame.app.core.GameSave
 import kotlin.math.PI
 import kotlin.math.min
 
@@ -26,6 +27,14 @@ class App : GameHost {
     private var clockOn = Store.getBool("clockOn", false)
     private var clockSec = Store.getInt("clockSec", 30).coerceIn(10, 120)
     private var sound = Store.getBool("sound", true)
+    private var aimSens = Store.getInt("aimSens", 5).coerceIn(1, 10)
+    private var prediction = Store.getBool("prediction", true)
+
+    // What the current game is (may differ from the menu when resuming a saved game)
+    private var playingCpu = true
+    private var playingLevel = 5
+    private var playingMode = GameMode.EIGHT_BALL
+    private var playingPractice = false
 
     private val levelNames = arrayOf("Beginner", "Novice", "Casual", "Bar Player", "Club Player",
         "Skilled", "Advanced", "Expert", "Master", "Pro")
@@ -118,10 +127,24 @@ class App : GameHost {
         el("resetRec").addEventListener("click", {
             if (window.confirm("Reset your record? This clears all wins and losses.") as Boolean) { Store.resetRecord(); refreshMenu() }
         })
-        el("play").addEventListener("click", { sounds.unlock(); startGame() })
+        el("aimSens").addEventListener("input", { aimSens = (el("aimSens").value as String).toInt(); save(); refreshMenu() })
+        el("prediction").addEventListener("change", { prediction = el("prediction").checked as Boolean; save() })
+        el("play").addEventListener("click", { sounds.unlock(); startGame(false) })
+        el("resumeBtn").addEventListener("click", { sounds.unlock(); startGame(true) })
         el("resume").addEventListener("click", { hidePause() })
         el("restart").addEventListener("click", { hidePause(); game?.restart() })
-        el("quit").addEventListener("click", { hidePause(); showMenu() })
+        el("predToggle").addEventListener("click", {
+            val g = game
+            if (g != null) {
+                g.showPrediction = !g.showPrediction
+                prediction = g.showPrediction; save()
+                el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
+            }
+        })
+        el("quit").addEventListener("click", { hidePause(); saveGame(); showMenu() })
+        // Keep the game if the browser tab is closed or the phone switches apps.
+        document.addEventListener("visibilitychange", { if (document.hidden == true) saveGame() })
+        window.addEventListener("pagehide", { saveGame() })
         val ua = navigator.userAgent as String
         val ios = Regex("iPhone|iPad|iPod").containsMatchIn(ua)
         val standalone = (navigator.standalone == true) ||
@@ -156,6 +179,13 @@ class App : GameHost {
         el("clockSec").disabled = !clockOn
         el("clockLabel").textContent = if (clockOn) "$clockSec seconds per shot" else "Off"
         el("sound").checked = sound
+        el("aimSens").value = aimSens.toString()
+        el("sensLabel").textContent = "Fine-aim wheel speed: $aimSens" +
+            if (aimSens == 5) " (default)" else if (aimSens < 5) " (finer)" else " (faster)"
+        el("prediction").checked = prediction
+        val saved = savedSummary()
+        el("resumeBtn").style.display = if (saved != null) "block" else "none"
+        el("resumeBtn").textContent = "RESUME · ${saved ?: ""}"
         val m = modeName()
         val name = if (modeIdx == 1) "9-Ball" else "8-Ball"
         el("record").innerHTML = if (vsCpu)
@@ -168,13 +198,43 @@ class App : GameHost {
         Store.set("modeIdx", modeIdx.toString()); Store.set("vsCpu", vsCpu.toString())
         Store.set("level", level.toString()); Store.set("clockOn", clockOn.toString())
         Store.set("clockSec", clockSec.toString()); Store.set("sound", sound.toString())
+        Store.set("aimSens", aimSens.toString()); Store.set("prediction", prediction.toString())
     }
 
-    private fun startGame() {
-        val practice = modeIdx == 2
-        val mode = if (modeIdx == 1) GameMode.NINE_BALL else GameMode.EIGHT_BALL
+    private fun savedSummary(): String? {
+        val s = GameSave.readSettings(Store.get("savedGame", "")) ?: return null
+        val name = if (s.mode == GameMode.NINE_BALL) "9-Ball" else "8-Ball"
+        return when {
+            s.practice -> "Practice"
+            s.vsCpu -> "$name vs CPU level ${s.level}"
+            else -> "$name pass & play"
+        }
+    }
+
+    private fun saveGame() {
+        val g = game ?: return
+        Store.set("savedGame", g.saveState() ?: "")
+    }
+
+    private fun startGame(resume: Boolean) {
+        var practice = modeIdx == 2
+        var mode = if (modeIdx == 1) GameMode.NINE_BALL else GameMode.EIGHT_BALL
+        var cpu = vsCpu && !practice
+        var lvl = level
+        var clock = if (clockOn && !practice) clockSec else 0
+        var text: String? = null
+        if (resume) {
+            val saved = Store.get("savedGame", "")
+            val s = GameSave.readSettings(saved)
+            if (s != null) {
+                text = saved
+                practice = s.practice; mode = s.mode; cpu = s.vsCpu; lvl = s.level; clock = s.shotClock
+            }
+        } else Store.set("savedGame", "")
         sounds.enabled = sound
-        game = Game(mode, vsCpu && !practice, level, if (clockOn && !practice) clockSec else 0, practice, sounds, this)
+        playingCpu = cpu; playingLevel = lvl; playingMode = mode; playingPractice = practice
+        el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
+        game = Game(mode, cpu, lvl, clock, practice, aimSens, prediction, text, sounds, this)
         el("menu").style.display = "none"
         canvas.style.display = "block"
         slots.clear()
@@ -201,13 +261,14 @@ class App : GameHost {
     override fun onExitToMenu() = showMenu()
 
     override fun onGameFinished(winner: Int): String {
-        if (game == null) return ""
-        val m = modeName()
-        val cpu = vsCpu && modeIdx != 2
-        val lvl = if (cpu) level else 0
+        Store.set("savedGame", "")
+        if (game == null || playingPractice) return ""
+        val m = playingMode.name
+        val cpu = playingCpu
+        val lvl = if (cpu) playingLevel else 0
         Store.record(m, cpu, lvl, winner)
-        val name = if (modeIdx == 1) "9-Ball" else "8-Ball"
-        return if (cpu) "Your $name record vs level $level: ${Store.wins(m, true, lvl)}–${Store.losses(m, true, lvl)}"
+        val name = if (playingMode == GameMode.NINE_BALL) "9-Ball" else "8-Ball"
+        return if (cpu) "Your $name record vs level $lvl: ${Store.wins(m, true, lvl)}–${Store.losses(m, true, lvl)}"
         else "$name pass & play: Player 1 ${Store.wins(m, false, 0)} – Player 2 ${Store.losses(m, false, 0)}"
     }
 }

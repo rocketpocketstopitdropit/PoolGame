@@ -35,7 +35,7 @@ You can also start a build manually from the Actions tab with **Run workflow**.
 | Control | What it does |
 |---|---|
 | Drag on the table | Aim the cue toward your finger |
-| **Fine aim** wheel (right) | Nudge the aim ~0.01° per dp of finger travel |
+| **Fine aim** wheel (right) | Nudge the aim; speed is adjustable 1–10 in the menu (5 ≈ 0.01° per dp of finger travel, each step 1.6×) |
 | **Cue angle** slider (right) | Raise the cue for a jump shot (0–60°). Around 45–55° with a firm stroke hops the cue ball over a blocker |
 | **Spin** cue ball (right) | Touch where the tip strikes: top = follow, bottom = draw, sides = english. Tap the centre to reset |
 | **Power** bar (left) | Pull down to set power, release to shoot. Slide back to the top to cancel. While holding it, you can use another finger on the fine-aim wheel, the table, spin or cue angle |
@@ -45,7 +45,12 @@ You can also start a build manually from the Actions tab with **Run workflow**.
 The aim guide is computed by running the real physics for the first part of the shot, so it shows
 exactly where the balls will go — including throw, follow/draw and jumps (yellow = airborne). A red
 ghost ball with an X means that ball is not a legal first contact; a red ring means a scratch.
-There is no random error on your shots.
+There is no random error on your shots. **Shot prediction** can be turned off (menu or pause menu); then only a
+straight aim line from the cue ball to the cushion is shown. Pocket holes are drawn exactly the size of the
+drop zone with a bright ring: once a ball's centre crosses the ring it falls.
+
+**Pause & resume**: ☰ → *Main menu* keeps the game; the menu shows *Resume*. The game is also saved if you switch
+apps or close it. A shot that was still rolling is replayed from the start of that turn.
 
 **Shot clock** (menu): optional 10–120 s per shot for human players; running out is a foul. With
 ball in hand the clock waits until you aim (table or fine-aim wheel) or touch the power bar.

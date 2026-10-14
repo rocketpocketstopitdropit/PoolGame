@@ -72,6 +72,21 @@ class EngineTest {
         assertEquals(1, m.current)
     }
 
+    @Test fun saveAndRestoreGame() {
+        val m = Match(GameMode.EIGHT_BALL, arrayOf("You", "CPU")); m.rack(Random(3), 0)
+        m.shoot(0.0, 7.0, 0.0, 0.0); m.world.simulate(); m.resolve()
+        val text = GameSave.write(m, GameSettings(GameMode.EIGHT_BALL, true, 7, 30, false, 0))
+        val s = GameSave.readSettings(text)!!
+        assertEquals(7, s.level); assertEquals(30, s.shotClock); assertTrue(s.vsCpu)
+        val r = Match(GameMode.EIGHT_BALL, arrayOf("You", "CPU"))
+        assertTrue(GameSave.restore(text, r))
+        assertEquals(m.current, r.current); assertEquals(m.ballInHand, r.ballInHand); assertEquals(m.isBreak, r.isBreak)
+        for (i in 0 until 16) {
+            assertEquals(m.world.balls[i].onTable, r.world.balls[i].onTable)
+            assertEquals(m.world.balls[i].x, r.world.balls[i].x, 1e-12)
+        }
+    }
+
     @Test fun youWinGrammar() {
         val m = Match(GameMode.NINE_BALL, arrayOf("You", "CPU"))
         assertEquals("You win!", m.winsText(0))

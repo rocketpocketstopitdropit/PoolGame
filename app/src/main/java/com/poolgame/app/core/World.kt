@@ -421,6 +421,20 @@ class World {
         return true
     }
 
+    /** Where the cue ball's centre would meet the cushions travelling along `angle` (ignores balls). */
+    fun railPoint(angle: Double, out: DoubleArray) {
+        val c = balls[0]
+        val dx = cos(angle); val dy = sin(angle)
+        val r = P.R
+        var tw = Double.MAX_VALUE
+        if (dx > 1e-9) tw = minOf(tw, (P.L - r - c.x) / dx)
+        if (dx < -1e-9) tw = minOf(tw, (r - c.x) / dx)
+        if (dy > 1e-9) tw = minOf(tw, (P.W - r - c.y) / dy)
+        if (dy < -1e-9) tw = minOf(tw, (r - c.y) / dy)
+        if (tw == Double.MAX_VALUE || tw < 0) tw = 0.0
+        out[0] = c.x + dx * tw; out[1] = c.y + dy * tw
+    }
+
     /**
      * Cast the cue ball along `angle`. Returns the hit: [type, x, y, ballId]
      * where type 1 = ball (x,y = ghost-ball centre), type 2 = cushion (x,y = cue centre at contact), 0 = nothing.

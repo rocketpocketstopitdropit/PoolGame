@@ -26,6 +26,9 @@ class MenuActivity : Activity() {
     private var level = 5
     private var sound = true
     private var practice = false
+    private var aimSens = 5
+    private var prediction = true
+    private var resumeBtn: TextView? = null
     private var clockOn = false
     private var clockSec = 30
     private val stats by lazy { Stats(this) }
@@ -46,6 +49,8 @@ class MenuActivity : Activity() {
         level = prefs.getInt("level", 5).coerceIn(1, 10)
         sound = prefs.getBoolean("sound", true)
         practice = prefs.getBoolean("practice", false)
+        aimSens = prefs.getInt("aimSens", 5).coerceIn(1, 10)
+        prediction = prefs.getBoolean("prediction", true)
         clockOn = prefs.getBoolean("clockOn", false)
         clockSec = prefs.getInt("clockSec", 30).coerceIn(10, 120)
         build()
@@ -54,6 +59,11 @@ class MenuActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refreshRecord()
+        val saved = GameActivity.savedSummary(this)
+        resumeBtn?.apply {
+            visibility = if (saved != null) View.VISIBLE else View.GONE
+            text = "RESUME · ${saved ?: ""}"
+        }
     }
 
     private fun refreshRecord() {
@@ -71,7 +81,8 @@ class MenuActivity : Activity() {
         prefs.edit().putString("mode", mode.name).putBoolean("vsCpu", vsCpu)
             .putInt("level", level).putBoolean("sound", sound)
             .putBoolean("clockOn", clockOn).putInt("clockSec", clockSec)
-            .putBoolean("practice", practice).apply()
+            .putBoolean("practice", practice)
+            .putInt("aimSens", aimSens).putBoolean("prediction", prediction).apply()
         refreshRecord()
     }
 
@@ -202,6 +213,31 @@ class MenuActivity : Activity() {
         card.addView(matchBlock)
         matchBlockRef = matchBlock
 
+        // Controls (apply to every game type)
+        card.addView(section("CONTROLS"))
+        val sensLabel = label("", 15f, Color.WHITE, true)
+        fun refreshSens() { sensLabel.text = "Fine-aim wheel speed: $aimSens" + if (aimSens == 5) " (default)" else if (aimSens < 5) " (finer)" else " (faster)" }
+        refreshSens()
+        card.addView(sensLabel)
+        card.addView(SeekBar(this).apply {
+            max = 9
+            progress = aimSens - 1
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) { aimSens = p + 1; refreshSens(); save() }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(40f)))
+        @Suppress("DEPRECATION")
+        val predSwitch = Switch(this).apply {
+            text = "Show shot prediction (where the balls will go)"
+            setTextColor(0xFFDDE3E8.toInt())
+            textSize = 14f
+            isChecked = prediction
+            setOnCheckedChangeListener { _, c -> prediction = c; save() }
+        }
+        card.addView(predSwitch)
+
         // Sound
         @Suppress("DEPRECATION")
         val soundSwitch = Switch(this).apply {
@@ -212,6 +248,20 @@ class MenuActivity : Activity() {
             setOnCheckedChangeListener { _, c -> sound = c; save() }
         }
         card.addView(soundSwitch, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(12f) })
+
+        // Resume a paused game
+        resumeBtn = label("RESUME", 17f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER
+            background = rounded(0xFF2F8F5B.toInt(), dp(14f))
+            setOnClickListener {
+                startActivity(Intent(this@MenuActivity, GameActivity::class.java).apply {
+                    putExtra(GameActivity.EXTRA_RESUME, true)
+                    putExtra(GameActivity.EXTRA_SOUND, sound)
+                })
+            }
+            visibility = View.GONE
+        }
+        card.addView(resumeBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(50f)).apply { topMargin = dpi(18f) })
 
         // Play
         val play = label("PLAY", 20f, 0xFF1A1A1A.toInt(), true).apply {
