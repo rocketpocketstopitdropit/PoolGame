@@ -148,11 +148,30 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         preOnEight = onEight(current)
     }
 
-    fun shoot(angle: Double, speed: Double, side: Double, vert: Double) {
+    fun shoot(angle: Double, speed: Double, side: Double, vert: Double, elevation: Double = 0.0) {
         beginShot()
         ballInHand = false
         kitchenOnly = false
-        world.strike(angle, speed, side, vert)
+        world.strike(angle, speed, side, vert, elevation)
+    }
+
+    /** The shot clock ran out: a foul, opponent gets ball in hand. */
+    fun timeFoul(): ShotOutcome {
+        val shooter = current
+        val opp = 1 - shooter
+        isBreak = false
+        consecutiveFouls[shooter]++
+        if (mode == GameMode.NINE_BALL && consecutiveFouls[shooter] >= 3) {
+            winner = opp
+            message = "${names[opp]} wins! (three fouls in a row)"
+            return ShotOutcome(true, "Shot clock", false, opp, message)
+        }
+        current = opp
+        ballInHand = true
+        kitchenOnly = false
+        if (!world.balls[0].onTable) restoreCue()
+        message = "Foul: shot clock expired · ${names[opp]} has ball in hand"
+        return ShotOutcome(true, "Shot clock", false, -1, message)
     }
 
     /** Apply the rules once all balls have stopped. */

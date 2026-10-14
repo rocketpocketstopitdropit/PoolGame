@@ -22,10 +22,14 @@ import com.poolgame.app.core.Group
 import com.poolgame.app.core.Match
 import com.poolgame.app.core.P
 import com.poolgame.app.core.Plan
+import com.poolgame.app.core.Prediction
+import com.poolgame.app.core.Predictor
 import com.poolgame.app.core.Table
+import com.poolgame.app.core.World
 import com.poolgame.app.core.WorldListener
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
@@ -41,16 +45,19 @@ class GameView(
     private val vsCpu: Boolean,
     private val cpuLevel: Int,
     soundOn: Boolean,
+    private val shotClock: Int,          // seconds per shot, 0 = off
     private val host: Host
 ) : View(context), Choreographer.FrameCallback {
 
     interface Host {
         fun onMenuRequested()
         fun onExitToMenu()
+        /** Called once per finished game; returns a one-line record summary to show. */
+        fun onGameFinished(winner: Int): String
     }
 
     private enum class Phase { HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
-    private enum class Touch { NONE, AIM, POWER, SPIN, WHEEL, MOVE_CUE, BUTTON }
+    private enum class Touch { NONE, AIM, POWER, SPIN, ELEV, WHEEL, MOVE_CUE, BUTTON }
 
     private val names = if (vsCpu) arrayOf("You", "CPU") else arrayOf("Player 1", "Player 2")
     private val rng = Random(System.nanoTime())
@@ -62,14 +69,21 @@ class GameView(
     // Shot controls
     private var aimAngle = 0.0
     private var power = 0f            // 0..1
+    private var lastPower = 0.35f     // used for the guide while the power bar is untouched
     private var spinX = 0f            // -1..1 (right english > 0)
     private var spinY = 0f            // -1..1 (screen down = draw)
+    private var elevDeg = 0f          // cue elevation, 0..60 degrees (jump shots)
     private var touch = Touch.NONE
     private var touchStartY = 0f
     private var lastTouchY = 0f
     private var wheelOffset = 0f
     private var dragInvalid = false
     private var dragX = 0f; private var dragY = 0f
+
+    // Shot clock
+    private var clockLeft = 0.0
+    private var lastBeep = 0
+    var menuOpen = false
 
     // CPU animation
     private var cpuPlan: Plan? = null
@@ -83,12 +97,18 @@ class GameView(
     private var running = false
     private var message = ""
     private var gameOverTitle = ""
+    private var recordLine = ""
 
     private class Sink(val id: Int, val x: Double, val y: Double, var age: Float)
     private val sinks = ArrayList<Sink>()
 
     private val balls = BallRenderer()
-    private val sfx = Sfx(soundOn)
+    private val sfx = Sfx(context, soundOn)
+
+    // Aim prediction (runs the real physics for the first part of the shot)
+    private val prediction = Prediction()
+    private val scratchWorld = World()
+    private val predKey = DoubleArray(9) { Double.NaN }
 
     // Layout
     private var scale = 1f
@@ -99,30 +119,42 @@ class GameView(
     private val tableArea = RectF()
     private val powerRect = RectF()
     private var spinCx = 0f; private var spinCy = 0f; private var spinR = 0f
+    private val elevRect = RectF()
     private val wheelRect = RectF()
     private val menuBtn = RectF()
     private val rematchBtn = RectF()
     private val menuExitBtn = RectF()
     private val overPanel = RectF()
+    private val leftCard = RectF()
+    private val rightCard = RectF()
     private var background: Bitmap? = null
 
-    // Paints
+    // Cached drawing objects (avoid per-frame allocations, which cause GC hitches)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-    }
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val bold = Typeface.create("sans-serif-condensed", Typeface.BOLD)
     private val regular = Typeface.create("sans-serif", Typeface.NORMAL)
+    private val guide = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
     private var dash: DashPathEffect? = null
-    private val guide = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
     private val path = Path()
-    private val hit = DoubleArray(4)
+    private var powerShader: Shader? = null
+    private var spinShader: Shader? = null
+    private var wheelShader: Shader? = null
+    private val stickShaders = arrayOfNulls<Shader>(8)
+    private val stickSegs = doubleArrayOf(0.0, 0.008, 0.03, 0.72, 0.74, 0.98, 1.22, 1.43, 1.45)
+    private val stickColors = intArrayOf(
+        0xFF3D7BC9.toInt(), 0xFF24518A.toInt(),   // chalked tip
+        0xFFF3EEDF.toInt(), 0xFFBFB8A4.toInt(),   // ferrule
+        0xFFE9CF9E.toInt(), 0xFFB08B54.toInt(),   // maple shaft
+        0xFF2B2B2B.toInt(), 0xFF101010.toInt(),   // joint
+        0xFF5A2A14.toInt(), 0xFF2E1408.toInt(),   // forearm
+        0xFF1C1C1C.toInt(), 0xFF080808.toInt(),   // wrap
+        0xFF5A2A14.toInt(), 0xFF2E1408.toInt(),   // butt
+        0xFF111111.toInt(), 0xFF111111.toInt()    // bumper
+    )
 
     init {
         isFocusable = true
-        match.world.trackOrientation = true
-        match.world.listener = makeListener()
         newGame(0)
     }
 
@@ -148,8 +180,9 @@ class GameView(
         match.world.listener = makeListener()
         match.rack(rng, breaker)
         sinks.clear()
-        spinX = 0f; spinY = 0f; power = 0f
+        spinX = 0f; spinY = 0f; power = 0f; elevDeg = 0f
         gameOverTitle = ""
+        recordLine = ""
         message = match.message
         startTurn()
     }
@@ -166,9 +199,11 @@ class GameView(
                 else -> "${names[w]} wins!"
             }
             message = match.message
+            recordLine = host.onGameFinished(w)
             return
         }
         power = 0f
+        elevDeg = 0f
         if (isCpu(match.current)) {
             phase = Phase.CPU_THINK
             thinkingSince = System.nanoTime()
@@ -182,10 +217,12 @@ class GameView(
                     val wait = 600 - (System.nanoTime() - thinkingSince) / 1_000_000
                     if (wait > 0) postDelayed({ if (gen == generation) beginCpuAnim(plan) }, wait) else beginCpuAnim(plan)
                 }
-            }.apply { isDaemon = true; start() }
+            }.apply { isDaemon = true; priority = Thread.MIN_PRIORITY; start() }
         } else {
             phase = Phase.HUMAN
             spinX = 0f; spinY = 0f
+            clockLeft = shotClock.toDouble()
+            lastBeep = 0
             aimAtNearestTarget()
         }
     }
@@ -206,8 +243,7 @@ class GameView(
         val c = match.world.balls[0]
         animFromX = c.x; animFromY = c.y
         if (p.hasPlacement && !match.placeCue(p.placeX, p.placeY)) {
-            // Should not happen, but never get stuck.
-            cpuPlan = Plan(p.angle, p.speed, p.side, p.vert, p.kind)
+            cpuPlan = Plan(p.angle, p.speed, p.side, p.vert, p.kind, elevation = p.elevation)
         }
         phase = Phase.CPU_ANIM
     }
@@ -215,17 +251,32 @@ class GameView(
     private fun speedFor(pw: Float): Double = 0.25 + (P.MAX_CUE_SPEED - 0.25) * pw.toDouble().pow(1.6)
     private fun powerFor(speed: Double): Float = ((speed - 0.25) / (P.MAX_CUE_SPEED - 0.25)).coerceIn(0.0, 1.0).pow(1 / 1.6).toFloat()
 
-    private fun shoot(angle: Double, speed: Double, side: Double, vert: Double) {
+    private fun shoot(angle: Double, speed: Double, side: Double, vert: Double, elev: Double) {
         sfx.strike(speed)
-        match.shoot(angle, speed, side, vert)
+        match.shoot(angle, speed, side, vert, elev)
         phase = Phase.RUNNING
         touch = Touch.NONE
     }
 
     private fun update(dt: Double) {
-        for (s in sinks) s.age += dt.toFloat()
-        sinks.removeAll { it.age > 0.35f }
+        if (sinks.isNotEmpty()) {
+            for (s in sinks) s.age += dt.toFloat()
+            sinks.removeAll { it.age > 0.35f }
+        }
         when (phase) {
+            Phase.HUMAN -> if (shotClock > 0 && !menuOpen) {
+                clockLeft -= dt
+                val secs = ceil(clockLeft).toInt()
+                if (secs in 1..5 && secs != lastBeep) { lastBeep = secs; sfx.beep() }
+                if (clockLeft <= 0) {
+                    touch = Touch.NONE
+                    power = 0f
+                    val out = match.timeFoul()
+                    message = out.message
+                    phase = Phase.PAUSE
+                    pauseT = 1.0
+                }
+            }
             Phase.RUNNING -> {
                 match.world.advance(dt)
                 if (!match.world.anyMoving()) {
@@ -254,6 +305,7 @@ class GameView(
                     aimAngle = animFromAngle + d * e
                     spinX = (p.side / P.MAX_TIP * e).toFloat()
                     spinY = (-p.vert / P.MAX_TIP * e).toFloat()
+                    elevDeg = (Math.toDegrees(p.elevation) * e).toFloat()
                 }
                 if (animT >= tAim + aimDur) {
                     val k = ((animT - tAim - aimDur) / pullDur).coerceIn(0.0, 1.0)
@@ -261,7 +313,7 @@ class GameView(
                 }
                 if (animT >= tAim + aimDur + pullDur + 0.12) {
                     cpuPlan = null
-                    shoot(p.angle, p.speed, p.side, p.vert)
+                    shoot(p.angle, p.speed, p.side, p.vert, p.elevation)
                 }
             }
             else -> {}
@@ -288,8 +340,6 @@ class GameView(
         sfx.release()
     }
 
-    fun setSound(on: Boolean) { sfx.enabled = on }
-
     override fun onAttachedToWindow() { super.onAttachedToWindow(); resume() }
     override fun onDetachedFromWindow() { pause(); super.onDetachedFromWindow() }
 
@@ -306,6 +356,8 @@ class GameView(
 
     private fun sx(x: Double) = ox + (x * scale).toFloat()
     private fun sy(y: Double) = oy + (y * scale).toFloat()
+    private fun sx(x: Float) = ox + x * scale
+    private fun sy(y: Float) = oy + y * scale
     private fun tx(px: Float) = ((px - ox) / scale).toDouble()
     private fun ty(py: Float) = ((py - oy) / scale).toDouble()
 
@@ -326,15 +378,34 @@ class GameView(
 
         val pw = leftW * 0.36f
         powerRect.set(leftW / 2 - pw / 2, hudH + 34 * dp, leftW / 2 + pw / 2, h - 18 * dp)
-        spinR = min(rightW * 0.34f, (h - hudH) * 0.17f)
+        spinR = min(rightW * 0.32f, (h - hudH) * 0.15f)
         spinCx = w - rightW / 2
-        spinCy = hudH + 26 * dp + spinR
+        spinCy = hudH + 24 * dp + spinR
+        val elevTop = spinCy + spinR + 44 * dp
+        elevRect.set(w - rightW + 12 * dp, elevTop, w - 12 * dp, elevTop + 22 * dp)
         val ww = min(rightW * 0.42f, 52 * dp)
-        wheelRect.set(spinCx - ww / 2, spinCy + spinR + 40 * dp, spinCx + ww / 2, h - 18 * dp)
+        wheelRect.set(spinCx - ww / 2, elevRect.bottom + 30 * dp, spinCx + ww / 2, h - 16 * dp)
         menuBtn.set(8 * dp, 8 * dp, 8 * dp + 44 * dp, 8 * dp + 36 * dp)
+
+        val cardW = min(w * 0.27f, 260 * dp)
+        val cardH = hudH - 16 * dp
+        leftCard.set(menuBtn.right + 10 * dp, 8 * dp, menuBtn.right + 10 * dp + cardW, 8 * dp + cardH)
+        rightCard.set(w - 8 * dp - cardW, 8 * dp, w - 8 * dp, 8 * dp + cardH)
+
+        powerShader = LinearGradient(0f, powerRect.top, 0f, powerRect.bottom,
+            intArrayOf(0xFF3CCB7F.toInt(), 0xFFF2C94C.toInt(), 0xFFEB5757.toInt()), null, Shader.TileMode.CLAMP)
+        spinShader = RadialGradient(spinCx - spinR * 0.3f, spinCy - spinR * 0.35f, spinR * 1.3f,
+            intArrayOf(0xFFFFFFFF.toInt(), 0xFFE9E4D4.toInt(), 0xFFAFA997.toInt()), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+        wheelShader = LinearGradient(wheelRect.left, 0f, wheelRect.right, 0f,
+            intArrayOf(0xFF15191D.toInt(), 0xFF39434C.toInt(), 0xFF15191D.toInt()), null, Shader.TileMode.CLAMP)
+        val buttW = (0.015 * scale).toFloat()
+        for (i in 0 until 8) stickShaders[i] = LinearGradient(0f, -buttW, 0f, buttW,
+            intArrayOf(stickColors[i * 2 + 1], stickColors[i * 2], stickColors[i * 2 + 1]), null, Shader.TileMode.CLAMP)
+        dash = DashPathEffect(floatArrayOf(6 * dp, 5 * dp), 0f)
 
         background?.recycle()
         background = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { drawBackground(Canvas(it), w, h, rail) }
+        predKey[0] = Double.NaN
     }
 
     private fun drawBackground(c: Canvas, w: Int, h: Int, rail: Double) {
@@ -343,7 +414,6 @@ class GameView(
         c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), p)
         p.shader = null
 
-        // Wooden frame
         val outer = RectF(sx(-rail), sy(-rail), sx(P.L + rail), sy(P.W + rail))
         val corner = (0.06 * scale).toFloat()
         p.color = 0x66000000
@@ -352,7 +422,6 @@ class GameView(
             intArrayOf(0xFF6B3A1C.toInt(), 0xFF4A2610.toInt(), 0xFF5E3218.toInt(), 0xFF3C1E0C.toInt()), null, Shader.TileMode.CLAMP)
         c.drawRoundRect(outer, corner, corner, p)
         p.shader = null
-        // wood grain
         val grain = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1f }
         val gr = Random(3)
         repeat(70) {
@@ -364,23 +433,19 @@ class GameView(
         grain.color = 0x33FFFFFF; grain.strokeWidth = 1.5f * dp
         c.drawRoundRect(RectF(outer.left + dp, outer.top + dp, outer.right - dp, outer.bottom - dp), corner, corner, grain)
 
-        // Cushions
         val cush = 0.045
         p.color = 0xFF14583A.toInt()
         c.drawRect(sx(-cush), sy(-cush), sx(P.L + cush), sy(P.W + cush), p)
-        // Cloth
         p.shader = RadialGradient(sx(P.L / 2), sy(P.W / 2), (P.L * 0.62 * scale).toFloat(),
             intArrayOf(0xFF22935A.toInt(), 0xFF1C7E4C.toInt(), 0xFF145F38.toInt()), floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP)
         c.drawRect(sx(0.0), sy(0.0), sx(P.L), sy(P.W), p)
         p.shader = null
-        // Cushion inner shadow
         p.shader = LinearGradient(0f, sy(0.0), 0f, sy(0.025), 0x55000000, 0x00000000, Shader.TileMode.CLAMP)
         c.drawRect(sx(0.0), sy(0.0), sx(P.L), sy(0.025), p)
         p.shader = LinearGradient(sx(0.0), 0f, sx(0.025), 0f, 0x44000000, 0x00000000, Shader.TileMode.CLAMP)
         c.drawRect(sx(0.0), sy(0.0), sx(0.025), sy(P.W), p)
         p.shader = null
 
-        // Pockets
         for (pk in Table.pockets) {
             val r = ((pk.capR + 0.004) * scale).toFloat()
             p.color = 0xFF2A1A10.toInt()
@@ -390,25 +455,22 @@ class GameView(
             c.drawCircle(sx(pk.cx), sy(pk.cy), r, p)
             p.shader = null
         }
-        // Cushion noses
         val nose = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f * dp; color = 0xFF0E4A2D.toInt(); strokeCap = Paint.Cap.ROUND }
         for (sg in Table.segs) c.drawLine(sx(sg.ax), sy(sg.ay), sx(sg.bx), sy(sg.by), nose)
 
-        // Diamonds
         p.color = 0xFFEDE3C8.toInt()
         val dOff = rail * 0.55
-        val dr = 0.012 * scale
+        val dr = (0.012 * scale).toFloat()
         for (i in 1..7) if (i != 4) {
             val x = P.L * i / 8
-            diamond(c, sx(x), sy(-dOff), dr.toFloat(), p)
-            diamond(c, sx(x), sy(P.W + dOff), dr.toFloat(), p)
+            diamond(c, sx(x), sy(-dOff), dr, p)
+            diamond(c, sx(x), sy(P.W + dOff), dr, p)
         }
         for (i in 1..3) {
             val y = P.W * i / 4
-            diamond(c, sx(-dOff), sy(y), dr.toFloat(), p)
-            diamond(c, sx(P.L + dOff), sy(y), dr.toFloat(), p)
+            diamond(c, sx(-dOff), sy(y), dr, p)
+            diamond(c, sx(P.L + dOff), sy(y), dr, p)
         }
-        // Head string and foot spot
         val hs = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1f * dp; color = 0x30FFFFFF; pathEffect = DashPathEffect(floatArrayOf(4 * dp, 6 * dp), 0f) }
         c.drawLine(sx(P.HEAD_X), sy(0.0), sx(P.HEAD_X), sy(P.W), hs)
         p.color = 0x55FFFFFF
@@ -437,7 +499,6 @@ class GameView(
 
         if (humanTurn && touch != Touch.MOVE_CUE) drawGuide(canvas)
 
-        // Shadows, then balls
         val cue = w.balls[0]
         var cueX = cue.x; var cueY = cue.y
         val plan = cpuPlan
@@ -446,9 +507,11 @@ class GameView(
             cueX = animFromX + (plan.placeX - animFromX) * k
             cueY = animFromY + (plan.placeY - animFromY) * k
         }
+        // Shadows stay on the cloth; airborne balls are drawn larger (closer to the viewer).
         for (b in w.balls) if (b.onTable) {
             val bx = if (b.id == 0) cueX else b.x; val by = if (b.id == 0) cueY else b.y
-            balls.drawShadow(canvas, sx(bx), sy(by))
+            val lift = (b.z * scale).toFloat()
+            balls.drawShadow(canvas, sx(bx) + lift * 0.4f, sy(by) + lift * 0.6f)
         }
         for (s in sinks) {
             val k = 1f - s.age / 0.35f
@@ -456,9 +519,12 @@ class GameView(
             balls.draw(canvas, w.balls[s.id], sx(s.x), sy(s.y), 0.55f + 0.45f * k, paint)
             paint.alpha = 255
         }
-        for (b in w.balls) if (b.onTable) {
+        for (b in w.balls) if (b.onTable && b.z <= 0.0) {
             val bx = if (b.id == 0) cueX else b.x; val by = if (b.id == 0) cueY else b.y
             balls.draw(canvas, b, sx(bx), sy(by))
+        }
+        for (b in w.balls) if (b.onTable && b.z > 0.0) {
+            balls.draw(canvas, b, sx(b.x), sy(b.y), 1f + (b.z * 4.0).toFloat())
         }
 
         if (humanTurn && match.ballInHand) {
@@ -480,112 +546,122 @@ class GameView(
         drawHud(canvas)
         drawPowerBar(canvas)
         drawSpin(canvas)
+        drawElevation(canvas)
         drawWheel(canvas)
         if (phase == Phase.OVER) drawGameOver(canvas)
     }
 
+    private fun guideSpeed() = speedFor(if (power > 0.02f) power else lastPower)
+
+    private fun updatePrediction() {
+        val c = match.world.balls[0]
+        val sp = guideSpeed()
+        val k0 = aimAngle; val k1 = sp; val k2 = spinX.toDouble(); val k3 = spinY.toDouble()
+        val k4 = elevDeg.toDouble(); val k5 = c.x; val k6 = c.y; val k7 = match.current.toDouble()
+        val k8 = generation.toDouble() + (if (match.ballInHand) 0.5 else 0.0)
+        if (predKey[0] == k0 && predKey[1] == k1 && predKey[2] == k2 && predKey[3] == k3 && predKey[4] == k4 &&
+            predKey[5] == k5 && predKey[6] == k6 && predKey[7] == k7 && predKey[8] == k8) return
+        predKey[0] = k0; predKey[1] = k1; predKey[2] = k2; predKey[3] = k3; predKey[4] = k4
+        predKey[5] = k5; predKey[6] = k6; predKey[7] = k7; predKey[8] = k8
+        Predictor.run(
+            match.world, scratchWorld, aimAngle, sp,
+            (spinX * P.MAX_TIP).toDouble(), (-spinY * P.MAX_TIP).toDouble(), Math.toRadians(elevDeg.toDouble()),
+            prediction
+        )
+    }
+
     private fun drawGuide(canvas: Canvas) {
-        val w = match.world
-        val c = w.balls[0]
+        val c = match.world.balls[0]
         if (!c.onTable) return
-        w.castCue(aimAngle, hit)
-        val cx = sx(c.x); val cy = sy(c.y)
-        guide.strokeWidth = 1.6f * dp
-        guide.pathEffect = dash ?: DashPathEffect(floatArrayOf(6 * dp, 5 * dp), 0f).also { dash = it }
-        guide.color = 0xB0FFFFFF.toInt()
-        val dx = cos(aimAngle); val dy = sin(aimAngle)
-        when (hit[0].toInt()) {
-            1 -> {
-                val gx = hit[1]; val gy = hit[2]; val id = hit[3].toInt()
-                val legal = id in match.legalTargets()
-                canvas.drawLine(cx, cy, sx(gx), sy(gy), guide)
-                guide.pathEffect = null
-                guide.color = if (legal) 0xE0FFFFFF.toInt() else 0xE0FF5050.toInt()
-                canvas.drawCircle(sx(gx), sy(gy), rpx, guide)
-                val ob = w.balls[id]
-                val nx = ob.x - gx; val ny = ob.y - gy
-                val nl = hypot(nx, ny)
-                val ux = nx / nl; val uy = ny / nl
-                val full = (dx * ux + dy * uy).coerceIn(0.0, 1.0)
-                val len = 0.12 + 0.45 * full
-                guide.strokeWidth = 2.2f * dp
-                canvas.drawLine(sx(ob.x + ux * P.R), sy(ob.y + uy * P.R), sx(ob.x + ux * (P.R + len)), sy(ob.y + uy * (P.R + len)), guide)
-                // Cue ball tangent line (stun line)
-                var txv = dx - full * ux; var tyv = dy - full * uy
-                val tl = hypot(txv, tyv)
-                if (tl > 1e-3) {
-                    txv /= tl; tyv /= tl
-                    guide.color = 0x80FFFFFF.toInt()
-                    guide.strokeWidth = 1.4f * dp
-                    val l2 = 0.08 + 0.25 * (1 - full)
-                    canvas.drawLine(sx(gx), sy(gy), sx(gx + txv * l2), sy(gy + tyv * l2), guide)
-                }
-                if (!legal) {
-                    guide.color = 0xE0FF5050.toInt(); guide.strokeWidth = 2.4f * dp
-                    val r = rpx * 0.55f
-                    canvas.drawLine(sx(gx) - r, sy(gy) - r, sx(gx) + r, sy(gy) + r, guide)
-                    canvas.drawLine(sx(gx) - r, sy(gy) + r, sx(gx) + r, sy(gy) - r, guide)
-                }
-            }
-            2 -> {
-                val hx = hit[1]; val hy = hit[2]
-                canvas.drawLine(cx, cy, sx(hx), sy(hy), guide)
-                var rx = dx; var ry = dy
-                if (hx <= P.R + 1e-6 || hx >= P.L - P.R - 1e-6) rx = -rx
-                if (hy <= P.R + 1e-6 || hy >= P.W - P.R - 1e-6) ry = -ry
-                guide.color = 0x70FFFFFF
-                canvas.drawLine(sx(hx), sy(hy), sx(hx + rx * 0.3), sy(hy + ry * 0.3), guide)
-                guide.pathEffect = null
-                guide.color = 0xB0FFFFFF.toInt()
-                canvas.drawCircle(sx(hx), sy(hy), rpx, guide)
-            }
+        updatePrediction()
+        val pr = prediction
+        if (pr.cueN < 2) return
+        val pre = if (pr.contactIndex >= 0) pr.contactIndex else pr.cueN - 1
+
+        // Cue ball path up to contact: dashed on the cloth, solid yellow while airborne.
+        guide.strokeWidth = 1.7f * dp
+        for (i in 0 until pre) {
+            val air = pr.cueAir[i] || pr.cueAir[i + 1]
+            guide.pathEffect = if (air) null else dash
+            guide.color = if (air) 0xE0FFD54A.toInt() else 0xB0FFFFFF.toInt()
+            canvas.drawLine(sx(pr.cueX[i]), sy(pr.cueY[i]), sx(pr.cueX[i + 1]), sy(pr.cueY[i + 1]), guide)
         }
         guide.pathEffect = null
+
+        if (pr.hitId >= 0) {
+            val legal = pr.hitId in match.legalTargets()
+            val gx = sx(pr.hitX); val gy = sy(pr.hitY)
+            guide.strokeWidth = 1.7f * dp
+            guide.color = if (legal) 0xE0FFFFFF.toInt() else 0xE0FF5050.toInt()
+            canvas.drawCircle(gx, gy, rpx, guide)
+            // Object ball's real path (includes throw)
+            if (pr.objN >= 2) {
+                guide.strokeWidth = 2.4f * dp
+                path.reset()
+                path.moveTo(sx(pr.objX[0]), sy(pr.objY[0]))
+                for (i in 1 until pr.objN) path.lineTo(sx(pr.objX[i]), sy(pr.objY[i]))
+                canvas.drawPath(path, guide)
+            }
+            // Cue ball after contact (shows follow / draw / stun)
+            if (pr.cueN - 1 > pre) {
+                guide.color = 0x80FFFFFF.toInt()
+                guide.strokeWidth = 1.4f * dp
+                path.reset()
+                path.moveTo(sx(pr.cueX[pre]), sy(pr.cueY[pre]))
+                for (i in pre + 1 until pr.cueN) path.lineTo(sx(pr.cueX[i]), sy(pr.cueY[i]))
+                canvas.drawPath(path, guide)
+            }
+            if (!legal) {
+                guide.color = 0xE0FF5050.toInt(); guide.strokeWidth = 2.4f * dp
+                val r = rpx * 0.55f
+                canvas.drawLine(gx - r, gy - r, gx + r, gy + r, guide)
+                canvas.drawLine(gx - r, gy + r, gx + r, gy - r, guide)
+            }
+        } else {
+            guide.color = 0xB0FFFFFF.toInt(); guide.strokeWidth = 1.7f * dp
+            canvas.drawCircle(sx(pr.cueX[pr.cueN - 1]), sy(pr.cueY[pr.cueN - 1]), rpx, guide)
+        }
+        if (pr.scratch) {
+            guide.color = 0xE0FF5050.toInt(); guide.strokeWidth = 2 * dp
+            canvas.drawCircle(sx(pr.cueX[pr.cueN - 1]), sy(pr.cueY[pr.cueN - 1]), rpx * 1.3f, guide)
+        }
     }
 
     private fun drawCueStick(canvas: Canvas, cx: Float, cy: Float) {
         val s = scale
-        val gap = (P.R + 0.012 + power * 0.22) * s
-        val len = 1.45 * s
+        // An elevated cue is foreshortened when seen from above.
+        val fore = cos(Math.toRadians(elevDeg.toDouble()))
+        val gap = (P.R + 0.012 + power * 0.22) * s * fore
+        val len = 1.45 * s * fore
         canvas.save()
         canvas.translate(cx, cy)
         canvas.rotate(Math.toDegrees(aimAngle).toFloat())
-        val x0 = (-gap).toFloat()
         val tipW = (0.0065 * s).toFloat()
         val buttW = (0.015 * s).toFloat()
         fun halfW(x: Double) = tipW + (buttW - tipW) * ((-x - gap) / len).toFloat()
-        fun seg(fromM: Double, toM: Double, color: Int, color2: Int = color) {
-            val a = -gap - fromM * s; val b = -gap - toM * s
+        paint.style = Paint.Style.FILL
+        paint.shader = null
+        paint.color = 0x55000000
+        val sh = (5 * dp * (1 + elevDeg / 15f))
+        canvas.save(); canvas.translate(3 * dp, sh)
+        path.reset()
+        path.moveTo((-gap).toFloat(), -tipW); path.lineTo((-gap - len).toFloat(), -buttW)
+        path.lineTo((-gap - len).toFloat(), buttW); path.lineTo((-gap).toFloat(), tipW); path.close()
+        canvas.drawPath(path, paint)
+        canvas.restore()
+        for (i in 0 until 8) {
+            val a = -gap - stickSegs[i] * s * fore; val b = -gap - stickSegs[i + 1] * s * fore
             path.reset()
             path.moveTo(a.toFloat(), -halfW(a)); path.lineTo(b.toFloat(), -halfW(b))
             path.lineTo(b.toFloat(), halfW(b)); path.lineTo(a.toFloat(), halfW(a)); path.close()
-            paint.style = Paint.Style.FILL
-            paint.shader = LinearGradient(0f, -buttW, 0f, buttW, intArrayOf(color2, color, color2), null, Shader.TileMode.CLAMP)
+            paint.shader = stickShaders[i]
             canvas.drawPath(path, paint)
-            paint.shader = null
         }
-        // shadow
-        paint.style = Paint.Style.FILL
-        paint.color = 0x55000000
-        canvas.save(); canvas.translate(3 * dp, 5 * dp)
-        path.reset()
-        path.moveTo(x0, -tipW); path.lineTo((x0 - len).toFloat(), -buttW); path.lineTo((x0 - len).toFloat(), buttW); path.lineTo(x0, tipW); path.close()
-        canvas.drawPath(path, paint)
-        canvas.restore()
-        seg(0.0, 0.008, 0xFF3D7BC9.toInt(), 0xFF24518A.toInt())        // chalked tip
-        seg(0.008, 0.03, 0xFFF3EEDF.toInt(), 0xFFBFB8A4.toInt())       // ferrule
-        seg(0.03, 0.72, 0xFFE9CF9E.toInt(), 0xFFB08B54.toInt())        // maple shaft
-        seg(0.72, 0.74, 0xFF2B2B2B.toInt(), 0xFF101010.toInt())        // joint
-        seg(0.74, 0.98, 0xFF5A2A14.toInt(), 0xFF2E1408.toInt())        // forearm
-        seg(0.98, 1.22, 0xFF1C1C1C.toInt(), 0xFF080808.toInt())        // wrap
-        seg(1.22, 1.43, 0xFF5A2A14.toInt(), 0xFF2E1408.toInt())        // butt
-        seg(1.43, 1.45, 0xFF111111.toInt())                            // bumper
+        paint.shader = null
         canvas.restore()
     }
 
     private fun drawHud(canvas: Canvas) {
-        val w = width.toFloat()
-        // Menu button
         paint.style = Paint.Style.FILL; paint.shader = null
         paint.color = 0xFF232B32.toInt()
         canvas.drawRoundRect(menuBtn, 8 * dp, 8 * dp, paint)
@@ -593,15 +669,11 @@ class GameView(
         val mx = menuBtn.centerX(); val my = menuBtn.centerY()
         for (i in -1..1) canvas.drawRoundRect(mx - 9 * dp, my + i * 6 * dp - 1.2f * dp, mx + 9 * dp, my + i * 6 * dp + 1.2f * dp, dp, dp, paint)
 
-        val cardW = min(w * 0.27f, 260 * dp)
-        val cardH = hudH - 16 * dp
-        val left = RectF(menuBtn.right + 10 * dp, 8 * dp, menuBtn.right + 10 * dp + cardW, 8 * dp + cardH)
-        val right = RectF(w - 8 * dp - cardW, 8 * dp, w - 8 * dp, 8 * dp + cardH)
-        drawPlayerCard(canvas, left, 0)
-        drawPlayerCard(canvas, right, 1)
+        drawPlayerCard(canvas, leftCard, 0)
+        drawPlayerCard(canvas, rightCard, 1)
 
-        // Message in the middle
-        val midL = left.right + 10 * dp; val midR = right.left - 10 * dp
+        val cardH = leftCard.height()
+        val midL = leftCard.right + 10 * dp; val midR = rightCard.left - 10 * dp
         text.typeface = regular
         text.textAlign = Paint.Align.CENTER
         text.color = 0xFFE8ECEF.toInt()
@@ -617,18 +689,15 @@ class GameView(
         }
         msg = ellipsize(msg, midR - midL)
         canvas.drawText(msg, (midL + midR) / 2, 8 * dp + cardH * 0.42f, text)
-        // 9-ball rail of remaining balls, or thinking indicator
         val subY = 8 * dp + cardH * 0.82f
         if (phase == Phase.CPU_THINK) {
             text.textSize = min(12 * dp, hudH * 0.2f); text.color = 0xFFF2C94C.toInt()
-            val dots = ".".repeat(((System.nanoTime() / 300_000_000) % 4).toInt())
-            canvas.drawText("CPU (level $cpuLevel) is thinking$dots", (midL + midR) / 2, subY, text)
+            canvas.drawText("CPU (level $cpuLevel) is thinking…", (midL + midR) / 2, subY, text)
         } else if (mode == GameMode.NINE_BALL) {
             val r = min(hudH * 0.13f, 9 * dp)
-            val ids = (1..9).toList()
-            val total = ids.size * r * 2.4f
+            val total = 9 * r * 2.4f
             var x = (midL + midR) / 2 - total / 2 + r
-            for (id in ids) {
+            for (id in 1..9) {
                 balls.drawIcon(canvas, id, x, subY - r * 0.4f, r, !match.world.balls[id].onTable, paint)
                 x += r * 2.4f
             }
@@ -657,26 +726,42 @@ class GameView(
         text.color = Color.WHITE
         val label = if (isCpu(player)) "CPU · Lv $cpuLevel" else names[player]
         canvas.drawText(label, r.left + 12 * dp, r.top + r.height() * 0.4f, text)
+
+        // Shot clock on the active human's card
+        if (active && phase == Phase.HUMAN && shotClock > 0) {
+            val secs = max(0, ceil(clockLeft).toInt())
+            val low = clockLeft <= 5.0
+            text.textAlign = Paint.Align.RIGHT
+            text.color = if (low) 0xFFFF6B6B.toInt() else 0xFFF2C94C.toInt()
+            canvas.drawText("${secs}s", r.right - 12 * dp, r.top + r.height() * 0.4f, text)
+            val frac = (clockLeft / shotClock).toFloat().coerceIn(0f, 1f)
+            paint.color = 0x33FFFFFF
+            canvas.drawRoundRect(r.left + 10 * dp, r.bottom - 6 * dp, r.right - 10 * dp, r.bottom - 3 * dp, 2 * dp, 2 * dp, paint)
+            paint.color = if (low) 0xFFFF6B6B.toInt() else 0xFFF2C94C.toInt()
+            canvas.drawRoundRect(r.left + 10 * dp, r.bottom - 6 * dp, r.left + 10 * dp + (r.width() - 20 * dp) * frac, r.bottom - 3 * dp, 2 * dp, 2 * dp, paint)
+        }
+
+        text.textAlign = Paint.Align.LEFT
         text.typeface = regular
         text.textSize = min(11 * dp, r.height() * 0.22f)
         text.color = 0xFF9AA7B1.toInt()
         val iconR = min(r.height() * 0.16f, 9 * dp)
-        val iy = r.top + r.height() * 0.72f
+        val iy = r.top + r.height() * 0.70f
         if (mode == GameMode.EIGHT_BALL) {
             val g = match.groups[player]
             if (g == Group.OPEN) {
-                canvas.drawText(if (match.isBreak) "" else "Open table", r.left + 12 * dp, iy + iconR * 0.4f, text)
+                if (!match.isBreak) canvas.drawText("Open table", r.left + 12 * dp, iy + iconR * 0.4f, text)
             } else {
-                val ids = if (g == Group.SOLIDS) (1..7) else (9..15)
                 var x = r.left + 12 * dp + iconR
-                for (id in ids) {
+                val from = if (g == Group.SOLIDS) 1 else 9
+                for (id in from until from + 7) {
                     balls.drawIcon(canvas, id, x, iy, iconR, !match.world.balls[id].onTable, paint)
                     x += iconR * 2.3f
                 }
                 if (match.onEight(player)) balls.drawIcon(canvas, 8, x + iconR * 0.4f, iy, iconR, false, paint)
             }
-        } else {
-            canvas.drawText(if (match.current == player && !match.isBreak) "Shoot the ${match.lowestBall()}" else "", r.left + 12 * dp, iy + iconR * 0.4f, text)
+        } else if (match.current == player && !match.isBreak) {
+            canvas.drawText("Shoot the ${match.lowestBall()}", r.left + 12 * dp, iy + iconR * 0.4f, text)
         }
     }
 
@@ -689,27 +774,23 @@ class GameView(
         paint.color = 0xFF1E252B.toInt()
         canvas.drawRoundRect(r, r.width() / 2, r.width() / 2, paint)
         if (power > 0) {
-            val fillB = r.top + (r.height()) * power
+            val fillB = r.top + r.height() * power
             canvas.save()
             canvas.clipRect(r.left, r.top, r.right, fillB)
-            paint.shader = LinearGradient(0f, r.top, 0f, r.bottom,
-                intArrayOf(0xFF3CCB7F.toInt(), 0xFFF2C94C.toInt(), 0xFFEB5757.toInt()), null, Shader.TileMode.CLAMP)
+            paint.shader = powerShader
             canvas.drawRoundRect(r, r.width() / 2, r.width() / 2, paint)
             paint.shader = null
             canvas.restore()
-            // handle
             paint.color = Color.WHITE
             canvas.drawRoundRect(r.left - 4 * dp, fillB - 3 * dp, r.right + 4 * dp, fillB + 3 * dp, 3 * dp, 3 * dp, paint)
             text.color = Color.WHITE; text.textSize = 12 * dp
-            canvas.drawText("${(power * 100).toInt()}%", r.centerX(), r.bottom + 14 * dp, text)
+            canvas.drawText(PCT[(power * 100).toInt().coerceIn(0, 100)], r.centerX(), r.bottom + 14 * dp, text)
         } else if (phase == Phase.HUMAN) {
-            // hint chevrons
-            paint.color = 0x55FFFFFF
+            guide.pathEffect = null; guide.strokeWidth = 2 * dp; guide.color = 0x66FFFFFF
             for (i in 0..2) {
                 val y = r.top + 20 * dp + i * 12 * dp
                 path.reset()
                 path.moveTo(r.centerX() - 7 * dp, y); path.lineTo(r.centerX(), y + 6 * dp); path.lineTo(r.centerX() + 7 * dp, y)
-                guide.pathEffect = null; guide.strokeWidth = 2 * dp; guide.color = 0x66FFFFFF
                 canvas.drawPath(path, guide)
             }
         }
@@ -718,10 +799,9 @@ class GameView(
     private fun drawSpin(canvas: Canvas) {
         text.textAlign = Paint.Align.CENTER; text.typeface = bold
         text.textSize = 11 * dp; text.color = 0xFF9AA7B1.toInt()
-        canvas.drawText("SPIN", spinCx, spinCy - spinR - 10 * dp, text)
+        canvas.drawText("SPIN", spinCx, spinCy - spinR - 8 * dp, text)
         paint.style = Paint.Style.FILL
-        paint.shader = RadialGradient(spinCx - spinR * 0.3f, spinCy - spinR * 0.35f, spinR * 1.3f,
-            intArrayOf(0xFFFFFFFF.toInt(), 0xFFE9E4D4.toInt(), 0xFFAFA997.toInt()), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+        paint.shader = spinShader
         canvas.drawCircle(spinCx, spinCy, spinR, paint)
         paint.shader = null
         guide.pathEffect = null; guide.strokeWidth = 1 * dp; guide.color = 0x40000000
@@ -729,18 +809,30 @@ class GameView(
         canvas.drawLine(spinCx, spinCy - spinR, spinCx, spinCy + spinR, guide)
         canvas.drawCircle(spinCx, spinCy, spinR * 0.5f, guide)
         paint.color = 0xFFD62828.toInt()
-        val dx = spinCx + spinX * spinR * 0.92f; val dy = spinCy + spinY * spinR * 0.92f
-        canvas.drawCircle(dx, dy, max(5 * dp, spinR * 0.13f), paint)
+        canvas.drawCircle(spinCx + spinX * spinR * 0.92f, spinCy + spinY * spinR * 0.92f, max(5 * dp, spinR * 0.13f), paint)
         text.typeface = regular
         text.textSize = 10.5f * dp; text.color = 0xFF9AA7B1.toInt()
-        val label = when {
-            abs(spinX) < 0.08f && abs(spinY) < 0.08f -> "center"
-            else -> buildString {
-                if (spinY < -0.08f) append("follow ") else if (spinY > 0.08f) append("draw ")
-                if (spinX > 0.08f) append("right") else if (spinX < -0.08f) append("left")
-            }.trim()
-        }
-        canvas.drawText(label, spinCx, spinCy + spinR + 14 * dp, text)
+        val v = if (spinY < -0.08f) 1 else if (spinY > 0.08f) 2 else 0
+        val h = if (spinX > 0.08f) 1 else if (spinX < -0.08f) 2 else 0
+        canvas.drawText(SPIN_LABELS[v * 3 + h], spinCx, spinCy + spinR + 14 * dp, text)
+    }
+
+    private fun drawElevation(canvas: Canvas) {
+        val r = elevRect
+        text.textAlign = Paint.Align.CENTER; text.typeface = bold
+        text.textSize = 11 * dp
+        text.color = if (elevDeg > 0.5f) 0xFFF2C94C.toInt() else 0xFF9AA7B1.toInt()
+        canvas.drawText(if (elevDeg > 0.5f) JUMP_LABELS[elevDeg.toInt().coerceIn(0, 60)] else "CUE ANGLE · level", r.centerX(), r.top - 8 * dp, text)
+        paint.style = Paint.Style.FILL; paint.shader = null
+        paint.color = 0xFF1E252B.toInt()
+        val cy = r.centerY()
+        canvas.drawRoundRect(r.left, cy - 3 * dp, r.right, cy + 3 * dp, 3 * dp, 3 * dp, paint)
+        val f = elevDeg / P.MAX_ELEVATION.toFloat()
+        val kx = r.left + (r.width()) * f
+        paint.color = 0xFFF2C94C.toInt()
+        canvas.drawRoundRect(r.left, cy - 3 * dp, kx, cy + 3 * dp, 3 * dp, 3 * dp, paint)
+        paint.color = Color.WHITE
+        canvas.drawCircle(kx, cy, 8 * dp, paint)
     }
 
     private fun drawWheel(canvas: Canvas) {
@@ -750,8 +842,7 @@ class GameView(
         text.textSize = 11 * dp; text.color = 0xFF9AA7B1.toInt()
         canvas.drawText("FINE AIM", r.centerX(), r.top - 8 * dp, text)
         paint.style = Paint.Style.FILL
-        paint.shader = LinearGradient(r.left, 0f, r.right, 0f,
-            intArrayOf(0xFF15191D.toInt(), 0xFF39434C.toInt(), 0xFF15191D.toInt()), null, Shader.TileMode.CLAMP)
+        paint.shader = wheelShader
         canvas.drawRoundRect(r, 10 * dp, 10 * dp, paint)
         paint.shader = null
         canvas.save()
@@ -773,7 +864,7 @@ class GameView(
         paint.style = Paint.Style.FILL; paint.shader = null
         paint.color = 0x99000000.toInt()
         canvas.drawRect(0f, 0f, w, h, paint)
-        val pw = min(w * 0.5f, 420 * dp); val ph = min(h * 0.6f, 230 * dp)
+        val pw = min(w * 0.5f, 420 * dp); val ph = min(h * 0.62f, 240 * dp)
         overPanel.set(w / 2 - pw / 2, h / 2 - ph / 2, w / 2 + pw / 2, h / 2 + ph / 2)
         paint.color = 0xFF1E252B.toInt()
         canvas.drawRoundRect(overPanel, 16 * dp, 16 * dp, paint)
@@ -781,10 +872,14 @@ class GameView(
         canvas.drawRoundRect(overPanel, 16 * dp, 16 * dp, guide)
         text.textAlign = Paint.Align.CENTER
         text.typeface = bold; text.textSize = 30 * dp; text.color = Color.WHITE
-        canvas.drawText(gameOverTitle, overPanel.centerX(), overPanel.top + ph * 0.3f, text)
+        canvas.drawText(gameOverTitle, overPanel.centerX(), overPanel.top + ph * 0.25f, text)
         text.typeface = regular; text.textSize = 13 * dp; text.color = 0xFFB8C2CA.toInt()
         val detail = match.message.substringAfter("(", "").removeSuffix(")")
-        if (detail.isNotEmpty()) canvas.drawText(ellipsize(detail, pw - 24 * dp), overPanel.centerX(), overPanel.top + ph * 0.45f, text)
+        if (detail.isNotEmpty()) canvas.drawText(ellipsize(detail, pw - 24 * dp), overPanel.centerX(), overPanel.top + ph * 0.38f, text)
+        if (recordLine.isNotEmpty()) {
+            text.color = 0xFFF2C94C.toInt(); text.textSize = 14 * dp
+            canvas.drawText(ellipsize(recordLine, pw - 24 * dp), overPanel.centerX(), overPanel.top + ph * 0.52f, text)
+        }
         val bw = pw * 0.38f; val bh = 46 * dp
         val by = overPanel.bottom - bh - 20 * dp
         rematchBtn.set(overPanel.centerX() - bw - 8 * dp, by, overPanel.centerX() - 8 * dp, by + bh)
@@ -808,7 +903,7 @@ class GameView(
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> onDown(x, y)
             MotionEvent.ACTION_MOVE -> onMove(x, y)
-            MotionEvent.ACTION_UP -> onUp(x, y)
+            MotionEvent.ACTION_UP -> onUp()
             MotionEvent.ACTION_CANCEL -> { if (touch == Touch.POWER) power = 0f; touch = Touch.NONE }
         }
         return true
@@ -829,9 +924,12 @@ class GameView(
             powerRect.left - 20 * dp <= x && x <= powerRect.right + 20 * dp && y >= powerRect.top - 30 * dp && y <= powerRect.bottom + 20 * dp -> {
                 touch = Touch.POWER; touchStartY = y; power = 0f
             }
-            spinDist <= spinR * 1.25f -> {
+            spinDist <= spinR * 1.2f -> {
                 touch = Touch.SPIN
                 if (spinDist < spinR * 0.14f) { spinX = 0f; spinY = 0f } else setSpin(x, y)
+            }
+            x >= elevRect.left - 10 * dp && x <= elevRect.right + 10 * dp && y >= elevRect.top - 22 * dp && y <= elevRect.bottom + 10 * dp -> {
+                touch = Touch.ELEV; setCueAngle(x)
             }
             x >= wheelRect.left - 16 * dp && x <= wheelRect.right + 16 * dp && y >= wheelRect.top && y <= wheelRect.bottom -> {
                 touch = Touch.WHEEL; lastTouchY = y
@@ -849,11 +947,12 @@ class GameView(
         when (touch) {
             Touch.POWER -> power = ((y - touchStartY) / (powerRect.height() * 0.9f)).coerceIn(0f, 1f)
             Touch.SPIN -> setSpin(x, y)
+            Touch.ELEV -> setCueAngle(x)
             Touch.WHEEL -> {
                 val d = y - lastTouchY
                 lastTouchY = y
                 wheelOffset += d
-                aimAngle += d / dp * 0.0009   // ~0.05 degrees per dp
+                aimAngle += d / dp * 0.0002   // ~0.01 degree per dp of finger travel
             }
             Touch.MOVE_CUE -> {
                 dragX = x; dragY = y
@@ -868,11 +967,13 @@ class GameView(
         }
     }
 
-    private fun onUp(x: Float, y: Float) {
+    private fun onUp() {
         if (phase == Phase.HUMAN) {
             if (touch == Touch.POWER) {
                 if (power > 0.02f) {
-                    shoot(aimAngle, speedFor(power), (spinX * P.MAX_TIP).toDouble(), (-spinY * P.MAX_TIP).toDouble())
+                    lastPower = power
+                    shoot(aimAngle, speedFor(power), (spinX * P.MAX_TIP).toDouble(), (-spinY * P.MAX_TIP).toDouble(),
+                        Math.toRadians(elevDeg.toDouble()))
                 } else power = 0f
             }
             if (touch == Touch.MOVE_CUE) dragInvalid = false
@@ -891,5 +992,22 @@ class GameView(
         val m = hypot(u, v)
         if (m > 1f) { u /= m; v /= m }
         spinX = u; spinY = v
+    }
+
+    private fun setCueAngle(x: Float) {
+        val f = ((x - elevRect.left) / elevRect.width()).coerceIn(0f, 1f)
+        var d = f * P.MAX_ELEVATION.toFloat()
+        if (d < 3f) d = 0f
+        elevDeg = d
+    }
+
+    private companion object {
+        val PCT = Array(101) { "$it%" }
+        val JUMP_LABELS = Array(61) { "JUMP · $it°" }
+        val SPIN_LABELS = arrayOf(
+            "center", "right", "left",
+            "follow", "follow right", "follow left",
+            "draw", "draw right", "draw left"
+        )
     }
 }

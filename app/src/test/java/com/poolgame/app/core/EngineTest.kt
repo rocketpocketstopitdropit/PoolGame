@@ -49,6 +49,28 @@ class EngineTest {
         assertTrue(3 in w.log.pocketed)
     }
 
+    @Test fun jumpShotClearsBlocker() {
+        val w = World(); w.clearAll()
+        w.put(0, 1.0, 0.635); w.put(5, 1.2, 0.635); w.put(1, 1.55, 0.635)
+        w.strike(0.0, 5.0, 0.0, 0.0, Math.toRadians(50.0)); w.simulate()
+        assertEquals(1, w.log.firstHit)
+        // the same shot with a level cue hits the blocker
+        val v = World(); v.clearAll()
+        v.put(0, 1.0, 0.635); v.put(5, 1.2, 0.635); v.put(1, 1.55, 0.635)
+        v.strike(0.0, 5.0, 0.0, 0.0); v.simulate()
+        assertEquals(5, v.log.firstHit)
+    }
+
+    @Test fun predictionMatchesShot() {
+        val w = World(); w.clearAll(); w.put(0, 1.0, 0.635); w.put(1, 1.5, 0.635 + P.R)
+        val pr = Prediction()
+        Predictor.run(w, World(), 0.0, 2.0, 0.0, 0.0, 0.0, pr)
+        assertEquals(1, pr.hitId)
+        assertTrue(pr.objN >= 2)
+        w.strike(0.0, 2.0, 0.0, 0.0); w.simulate()
+        assertEquals(w.log.hitX, pr.hitX, 1e-9)
+    }
+
     @Test fun scratchIsFoulWithBallInHand() {
         val m = Match(GameMode.NINE_BALL); m.rack(Random(1), 0)
         for (b in m.world.balls) if (b.id != 0 && b.id != 1) { b.onTable = false }

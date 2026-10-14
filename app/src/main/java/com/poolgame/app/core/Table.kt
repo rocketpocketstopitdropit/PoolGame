@@ -22,6 +22,8 @@ object P {
     const val MU_CUSHION = 0.14      // ball-cushion friction (gives running/reverse english)
     const val MAX_CUE_SPEED = 8.5    // m/s, a hard break
     const val MAX_TIP = 0.5          // max tip offset as a fraction of R before a miscue
+    const val E_SLATE = 0.35         // bounce off the slate when the cue drives the ball down (jump shots)
+    const val MAX_ELEVATION = 60.0   // degrees
 
     const val HEAD_X = L * 0.25      // head string
     const val FOOT_X = L * 0.75      // foot spot x
@@ -44,8 +46,9 @@ class Pocket(
 )
 
 object Table {
-    const val CORNER = 0.085   // distance from corner to where each cushion ends
-    const val SIDE = 0.066     // half-opening of side pockets
+    // Regulation (WPA) mouths: corner 4.5" between cushion points, side 5".
+    const val CORNER = 0.081   // distance from corner to where each cushion ends (mouth = CORNER * sqrt 2)
+    const val SIDE = 0.064     // half-opening of side pockets
 
     val segs: Array<Seg>
     val pockets: Array<Pocket>
@@ -74,7 +77,7 @@ object Table {
             p += Pocket(
                 cx0 - dx * 0.02, cy0 - dy * 0.02, 0.068,
                 cx0 + dx * CORNER * 0.42, cy0 + dy * CORNER * 0.42,
-                false, doubleArrayOf(hTipX, hTipY, vTipX, vTipY), 0.030
+                false, doubleArrayOf(hTipX, hTipY, vTipX, vTipY), 0.028
             )
         }
         // Side pockets
@@ -86,7 +89,7 @@ object Table {
             p += Pocket(
                 L / 2, y0 - dy * 0.03, 0.062,
                 L / 2, y0 - dy * 0.012,
-                true, doubleArrayOf(x1, y0, x2, y0), 0.024
+                true, doubleArrayOf(x1, y0, x2, y0), 0.022
             )
         }
         segs = s.toTypedArray()

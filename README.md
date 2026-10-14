@@ -26,14 +26,21 @@ You can also start a build manually from the Actions tab with **Run workflow**.
 | Control | What it does |
 |---|---|
 | Drag on the table | Aim the cue toward your finger |
-| **Fine aim** wheel (right) | Nudge the aim ~0.05° per dp |
+| **Fine aim** wheel (right) | Nudge the aim ~0.01° per dp of finger travel |
+| **Cue angle** slider (right) | Raise the cue for a jump shot (0–60°). Around 45–55° with a firm stroke hops the cue ball over a blocker |
 | **Spin** cue ball (right) | Touch where the tip strikes: top = follow, bottom = draw, sides = english. Tap the centre to reset |
 | **Power** bar (left) | Pull down to set power, release to shoot. Slide back to the top to cancel |
 | Ball in hand | Drag the cue ball (shaded area only before the break) |
 | ☰ / Back | Pause menu: resume, restart rack, quit |
 
-The aim guide shows the ghost ball, the object ball's path, and the cue ball's tangent line. A red
-ghost ball with an X means that ball is not a legal first contact.
+The aim guide is computed by running the real physics for the first part of the shot, so it shows
+exactly where the balls will go — including throw, follow/draw and jumps (yellow = airborne). A red
+ghost ball with an X means that ball is not a legal first contact; a red ring means a scratch.
+There is no random error on your shots.
+
+**Shot clock** (menu): optional 10–120 s per shot for human players; running out is a foul.
+**Record**: wins and losses are saved per game type and CPU level (and for pass & play), shown on
+the menu and after each game.
 
 ## Rules (simplified WPA)
 
@@ -54,6 +61,9 @@ ghost ball with an X means that ball is not a legal first contact.
 - Ball–ball: restitution plus surface friction, so cut-induced and spin-induced throw happen naturally.
 - Cushions: friction at the nose, so running/reverse english changes rebound angles.
 - Exact time-of-impact rewind on every collision, so cut angles match the aim guide.
+- Jump shots: an elevated cue drives the ball into the slate, which bounces it up; airborne balls
+  fly ballistically, collide in 3D, and pass over pockets and balls.
+- Regulation 9-ft table (100″ × 50″), 2¼″ balls, 4.5″ corner and 5″ side pocket mouths.
 
 Tunable constants are in the `P` object in `core/Table.kt`.
 

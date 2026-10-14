@@ -19,10 +19,11 @@ class Plan(
     val vert: Double,
     val kind: String,
     val placeX: Double = Double.NaN,
-    val placeY: Double = Double.NaN
+    val placeY: Double = Double.NaN,
+    val elevation: Double = 0.0
 ) {
     val hasPlacement get() = !placeX.isNaN()
-    fun withPlacement(x: Double, y: Double) = Plan(angle, speed, side, vert, kind, x, y)
+    fun withPlacement(x: Double, y: Double) = Plan(angle, speed, side, vert, kind, x, y, elevation)
 }
 
 class Cand(
@@ -57,7 +58,7 @@ class Ai(val level: Int, seed: Long = System.nanoTime()) {
             (ideal.speed * (1 + gauss() * speedSigma)).coerceIn(0.2, P.MAX_CUE_SPEED),
             ideal.side + gauss() * spinSigma,
             ideal.vert + gauss() * spinSigma,
-            ideal.kind, ideal.placeX, ideal.placeY
+            ideal.kind, ideal.placeX, ideal.placeY, ideal.elevation
         )
     }
 
@@ -108,7 +109,7 @@ class Ai(val level: Int, seed: Long = System.nanoTime()) {
     }
 
     /** All direct pots from the cue ball's current spot. */
-    fun candidates(m: Match, player: Int, sigma: Double): ArrayList<Cand> {
+    fun candidates(m: Match, player: Int, sigma: Double, blockedOnly: Boolean = false): ArrayList<Cand> {
         val out = ArrayList<Cand>()
         val w = m.world
         val c = w.balls[0]
@@ -142,7 +143,8 @@ class Ai(val level: Int, seed: Long = System.nanoTime()) {
                     Table.pointSegDist(tips[2], tips[3], tb.x, tb.y, pk.aimX, pk.aimY)
                 ) - r
                 if (margin < 0.003) continue
-                if (!w.pathClear(c.x, c.y, gx, gy, 0, t, 2 * r - 0.0005)) continue
+                val cueClear = w.pathClear(c.x, c.y, gx, gy, 0, t, 2 * r - 0.0005)
+                if (cueClear == blockedOnly) continue
                 if (!w.pathClear(tb.x, tb.y, pk.aimX, pk.aimY, 0, t, 2 * r - 0.0005)) continue
                 val tol = min(pk.tolerance, margin)
                 val p = prob(cosCut, d1, d2, tol, sigma)
@@ -228,10 +230,10 @@ class Ai(val level: Int, seed: Long = System.nanoTime()) {
     private class Eval(val value: Double, val potted: Boolean, val foul: Boolean)
 
     /** Run the shot noiselessly and score the result from `me`'s point of view. */
-    private fun evaluate(work: Match, angle: Double, speed: Double, side: Double, vert: Double): Eval {
+    private fun evaluate(work: Match, angle: Double, speed: Double, side: Double, vert: Double, elev: Double = 0.0): Eval {
         val s = sim!!
         s.copyFrom(work)
-        s.shoot(angle, speed, side, vert)
+        s.shoot(angle, speed, side, vert, elev)
         s.world.simulate()
         simulations++
         val me = work.current
@@ -273,6 +275,22 @@ class Ai(val level: Int, seed: Long = System.nanoTime()) {
                 if (score > bestScore) {
                     bestScore = score
                     best = Plan(c.angle, speed, sd, vt, "pot ${c.target}")
+                }
+            }
+        }
+        // Strong players will jump over a blocker to reach a makeable ball.
+        if (level >= 7 && (best == null || bestScore < 0.2) && !timeUp()) {
+            for (c in candidates(work, me, aimSigma, blockedOnly = true).take(4)) {
+                for (el in doubleArrayOf(0.6, 0.8)) for (sp in doubleArrayOf(3.5, 4.5, 5.5)) {
+                    if (timeUp() && best != null) break
+                    val e = evaluate(work, c.angle, sp, 0.0, 0.0, el)
+                    if (!e.potted) continue
+                    val p = c.p * 0.6     // jumps are harder to control
+                    val score = p * e.value - (1 - p) * 0.3
+                    if (score > bestScore) {
+                        bestScore = score
+                        best = Plan(c.angle, sp, 0.0, 0.0, "jump ${c.target}", elevation = el)
+                    }
                 }
             }
         }

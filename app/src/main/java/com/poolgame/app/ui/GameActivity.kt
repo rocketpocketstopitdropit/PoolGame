@@ -17,19 +17,25 @@ class GameActivity : Activity(), GameView.Host {
         const val EXTRA_VS_CPU = "vsCpu"
         const val EXTRA_LEVEL = "level"
         const val EXTRA_SOUND = "sound"
+        const val EXTRA_CLOCK = "clock"
     }
 
     private lateinit var game: GameView
+    private lateinit var mode: GameMode
+    private var vsCpu = true
+    private var level = 5
+    private val stats by lazy { Stats(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        val mode = if (intent.getStringExtra(EXTRA_MODE) == GameMode.NINE_BALL.name) GameMode.NINE_BALL else GameMode.EIGHT_BALL
+        mode = if (intent.getStringExtra(EXTRA_MODE) == GameMode.NINE_BALL.name) GameMode.NINE_BALL else GameMode.EIGHT_BALL
+        vsCpu = intent.getBooleanExtra(EXTRA_VS_CPU, true)
+        level = intent.getIntExtra(EXTRA_LEVEL, 5).coerceIn(1, 10)
         game = GameView(
-            this, mode,
-            intent.getBooleanExtra(EXTRA_VS_CPU, true),
-            intent.getIntExtra(EXTRA_LEVEL, 5).coerceIn(1, 10),
+            this, mode, vsCpu, level,
             intent.getBooleanExtra(EXTRA_SOUND, true),
+            intent.getIntExtra(EXTRA_CLOCK, 0).coerceIn(0, 300),
             this
         )
         setContentView(game)
@@ -66,7 +72,14 @@ class GameActivity : Activity(), GameView.Host {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() = onMenuRequested()
 
+    override fun onGameFinished(winner: Int): String {
+        val lvl = if (vsCpu) level else 0
+        stats.record(mode, vsCpu, lvl, winner)
+        return stats.summary(mode, vsCpu, lvl)
+    }
+
     override fun onMenuRequested() {
+        game.menuOpen = true
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle("Paused")
             .setItems(arrayOf("Resume", "Restart rack", "Quit to menu")) { _, which ->
@@ -75,6 +88,7 @@ class GameActivity : Activity(), GameView.Host {
                     2 -> finish()
                 }
             }
+            .setOnDismissListener { game.menuOpen = false }
             .show()
     }
 

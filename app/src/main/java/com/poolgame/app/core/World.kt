@@ -10,17 +10,19 @@ class Ball(val id: Int) {
     var x = 0.0; var y = 0.0
     var vx = 0.0; var vy = 0.0
     var wx = 0.0; var wy = 0.0; var wz = 0.0   // angular velocity (rad/s)
+    var z = 0.0; var vz = 0.0                  // height above the cloth and vertical speed (jump shots), up > 0
     var onTable = false
     var moving = false
     // Orientation quaternion, only used for drawing the rolling ball.
     var qw = 1.0; var qx = 0.0; var qy = 0.0; var qz = 0.0
 
     fun stop() {
-        vx = 0.0; vy = 0.0; wx = 0.0; wy = 0.0; wz = 0.0; moving = false
+        vx = 0.0; vy = 0.0; wx = 0.0; wy = 0.0; wz = 0.0; z = 0.0; vz = 0.0; moving = false
     }
 
     fun copyFrom(o: Ball) {
         x = o.x; y = o.y; vx = o.vx; vy = o.vy; wx = o.wx; wy = o.wy; wz = o.wz
+        z = o.z; vz = o.vz
         onTable = o.onTable; moving = o.moving
         qw = o.qw; qx = o.qx; qy = o.qy; qz = o.qz
     }
@@ -32,6 +34,7 @@ class ShotLog {
     val pocketed = ArrayList<Int>()   // in the order they dropped
     var railAfterHit = false          // any ball touched a cushion after first contact
     var cueCushionsBeforeHit = 0
+    var hitX = 0.0; var hitY = 0.0     // cue-ball centre at first contact
 
     fun reset() {
         firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0
@@ -40,6 +43,7 @@ class ShotLog {
     fun copyFrom(o: ShotLog) {
         firstHit = o.firstHit; pocketed.clear(); pocketed.addAll(o.pocketed)
         railAfterHit = o.railAfterHit; cueCushionsBeforeHit = o.cueCushionsBeforeHit
+        hitX = o.hitX; hitY = o.hitY
     }
 }
 
@@ -77,22 +81,30 @@ class World {
     }
 
     /**
-     * Strike the cue ball with a level cue.
+     * Strike the cue ball.
      * @param side tip offset to the shooter's right as a fraction of R (right english > 0)
      * @param vert tip offset above centre as a fraction of R (follow > 0, draw < 0)
+     * @param elevation cue elevation in radians. An elevated cue drives the ball into the slate,
+     *   which bounces it up: that is a jump shot.
      */
-    fun strike(angle: Double, speed: Double, side: Double, vert: Double) {
+    fun strike(angle: Double, speed: Double, side: Double, vert: Double, elevation: Double = 0.0) {
         val c = balls[0]
         var a = side; var b = vert
         val m = hypot(a, b)
         if (m > P.MAX_TIP) { a *= P.MAX_TIP / m; b *= P.MAX_TIP / m }
         val dx = cos(angle); val dy = sin(angle)
-        c.vx = speed * dx; c.vy = speed * dy
+        val el = elevation.coerceIn(0.0, Math.toRadians(P.MAX_ELEVATION))
+        val down = speed * sin(el)
+        // Part of the horizontal speed is lost to slate friction during the bounce.
+        val h = speed * cos(el) * (1.0 - 0.3 * sin(el))
+        c.vx = h * dx; c.vy = h * dy
         // Angular impulse r x J with r = R(a*right + b*up), up = -z, right = (-dy, dx)
-        val k = 5.0 * speed / (2.0 * P.R)
+        val k = 5.0 * h / (2.0 * P.R)
         c.wx = k * b * dy
         c.wy = -k * b * dx
         c.wz = -k * a
+        c.z = 0.0
+        c.vz = if (el > 0.03) P.E_SLATE * down else 0.0
         c.moving = true
         log.reset()
     }
@@ -104,7 +116,7 @@ class World {
         for (b in balls) {
             if (!b.onTable || !b.moving) continue
             any = true
-            val s = abs(b.vx) + abs(b.vy)
+            val s = abs(b.vx) + abs(b.vy) + abs(b.vz)
             if (s > maxV) maxV = s
         }
         if (!any) return maxDt
@@ -114,7 +126,7 @@ class World {
         lastDt = dt
         for (b in balls) {
             if (!b.onTable || !b.moving) continue
-            cloth(b, dt)
+            if (b.z > 0.0 || b.vz > 0.0) flight(b, dt) else cloth(b, dt)
             b.x += b.vx * dt
             b.y += b.vy * dt
             if (trackOrientation) rotate(b, dt)
@@ -165,6 +177,19 @@ class World {
         if (abs(b.vx) + abs(b.vy) < 0.004 && r * (abs(b.wx) + abs(b.wy)) < 0.004) b.stop()
     }
 
+    /** Ballistic flight after a jump; bounces on the slate until it settles. */
+    private fun flight(b: Ball, dt: Double) {
+        b.z += b.vz * dt
+        b.vz -= P.G * dt
+        if (b.z <= 0.0 && b.vz < 0.0) {
+            b.z = 0.0
+            val impact = -b.vz
+            b.vz = if (impact > 0.25) impact * 0.45 else 0.0
+            b.vx *= 0.96; b.vy *= 0.96
+            listener?.onCushion(impact * 0.6)
+        }
+    }
+
     private fun rotate(b: Ball, dt: Double) {
         val h = 0.5 * dt
         val wx = b.wx; val wy = b.wy; val wz = b.wz
@@ -187,38 +212,60 @@ class World {
             for (j in i + 1 until 16) {
                 val b = balls[j]
                 if (!b.onTable || (!a.moving && !b.moving)) continue
-                val dx = b.x - a.x; val dy = b.y - a.y
-                val d2 = dx * dx + dy * dy
+                val dx = b.x - a.x; val dy = b.y - a.y; val dz = b.z - a.z
+                val d2 = dx * dx + dy * dy + dz * dz
                 if (d2 >= minD2) continue
                 // Rewind both balls to the exact moment of contact so the line of centres
                 // (and therefore the cut angle) is not distorted by step overshoot.
-                val rvx = b.vx - a.vx; val rvy = b.vy - a.vy
-                val vv = rvx * rvx + rvy * rvy
-                val dvr = dx * rvx + dy * rvy
+                val rvx = b.vx - a.vx; val rvy = b.vy - a.vy; val rvz = b.vz - a.vz
+                val vv = rvx * rvx + rvy * rvy + rvz * rvz
+                val dvr = dx * rvx + dy * rvy + dz * rvz
                 var s = -1.0
                 if (dvr < 0 && vv > 1e-12) {
                     val disc = dvr * dvr - vv * (d2 - minD2)
                     if (disc >= 0) s = (dvr + sqrt(disc)) / vv
                 }
                 if (s < 0 || s > lastDt * 1.01) {
-                    // Resting contact or numerical oddity: just push apart.
+                    // Resting contact or numerical oddity: just push apart (horizontally).
+                    val hd = sqrt(dx * dx + dy * dy).coerceAtLeast(1e-9)
                     val d = sqrt(d2).coerceAtLeast(1e-9)
                     val ov = (2 * r - d) * 0.5
-                    val nx = dx / d; val ny = dy / d
+                    val nx = dx / hd; val ny = dy / hd
                     a.x -= nx * ov; a.y -= ny * ov
                     b.x += nx * ov; b.y += ny * ov
                     s = 0.0
                     if ((a.vx - b.vx) * nx + (a.vy - b.vy) * ny <= 0) continue
                 } else {
-                    a.x -= a.vx * s; a.y -= a.vy * s
-                    b.x -= b.vx * s; b.y -= b.vy * s
+                    a.x -= a.vx * s; a.y -= a.vy * s; a.z -= a.vz * s
+                    b.x -= b.vx * s; b.y -= b.vy * s; b.z -= b.vz * s
                 }
-                val ex0 = b.x - a.x; val ey0 = b.y - a.y
-                val dd = sqrt(ex0 * ex0 + ey0 * ey0).coerceAtLeast(1e-9)
-                val nx = ex0 / dd; val ny = ey0 / dd
-                val vn = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny
+                val ex0 = b.x - a.x; val ey0 = b.y - a.y; val ez0 = b.z - a.z
+                val dd = sqrt(ex0 * ex0 + ey0 * ey0 + ez0 * ez0).coerceAtLeast(1e-9)
+                val nz = ez0 / dd
+                val hl = sqrt(ex0 * ex0 + ey0 * ey0).coerceAtLeast(1e-9)
+                val nx = ex0 / hl; val ny = ey0 / hl          // horizontal unit normal
+                val sh = hl / dd                              // horizontal share of the 3D normal
+                val vn = ((a.vx - b.vx) * nx + (a.vy - b.vy) * ny) * sh + (a.vz - b.vz) * nz
                 if (vn <= 0) {
-                    a.x += a.vx * s; a.y += a.vy * s; b.x += b.vx * s; b.y += b.vy * s
+                    a.x += a.vx * s; a.y += a.vy * s; a.z += a.vz * s
+                    b.x += b.vx * s; b.y += b.vy * s; b.z += b.vz * s
+                    continue
+                }
+                if (nz != 0.0) {
+                    // Airborne contact (jump shot clipping a ball): frictionless 3D impulse.
+                    val ji = (1 + P.E_BALL) * 0.5 * vn
+                    a.vx -= ji * nx * sh; a.vy -= ji * ny * sh; a.vz -= ji * nz
+                    b.vx += ji * nx * sh; b.vy += ji * ny * sh; b.vz += ji * nz
+                    for (q in arrayOf(a, b)) {
+                        if (q.z <= 0.0) { q.z = 0.0; if (q.vz < 0) q.vz = 0.0 }
+                        if (q.vz > 1.2) q.vz = 1.2   // keep glancing jumps on the table
+                    }
+                    a.x += a.vx * s; a.y += a.vy * s; a.z += a.vz * s
+                    b.x += b.vx * s; b.y += b.vy * s; b.z += b.vz * s
+                    for (q in arrayOf(a, b)) if (q.z < 0.0) q.z = 0.0
+                    a.moving = true; b.moving = true
+                    recordFirstHit(i, j, a, b)
+                    listener?.onBallHit(vn)
                     continue
                 }
                 val jn = (1 + P.E_BALL) * 0.5 * vn
@@ -246,15 +293,19 @@ class World {
                     a.wx -= k * cx; a.wy -= k * cy; a.wz -= k * cz
                     b.wx -= k * cx; b.wy -= k * cy; b.wz -= k * cz
                 }
+                recordFirstHit(i, j, a, b)
                 a.x += a.vx * s; a.y += a.vy * s
                 b.x += b.vx * s; b.y += b.vy * s
                 a.moving = true; b.moving = true
-                if (log.firstHit < 0) {
-                    if (i == 0) log.firstHit = j else if (j == 0) log.firstHit = i
-                }
                 listener?.onBallHit(vn)
             }
         }
+    }
+
+    private fun recordFirstHit(i: Int, j: Int, a: Ball, b: Ball) {
+        if (log.firstHit >= 0) return
+        if (i == 0) { log.firstHit = j; log.hitX = a.x; log.hitY = a.y }
+        else if (j == 0) { log.firstHit = i; log.hitX = b.x; log.hitY = b.y }
     }
 
     private fun collideCushions() {
@@ -322,7 +373,7 @@ class World {
             if (!b.onTable || !b.moving) continue
             if (b.x > 0.1 && b.x < P.L - 0.1 && b.y > 0.1 && b.y < P.W - 0.1) continue
             var drop = b.x < -r || b.x > P.L + r || b.y < -r || b.y > P.W + r
-            if (!drop) for (p in Table.pockets) {
+            if (!drop && b.z < P.R * 0.6) for (p in Table.pockets) {
                 val dx = b.x - p.cx; val dy = b.y - p.cy
                 if (dx * dx + dy * dy < p.capR * p.capR) { drop = true; break }
             }

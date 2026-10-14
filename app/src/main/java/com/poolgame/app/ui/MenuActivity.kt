@@ -25,6 +25,10 @@ class MenuActivity : Activity() {
     private var vsCpu = true
     private var level = 5
     private var sound = true
+    private var clockOn = false
+    private var clockSec = 30
+    private val stats by lazy { Stats(this) }
+    private var recordText: TextView? = null
 
     private val levelNames = arrayOf(
         "Beginner", "Novice", "Casual", "Bar Player", "Club Player",
@@ -40,12 +44,32 @@ class MenuActivity : Activity() {
         vsCpu = prefs.getBoolean("vsCpu", true)
         level = prefs.getInt("level", 5).coerceIn(1, 10)
         sound = prefs.getBoolean("sound", true)
+        clockOn = prefs.getBoolean("clockOn", false)
+        clockSec = prefs.getInt("clockSec", 30).coerceIn(10, 120)
         build()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshRecord()
+    }
+
+    private fun refreshRecord() {
+        val t = recordText ?: return
+        val name = if (mode == GameMode.EIGHT_BALL) "8-Ball" else "9-Ball"
+        t.text = if (vsCpu) {
+            "$name vs level $level:  ${stats.wins(mode, true, level)} W – ${stats.losses(mode, true, level)} L\n" +
+                "$name vs all levels:  ${stats.totalWinsVsCpu(mode)} W – ${stats.totalLossesVsCpu(mode)} L"
+        } else {
+            "$name pass & play:  Player 1  ${stats.wins(mode, false, 0)} – ${stats.losses(mode, false, 0)}  Player 2"
+        }
     }
 
     private fun save() {
         prefs.edit().putString("mode", mode.name).putBoolean("vsCpu", vsCpu)
-            .putInt("level", level).putBoolean("sound", sound).apply()
+            .putInt("level", level).putBoolean("sound", sound)
+            .putBoolean("clockOn", clockOn).putInt("clockSec", clockSec).apply()
+        refreshRecord()
     }
 
     private fun rounded(color: Int, radius: Float, stroke: Int = 0, strokeColor: Int = 0) = GradientDrawable().apply {
@@ -120,6 +144,52 @@ class MenuActivity : Activity() {
         skillBlock.visibility = if (vsCpu) View.VISIBLE else View.GONE
         card.addView(skillBlock)
 
+        // Shot clock
+        card.addView(section("SHOT CLOCK"))
+        val clockLabel = label("", 15f, Color.WHITE, true)
+        val clockSeek = SeekBar(this)
+        fun refreshClock() {
+            clockLabel.text = if (clockOn) "$clockSec seconds per shot" else "Off"
+            clockSeek.isEnabled = clockOn
+            clockSeek.alpha = if (clockOn) 1f else 0.35f
+        }
+        @Suppress("DEPRECATION")
+        val clockSwitch = Switch(this).apply {
+            text = "Time limit for each shot (vs CPU and pass & play)"
+            setTextColor(0xFFDDE3E8.toInt())
+            textSize = 14f
+            isChecked = clockOn
+            setOnCheckedChangeListener { _, c -> clockOn = c; refreshClock(); save() }
+        }
+        card.addView(clockSwitch)
+        card.addView(clockLabel)
+        clockSeek.max = 22   // 10..120 s in 5 s steps
+        clockSeek.progress = (clockSec - 10) / 5
+        clockSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) { clockSec = 10 + p * 5; refreshClock(); save() }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+        card.addView(clockSeek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(40f)))
+        refreshClock()
+
+        // Record
+        card.addView(section("YOUR RECORD"))
+        recordText = label("", 14f, 0xFFDDE3E8.toInt()).apply { setLineSpacing(0f, 1.25f) }
+        card.addView(recordText)
+        card.addView(label("Reset record", 13f, 0xFFEB5757.toInt()).apply {
+            setPadding(0, dpi(8f), 0, dpi(4f))
+            setOnClickListener {
+                android.app.AlertDialog.Builder(this@MenuActivity, android.R.style.Theme_Material_Dialog_Alert)
+                    .setTitle("Reset your record?")
+                    .setMessage("This clears all wins and losses for every game type and level.")
+                    .setPositiveButton("Reset") { _, _ -> stats.reset(); refreshRecord() }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        })
+        refreshRecord()
+
         // Sound
         @Suppress("DEPRECATION")
         val soundSwitch = Switch(this).apply {
@@ -142,7 +212,8 @@ class MenuActivity : Activity() {
 
         card.addView(label(
             "Drag on the table to aim, fine-tune with the wheel, touch the cue ball on the right to add spin, " +
-                "then pull the power bar down and let go to shoot. With ball in hand, drag the cue ball to place it.",
+                "raise the cue angle for a jump shot, then pull the power bar down and let go to shoot. " +
+                "With ball in hand, drag the cue ball to place it.",
             12.5f, 0xFF8A97A1.toInt()
         ).apply { setPadding(0, dpi(14f), 0, 0); setLineSpacing(0f, 1.15f) })
 
@@ -186,6 +257,7 @@ class MenuActivity : Activity() {
             putExtra(GameActivity.EXTRA_VS_CPU, vsCpu)
             putExtra(GameActivity.EXTRA_LEVEL, level)
             putExtra(GameActivity.EXTRA_SOUND, sound)
+            putExtra(GameActivity.EXTRA_CLOCK, if (clockOn) clockSec else 0)
         })
     }
 }
