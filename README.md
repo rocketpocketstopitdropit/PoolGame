@@ -69,6 +69,10 @@ the menu and after each game.
   then sink the 8. Sinking the 8 early, or scratching on it, loses. 8 on the break is respotted.
 - **9-ball:** hit the lowest-numbered ball first; any legal pot keeps the turn. Pot the 9 legally
   (combos and breaks count) to win. Three fouls in a row loses.
+- **Call pocket** (menu: Off / 8 & 9 only / Every shot): tap a pocket to call it (tap again to cancel).
+  *8 & 9 only*: the 8 (8-ball) or the 9 (9-ball) must go in the called pocket — an 8 in the wrong pocket
+  loses, an uncalled 9 is respotted. *Every shot*: only one of your balls in the called pocket keeps your
+  turn; anything else is slop (no foul, the opponent shoots, slopped balls stay down). The CPU calls too.
 - **Fouls** (scratch, no ball hit, wrong ball first, no rail after contact, a ball jumped off the
   table) give the opponent ball in hand anywhere. Jumped object balls are respotted; jumping the 8
   off in 8-ball loses (except on the break).

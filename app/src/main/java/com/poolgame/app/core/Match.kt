@@ -6,6 +6,9 @@ import kotlin.random.Random
 enum class GameMode { EIGHT_BALL, NINE_BALL }
 enum class Group { OPEN, SOLIDS, STRIPES }
 
+/** Called-pocket rule: off, only for the money ball (the 8 in 8-ball, the 9 in 9-ball), or every shot. */
+enum class CallMode { OFF, MONEY_BALL, EVERY_SHOT }
+
 class ShotOutcome(
     val foul: Boolean,
     val foulReason: String,
@@ -30,8 +33,14 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     val consecutiveFouls = intArrayOf(0, 0)
 
     // Snapshot taken at the start of each shot
+    var callMode = CallMode.OFF
+    /** Pocket the shooter has called for the next shot (index into Table.pockets), or -1. */
+    var calledPocket = -1
+
     private var preTargets = IntArray(0)
     private var preOnEight = false
+    private var preCalled = -1
+    private var preCallActive = false
 
     fun copyFrom(o: Match) {
         world.copyFrom(o.world)
@@ -41,6 +50,8 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         winner = o.winner; message = o.message
         consecutiveFouls[0] = o.consecutiveFouls[0]; consecutiveFouls[1] = o.consecutiveFouls[1]
         preTargets = o.preTargets; preOnEight = o.preOnEight
+        callMode = o.callMode; calledPocket = o.calledPocket
+        preCalled = o.preCalled; preCallActive = o.preCallActive
     }
 
     // "You win" / "CPU wins" — the player named "You" takes the plural verb form.
@@ -149,9 +160,22 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     // ------------------------------------------------------------------ shooting
 
+    /** Whether the shooter must call a pocket before this shot. */
+    fun callRequired(): Boolean = !isBreak && when (callMode) {
+        CallMode.OFF -> false
+        CallMode.MONEY_BALL -> if (mode == GameMode.EIGHT_BALL) onEight(current) else lowestBall() == 9
+        CallMode.EVERY_SHOT -> true
+    }
+
+    /** Calling is allowed whenever the rule is on (e.g. to call a 9-ball combo). */
+    fun callAllowed(): Boolean = callMode != CallMode.OFF && !isBreak
+
     fun beginShot() {
         preTargets = legalTargets(current)
         preOnEight = onEight(current)
+        preCallActive = callAllowed()
+        preCalled = if (preCallActive) calledPocket else -1
+        calledPocket = -1
     }
 
     fun shoot(angle: Double, speed: Double, side: Double, vert: Double, elevation: Double = 0.0) {
@@ -218,6 +242,9 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             if (8 in pocketed) {
                 if (isBreak) {
                     respot(8); notes += "8 on the break is respotted"
+                } else if (preOnEight && !foul && preCallActive && log.pocketIn[8] != preCalled) {
+                    win = opp
+                    notes += "the 8 went in the wrong pocket"
                 } else if (preOnEight && !foul) {
                     win = shooter
                 } else {
@@ -226,7 +253,9 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
                 }
             }
             if (win < 0 && !isBreak && !foul && groups[shooter] == Group.OPEN) {
-                val first = objects.firstOrNull { it != 8 }
+                val first = if (callMode == CallMode.EVERY_SHOT)
+                    objects.firstOrNull { it != 8 && log.pocketIn[it] == preCalled }
+                else objects.firstOrNull { it != 8 }
                 if (first != null) {
                     val g = groupOf(first)
                     groups[shooter] = g
@@ -237,7 +266,12 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         } else {
             if (9 in jumped) { respot(9); notes += "9 respotted" }
             if (9 in pocketed) {
-                if (!foul) win = shooter else { respot(9); notes += "9 respotted" }
+                val calledOk = !preCallActive || log.pocketIn[9] == preCalled
+                when {
+                    !foul && calledOk -> win = shooter
+                    !foul -> { respot(9); notes += "9 not in the called pocket · respotted" }
+                    else -> { respot(9); notes += "9 respotted" }
+                }
             }
         }
 
@@ -251,11 +285,16 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             } else consecutiveFouls[shooter] = 0
         }
 
-        val keep = win < 0 && !foul && when {
-            mode == GameMode.NINE_BALL -> objects.isNotEmpty()
-            groups[shooter] == Group.OPEN -> objects.any { it != 8 }
-            else -> objects.any { groupOf(it) == groups[shooter] }
+        val own: (Int) -> Boolean = when {
+            mode == GameMode.NINE_BALL -> { _ -> true }
+            groups[shooter] == Group.OPEN -> { id -> id != 8 }
+            else -> { id -> groupOf(id) == groups[shooter] }
         }
+        // With "call every shot", only your ball in the called pocket keeps the turn; anything else is slop.
+        val everyShot = callMode == CallMode.EVERY_SHOT && preCallActive
+        val keep = win < 0 && !foul && objects.any { own(it) && (!everyShot || log.pocketIn[it] == preCalled) }
+        if (win < 0 && !foul && !keep && everyShot && objects.isNotEmpty()) notes += "Slop: not in the called pocket"
+
 
         isBreak = false
         winner = win

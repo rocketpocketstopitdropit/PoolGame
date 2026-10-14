@@ -7,7 +7,8 @@ class GameSettings(
     val level: Int,
     val shotClock: Int,
     val practice: Boolean,
-    val breaker: Int
+    val breaker: Int,
+    val callMode: CallMode = CallMode.OFF
 )
 
 /**
@@ -21,6 +22,7 @@ object GameSave {
         kv("v", 1)
         kv("mode", s.mode.name); kv("vsCpu", s.vsCpu); kv("level", s.level)
         kv("clock", s.shotClock); kv("practice", s.practice); kv("breaker", s.breaker)
+        kv("call", s.callMode.name)
         kv("current", m.current)
         kv("g0", m.groups[0].name); kv("g1", m.groups[1].name)
         kv("bih", m.ballInHand); kv("kitchen", m.kitchenOnly); kv("brk", m.isBreak)
@@ -40,7 +42,8 @@ object GameSave {
             p.getValue("level").toInt(),
             p.getValue("clock").toInt(),
             p.getValue("practice").toBoolean(),
-            p.getValue("breaker").toInt()
+            p.getValue("breaker").toInt(),
+            p["call"]?.let { CallMode.valueOf(it) } ?: CallMode.OFF
         )
     } catch (e: Throwable) { null }
 
@@ -56,6 +59,7 @@ object GameSave {
         m.consecutiveFouls[0] = p.getValue("f0").toInt(); m.consecutiveFouls[1] = p.getValue("f1").toInt()
         m.message = p["msg"] ?: ""
         m.winner = -1
+        m.callMode = p["call"]?.let { CallMode.valueOf(it) } ?: CallMode.OFF
         for (b in m.world.balls) {
             val f = p.getValue("b${b.id}").split(',')
             b.stop()

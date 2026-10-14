@@ -1,5 +1,6 @@
 package com.poolgame.web
 
+import com.poolgame.app.core.CallMode
 import com.poolgame.app.core.GameMode
 import com.poolgame.app.core.GameSave
 import kotlin.math.PI
@@ -28,6 +29,7 @@ class App : GameHost {
     private var clockSec = Store.getInt("clockSec", 30).coerceIn(10, 120)
     private var sound = Store.getBool("sound", true)
     private var aimSens = Store.getInt("aimSens", 5).coerceIn(1, 10)
+    private var callIdx = Store.getInt("callMode", 0).coerceIn(0, 2)
     private var prediction = Store.getBool("prediction", true)
 
     // What the current game is (may differ from the menu when resuming a saved game)
@@ -120,6 +122,7 @@ class App : GameHost {
     private fun wireMenu() {
         segment("seg-mode") { modeIdx = it; save(); refreshMenu() }
         segment("seg-opp") { vsCpu = it == 0; save(); refreshMenu() }
+        segment("seg-call") { callIdx = it; save(); refreshMenu() }
         el("skill").addEventListener("input", { level = (el("skill").value as String).toInt(); save(); refreshMenu() })
         el("clockOn").addEventListener("change", { clockOn = el("clockOn").checked as Boolean; save(); refreshMenu() })
         el("clockSec").addEventListener("input", { clockSec = (el("clockSec").value as String).toInt(); save(); refreshMenu() })
@@ -170,6 +173,7 @@ class App : GameHost {
     private fun refreshMenu() {
         setSegment("seg-mode", modeIdx)
         setSegment("seg-opp", if (vsCpu) 0 else 1)
+        setSegment("seg-call", callIdx)
         el("matchOpts").style.display = if (modeIdx == 2) "none" else "block"
         el("skillBlock").style.display = if (vsCpu) "block" else "none"
         el("skill").value = level.toString()
@@ -198,7 +202,7 @@ class App : GameHost {
         Store.set("modeIdx", modeIdx.toString()); Store.set("vsCpu", vsCpu.toString())
         Store.set("level", level.toString()); Store.set("clockOn", clockOn.toString())
         Store.set("clockSec", clockSec.toString()); Store.set("sound", sound.toString())
-        Store.set("aimSens", aimSens.toString()); Store.set("prediction", prediction.toString())
+        Store.set("aimSens", aimSens.toString()); Store.set("callMode", callIdx.toString()); Store.set("prediction", prediction.toString())
     }
 
     private fun savedSummary(): String? {
@@ -222,6 +226,7 @@ class App : GameHost {
         var cpu = vsCpu && !practice
         var lvl = level
         var clock = if (clockOn && !practice) clockSec else 0
+        var call = CallMode.values()[callIdx]
         var text: String? = null
         if (resume) {
             val saved = Store.get("savedGame", "")
@@ -229,12 +234,13 @@ class App : GameHost {
             if (s != null) {
                 text = saved
                 practice = s.practice; mode = s.mode; cpu = s.vsCpu; lvl = s.level; clock = s.shotClock
+                call = s.callMode
             }
         } else Store.set("savedGame", "")
         sounds.enabled = sound
         playingCpu = cpu; playingLevel = lvl; playingMode = mode; playingPractice = practice
         el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
-        game = Game(mode, cpu, lvl, clock, practice, aimSens, prediction, text, sounds, this)
+        game = Game(mode, cpu, lvl, clock, practice, aimSens, prediction, text, call, sounds, this)
         el("menu").style.display = "none"
         canvas.style.display = "block"
         slots.clear()

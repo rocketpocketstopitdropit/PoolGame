@@ -1,6 +1,7 @@
 package com.poolgame.web
 
 import com.poolgame.app.core.Ai
+import com.poolgame.app.core.CallMode
 import com.poolgame.app.core.GameMode
 import com.poolgame.app.core.GameSave
 import com.poolgame.app.core.GameSettings
@@ -41,6 +42,7 @@ class Game(
     aimSensitivity: Int,
     var showPrediction: Boolean,
     resume: String?,
+    private val callMode: CallMode,
     private val sfx: Sounds,
     private val host: GameHost
 ) {
@@ -81,6 +83,7 @@ class Game(
     private var turnSave: String? = null
     private val hit = DoubleArray(4)
 
+    private var callFlashUntil = 0.0
     private var clockStarted = false
     private var clockLeft = 0.0
     private var lastBeep = 0
@@ -162,6 +165,7 @@ class Game(
         match.world.trackOrientation = true
         match.world.listener = makeListener()
         match.rack(rng, breaker)
+        match.callMode = if (practice) CallMode.OFF else callMode
         if (practice) {
             match.ballInHand = false
             match.kitchenOnly = false
@@ -179,7 +183,7 @@ class Game(
 
     fun isPractice() = practice
 
-    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practice, breaker)
+    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practice, breaker, match.callMode)
 
     private fun resumeGame(text: String): Boolean {
         val st = GameSave.readSettings(text) ?: return false
@@ -263,9 +267,23 @@ class Game(
         val c = match.world.balls[0]
         animFromX = c.x; animFromY = c.y
         if (p.hasPlacement && !match.placeCue(p.placeX, p.placeY)) {
-            cpuPlan = Plan(p.angle, p.speed, p.side, p.vert, p.kind, elevation = p.elevation)
+            cpuPlan = Plan(p.angle, p.speed, p.side, p.vert, p.kind, elevation = p.elevation, pocket = p.pocket)
+        }
+        if (match.callAllowed()) {
+            match.calledPocket = when {
+                p.pocket >= 0 -> p.pocket
+                match.callRequired() -> nearestPocketToAim()
+                else -> -1
+            }
         }
         phase = Phase.CPU_ANIM
+    }
+
+    private fun nearestPocketToAim(): Int {
+        match.world.castCue(aimAngle, hit)
+        val id = hit[3].toInt()
+        val b = if (hit[0] == 1.0 && id > 0) match.world.balls[id] else match.world.balls[0]
+        return match.world.nearestPocket(b.x, b.y)
     }
 
     private fun speedFor(pw: Double) = 0.25 + (P.MAX_CUE_SPEED - 0.25) * pw.pow(1.6)
@@ -577,6 +595,8 @@ class Game(
             ctx.circle(sx(mb.x), sy(mb.y), rpx * 1.5); ctx.stroke()
             if (dragInvalid) { ctx.strokeStyle = "rgba(255,64,64,0.8)"; ctx.circle(dragX, dragY, rpx); ctx.stroke() }
         }
+        drawPocketCall(ctx)
+
         val showCue = (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) ||
             (phase == Phase.CPU_ANIM && (plan == null || !plan.hasPlacement || animT >= 0.45))
         if (showCue && cue.onTable) drawCueStick(ctx, sx(cueX), sy(cueY))
@@ -587,6 +607,27 @@ class Game(
         drawElevation(ctx)
         drawWheel(ctx)
         if (phase == Phase.OVER) drawGameOver(ctx)
+    }
+
+    private fun drawPocketCall(ctx: Ctx2D) {
+        if (phase != Phase.HUMAN && phase != Phase.CPU_ANIM) return
+        val called = match.calledPocket
+        val pulse = 0.5 + 0.5 * sin(now() / 200.0)
+        ctx.setLineDash(noDash)
+        if (called >= 0) {
+            val pk = Table.pockets[called]
+            val r = pk.capR * scale
+            ctx.lineWidth = 3.0; ctx.strokeStyle = "#FFD640"
+            ctx.circle(sx(pk.cx), sy(pk.cy), r + 3 + 3 * pulse); ctx.stroke()
+            ctx.font = font(11.0, true); ctx.fillStyle = "#FFD640"; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"
+            val below = pk.cy < P.W / 2
+            ctx.fillText("CALLED", sx(pk.cx), sy(pk.cy) + (if (below) r + 20 else -r - 10))
+        } else if (phase == Phase.HUMAN && match.callRequired()) {
+            val flash = now() < callFlashUntil
+            ctx.lineWidth = if (flash) 3.0 else 1.5
+            ctx.strokeStyle = if (flash) "rgba(255,90,90,${(150 + 100 * pulse) / 255})" else "rgba(255,214,64,${(60 + 80 * pulse) / 255})"
+            for (pk in Table.pockets) { ctx.circle(sx(pk.cx), sy(pk.cy), pk.capR * scale + 5); ctx.stroke() }
+        }
     }
 
     private fun guideSpeed() = speedFor(if (power > 0.02) power else lastPower)
@@ -705,6 +746,8 @@ class Game(
                 match.ballInHand && match.isBreak -> "${names[match.current]}: place the cue ball behind the line, then break"
                 match.ballInHand -> "${names[match.current]}: ball in hand — drag the cue ball" +
                     if (shotClock > 0 && !clockStarted) " · clock starts when you aim" else ""
+                match.callRequired() && match.calledPocket < 0 -> "${names[match.current]}: call your pocket — tap the pocket you're shooting at"
+                match.calledPocket >= 0 -> "Pocket called · tap it again to cancel"
                 else -> message
             }
             else -> message
@@ -934,6 +977,11 @@ class Game(
             x >= wheelRect.l - 16 && x <= wheelRect.r + 16 && y >= wheelRect.t && y <= wheelRect.b -> { ptrLastY[id] = y; Touch.WHEEL }
             match.ballInHand && !anyTouch(Touch.POWER) && !anyTouch(Touch.MOVE_CUE) &&
                 hypot(x - sx(c.x), y - sy(c.y)) < max(rpx * 3, 28.0) -> { dragInvalid = false; Touch.MOVE_CUE }
+            match.callAllowed() && pocketUnder(x, y) >= 0 -> {
+                val pk = pocketUnder(x, y)
+                match.calledPocket = if (match.calledPocket == pk) -1 else pk
+                Touch.BUTTON
+            }
             grabbed >= 0 && !anyTouch(Touch.MOVE_BALL) && !anyTouch(Touch.PENDING) -> {
                 ptrBall[id] = grabbed; ptrDownX[id] = x; ptrDownY[id] = y; ptrDownAt[id] = now()
                 Touch.PENDING
@@ -943,6 +991,11 @@ class Game(
         }
         val m = ptrMode[id]
         if (m == Touch.POWER || m == Touch.WHEEL || m == Touch.AIM) clockStarted = true
+    }
+
+    private fun pocketUnder(x: Double, y: Double): Int {
+        for ((i, pk) in Table.pockets.withIndex()) if (hypot(x - sx(pk.cx), y - sy(pk.cy)) < pk.capR * scale + 14) return i
+        return -1
     }
 
     private fun ballUnder(x: Double, y: Double): Int {
@@ -988,7 +1041,10 @@ class Game(
         ptrMode[id] = Touch.NONE
         if (phase != Phase.HUMAN) return
         if (mode == Touch.POWER) {
-            if (power > 0.02) {
+            if (power > 0.02 && match.callRequired() && match.calledPocket < 0) {
+                power = 0.0
+                callFlashUntil = now() + 1500
+            } else if (power > 0.02) {
                 lastPower = power
                 shoot(aimAngle, speedFor(power), spinX * P.MAX_TIP, -spinY * P.MAX_TIP, toRad(elevDeg))
             } else power = 0.0

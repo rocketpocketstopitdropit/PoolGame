@@ -22,10 +22,11 @@ class Plan(
     val kind: String,
     val placeX: Double = Double.NaN,
     val placeY: Double = Double.NaN,
-    val elevation: Double = 0.0
+    val elevation: Double = 0.0,
+    val pocket: Int = -1           // the pocket the CPU is calling (index into Table.pockets), or -1
 ) {
     val hasPlacement get() = !placeX.isNaN()
-    fun withPlacement(x: Double, y: Double) = Plan(angle, speed, side, vert, kind, x, y, elevation)
+    fun withPlacement(x: Double, y: Double) = Plan(angle, speed, side, vert, kind, x, y, elevation, pocket)
 }
 
 class Cand(
@@ -62,7 +63,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             (ideal.speed * (1 + gauss() * speedSigma)).coerceIn(0.2, P.MAX_CUE_SPEED),
             ideal.side + gauss() * spinSigma,
             ideal.vert + gauss() * spinSigma,
-            ideal.kind, ideal.placeX, ideal.placeY, ideal.elevation
+            ideal.kind, ideal.placeX, ideal.placeY, ideal.elevation, ideal.pocket
         )
     }
 
@@ -234,9 +235,10 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
     private class Eval(val value: Double, val potted: Boolean, val foul: Boolean)
 
     /** Run the shot noiselessly and score the result from `me`'s point of view. */
-    private fun evaluate(work: Match, angle: Double, speed: Double, side: Double, vert: Double, elev: Double = 0.0): Eval {
+    private fun evaluate(work: Match, angle: Double, speed: Double, side: Double, vert: Double, elev: Double = 0.0, pocket: Int = -1): Eval {
         val s = sim!!
         s.copyFrom(work)
+        s.calledPocket = pocket
         s.shoot(angle, speed, side, vert, elev)
         s.world.simulate()
         simulations++
@@ -274,11 +276,11 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             for (f in speedF) for ((sd, vt) in spins) {
                 if (timeUp() && best != null) break@loop
                 val speed = (base * f * (if (vt < 0) 1.15 else 1.0)).coerceAtMost(7.0)
-                val e = evaluate(work, c.angle, speed, sd, vt)
+                val e = evaluate(work, c.angle, speed, sd, vt, pocket = c.pocket)
                 val score = if (e.potted) c.p * e.value - (1 - c.p) * 0.3 else e.value - 0.6
                 if (score > bestScore) {
                     bestScore = score
-                    best = Plan(c.angle, speed, sd, vt, "pot ${c.target}")
+                    best = Plan(c.angle, speed, sd, vt, "pot ${c.target}", pocket = c.pocket)
                 }
             }
         }
@@ -287,13 +289,13 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             for (c in candidates(work, me, aimSigma, blockedOnly = true).take(4)) {
                 for (el in doubleArrayOf(0.6, 0.8)) for (sp in doubleArrayOf(3.5, 4.5, 5.5)) {
                     if (timeUp() && best != null) break
-                    val e = evaluate(work, c.angle, sp, 0.0, 0.0, el)
+                    val e = evaluate(work, c.angle, sp, 0.0, 0.0, el, c.pocket)
                     if (!e.potted) continue
                     val p = c.p * 0.6     // jumps are harder to control
                     val score = p * e.value - (1 - p) * 0.3
                     if (score > bestScore) {
                         bestScore = score
-                        best = Plan(c.angle, sp, 0.0, 0.0, "jump ${c.target}", elevation = el)
+                        best = Plan(c.angle, sp, 0.0, 0.0, "jump ${c.target}", elevation = el, pocket = c.pocket)
                     }
                 }
             }

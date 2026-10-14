@@ -9,6 +9,7 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import com.poolgame.app.core.CallMode
 import com.poolgame.app.core.GameMode
 import com.poolgame.app.core.GameSave
 
@@ -55,6 +56,7 @@ class GameActivity : Activity(), GameView.Host {
         level = intent.getIntExtra(EXTRA_LEVEL, 5).coerceIn(1, 10)
         var practice = intent.getBooleanExtra(EXTRA_PRACTICE, false)
         var clock = intent.getIntExtra(EXTRA_CLOCK, 0).coerceIn(0, 300)
+        var call = CallMode.values()[prefs.getInt("callMode", 0).coerceIn(0, 2)]
 
         // Continue a saved game: its own settings win over the menu's current ones.
         var resume: String? = null
@@ -64,6 +66,7 @@ class GameActivity : Activity(), GameView.Host {
             if (s != null) {
                 resume = text
                 mode = s.mode; vsCpu = s.vsCpu; level = s.level; practice = s.practice; clock = s.shotClock
+                call = s.callMode
             }
         } else {
             prefs.edit().remove(KEY_SAVED).apply()   // starting fresh replaces any paused game
@@ -78,6 +81,7 @@ class GameActivity : Activity(), GameView.Host {
             prefs.getInt("aimSens", 5),
             prefs.getBoolean("prediction", true),
             resume,
+            call,
             this
         )
         setContentView(game)

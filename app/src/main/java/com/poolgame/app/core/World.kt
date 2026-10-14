@@ -37,9 +37,11 @@ class ShotLog {
     var cueCushionsBeforeHit = 0
     var hitX = 0.0; var hitY = 0.0     // cue-ball centre at first contact
     val jumpedOff = ArrayList<Int>()   // balls that flew off the table
+    val pocketIn = IntArray(16) { -1 } // which pocket (index into Table.pockets) each ball dropped in
 
     fun reset() {
         firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0; jumpedOff.clear()
+        pocketIn.fill(-1)
     }
 
     fun copyFrom(o: ShotLog) {
@@ -47,6 +49,7 @@ class ShotLog {
         railAfterHit = o.railAfterHit; cueCushionsBeforeHit = o.cueCushionsBeforeHit
         hitX = o.hitX; hitY = o.hitY
         jumpedOff.clear(); jumpedOff.addAll(o.jumpedOff)
+        o.pocketIn.copyInto(pocketIn)
     }
 }
 
@@ -391,6 +394,7 @@ class World {
                     listener?.onOffTable(b.id)
                 } else {
                     log.pocketed += b.id
+                    log.pocketIn[b.id] = nearestPocket(b.x, b.y)
                     listener?.onPocket(b.id)
                 }
                 b.stop()
@@ -399,6 +403,15 @@ class World {
     }
 
     // ---------- geometry helpers used by rules, AI and UI ----------
+
+    fun nearestPocket(x: Double, y: Double): Int {
+        var best = 0; var bd = Double.MAX_VALUE
+        for ((i, p) in Table.pockets.withIndex()) {
+            val d = (x - p.cx) * (x - p.cx) + (y - p.cy) * (y - p.cy)
+            if (d < bd) { bd = d; best = i }
+        }
+        return best
+    }
 
     fun isFree(x: Double, y: Double, ignore: Int = 0): Boolean {
         val r = P.R

@@ -20,6 +20,7 @@ import android.view.View
 import com.poolgame.app.core.Ai
 import com.poolgame.app.core.GameSave
 import com.poolgame.app.core.GameSettings
+import com.poolgame.app.core.CallMode
 import com.poolgame.app.core.GameMode
 import com.poolgame.app.core.Group
 import com.poolgame.app.core.Match
@@ -53,6 +54,7 @@ class GameView(
     aimSensitivity: Int,                 // fine-aim wheel speed, 1..10
     var showPrediction: Boolean,         // draw where the balls will go (otherwise just an aim line)
     resume: String?,                     // a saved game to continue, or null for a new game
+    private val callMode: CallMode,      // called-pocket rule
     private val host: Host
 ) : View(context), Choreographer.FrameCallback {
 
@@ -110,6 +112,8 @@ class GameView(
 
     // Saving: the game as it stood at the start of the current turn.
     private var turnSave: String? = null
+
+    private var callFlashUntil = 0L
 
     // Shot clock
     private var clockStarted = false
@@ -213,6 +217,7 @@ class GameView(
         match.world.trackOrientation = true
         match.world.listener = makeListener()
         match.rack(rng, breaker)
+        match.callMode = if (practice) CallMode.OFF else callMode
         if (practice) {
             match.ballInHand = false
             match.kitchenOnly = false
@@ -231,7 +236,7 @@ class GameView(
 
     fun isPractice() = practice
 
-    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practice, breaker)
+    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practice, breaker, match.callMode)
 
     private fun resumeGame(text: String): Boolean {
         val st = GameSave.readSettings(text) ?: return false
@@ -319,9 +324,24 @@ class GameView(
         val c = match.world.balls[0]
         animFromX = c.x; animFromY = c.y
         if (p.hasPlacement && !match.placeCue(p.placeX, p.placeY)) {
-            cpuPlan = Plan(p.angle, p.speed, p.side, p.vert, p.kind, elevation = p.elevation)
+            cpuPlan = Plan(p.angle, p.speed, p.side, p.vert, p.kind, elevation = p.elevation, pocket = p.pocket)
+        }
+        if (match.callAllowed()) {
+            match.calledPocket = when {
+                p.pocket >= 0 -> p.pocket
+                match.callRequired() -> nearestPocketToAim()
+                else -> -1
+            }
         }
         phase = Phase.CPU_ANIM
+    }
+
+    /** For a CPU safety when a call is required: the pocket nearest the ball it is aiming at. */
+    private fun nearestPocketToAim(): Int {
+        match.world.castCue(aimAngle, hit)
+        val id = hit[3].toInt()
+        val b = if (hit[0] == 1.0 && id > 0) match.world.balls[id] else match.world.balls[0]
+        return match.world.nearestPocket(b.x, b.y)
     }
 
     private fun speedFor(pw: Float): Double = 0.25 + (P.MAX_CUE_SPEED - 0.25) * pw.toDouble().pow(1.6)
@@ -709,6 +729,8 @@ class GameView(
             }
         }
 
+        drawPocketCall(canvas)
+
         val showCue = (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) ||
             (phase == Phase.CPU_ANIM && (plan == null || !plan.hasPlacement || animT >= 0.45))
         if (showCue && cue.onTable) drawCueStick(canvas, sx(cueX), sy(cueY))
@@ -719,6 +741,29 @@ class GameView(
         drawElevation(canvas)
         drawWheel(canvas)
         if (phase == Phase.OVER) drawGameOver(canvas)
+    }
+
+    private fun drawPocketCall(canvas: Canvas) {
+        if (phase != Phase.HUMAN && phase != Phase.CPU_ANIM) return
+        val called = match.calledPocket
+        val pulse = (0.5 + 0.5 * sin(System.nanoTime() / 2.0e8)).toFloat()
+        guide.pathEffect = null
+        if (called >= 0) {
+            val pk = Table.pockets[called]
+            val r = (pk.capR * scale).toFloat()
+            guide.strokeWidth = 3 * dp
+            guide.color = Color.argb(255, 255, 214, 64)
+            canvas.drawCircle(sx(pk.cx), sy(pk.cy), r + (3 + 3 * pulse) * dp, guide)
+            text.typeface = bold; text.textAlign = Paint.Align.CENTER
+            text.textSize = 11 * dp; text.color = 0xFFFFD640.toInt()
+            val below = pk.cy < P.W / 2
+            canvas.drawText("CALLED", sx(pk.cx), sy(pk.cy) + (if (below) r + 20 * dp else -r - 10 * dp), text)
+        } else if (phase == Phase.HUMAN && match.callRequired()) {
+            val flash = System.nanoTime() < callFlashUntil
+            guide.strokeWidth = (if (flash) 3f else 1.5f) * dp
+            guide.color = if (flash) Color.argb((150 + 100 * pulse).toInt(), 255, 90, 90) else Color.argb((60 + 80 * pulse).toInt(), 255, 214, 64)
+            for (pk in Table.pockets) canvas.drawCircle(sx(pk.cx), sy(pk.cy), (pk.capR * scale).toFloat() + 5 * dp, guide)
+        }
     }
 
     private fun guideSpeed() = speedFor(if (power > 0.02f) power else lastPower)
@@ -865,6 +910,8 @@ class GameView(
                 match.ballInHand && match.isBreak -> "${names[match.current]}: place the cue ball behind the line, then break"
                 match.ballInHand -> "${names[match.current]}: ball in hand — drag the cue ball" +
                     if (shotClock > 0 && !clockStarted) " · clock starts when you aim" else ""
+                match.callRequired() && match.calledPocket < 0 -> "${names[match.current]}: call your pocket — tap the pocket you're shooting at"
+                match.calledPocket >= 0 -> "Pocket called · tap it again to cancel"
                 else -> message
             }
             else -> message
@@ -1182,6 +1229,11 @@ class GameView(
                 hypot(x - sx(c.x), y - sy(c.y)) < max(rpx * 3f, 28 * dp) -> {
                 dragInvalid = false; Touch.MOVE_CUE
             }
+            match.callAllowed() && pocketUnder(x, y) >= 0 -> {
+                val pk = pocketUnder(x, y)
+                match.calledPocket = if (match.calledPocket == pk) -1 else pk
+                Touch.BUTTON
+            }
             grabbed >= 0 && !anyTouch(Touch.MOVE_BALL) && !anyTouch(Touch.PENDING) -> {
                 // Practice: a short tap aims at the ball; holding still picks it up.
                 ptrBall[id] = grabbed; ptrDownX[id] = x; ptrDownY[id] = y; ptrDownAt[id] = System.nanoTime()
@@ -1193,6 +1245,13 @@ class GameView(
         // The shot clock (when waiting during ball in hand) starts once you aim or touch the power bar.
         val m = ptrMode[id]
         if (m == Touch.POWER || m == Touch.WHEEL || m == Touch.AIM) clockStarted = true
+    }
+
+    private fun pocketUnder(x: Float, y: Float): Int {
+        for ((i, pk) in Table.pockets.withIndex()) {
+            if (hypot(x - sx(pk.cx), y - sy(pk.cy)) < (pk.capR * scale).toFloat() + 14 * dp) return i
+        }
+        return -1
     }
 
     private fun ballUnder(x: Float, y: Float): Int {
@@ -1242,7 +1301,10 @@ class GameView(
         ptrMode[id] = Touch.NONE
         if (phase != Phase.HUMAN) return
         if (mode == Touch.POWER) {
-            if (power > 0.02f) {
+            if (power > 0.02f && match.callRequired() && match.calledPocket < 0) {
+                power = 0f
+                callFlashUntil = System.nanoTime() + 1_500_000_000L
+            } else if (power > 0.02f) {
                 lastPower = power
                 shoot(aimAngle, speedFor(power), (spinX * P.MAX_TIP).toDouble(), (-spinY * P.MAX_TIP).toDouble(),
                     Math.toRadians(elevDeg.toDouble()))

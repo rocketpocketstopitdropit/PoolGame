@@ -27,6 +27,7 @@ class MenuActivity : Activity() {
     private var sound = true
     private var practice = false
     private var aimSens = 5
+    private var callMode = 0
     private var prediction = true
     private var resumeBtn: TextView? = null
     private var clockOn = false
@@ -50,6 +51,7 @@ class MenuActivity : Activity() {
         sound = prefs.getBoolean("sound", true)
         practice = prefs.getBoolean("practice", false)
         aimSens = prefs.getInt("aimSens", 5).coerceIn(1, 10)
+        callMode = prefs.getInt("callMode", 0).coerceIn(0, 2)
         prediction = prefs.getBoolean("prediction", true)
         clockOn = prefs.getBoolean("clockOn", false)
         clockSec = prefs.getInt("clockSec", 30).coerceIn(10, 120)
@@ -82,7 +84,7 @@ class MenuActivity : Activity() {
             .putInt("level", level).putBoolean("sound", sound)
             .putBoolean("clockOn", clockOn).putInt("clockSec", clockSec)
             .putBoolean("practice", practice)
-            .putInt("aimSens", aimSens).putBoolean("prediction", prediction).apply()
+            .putInt("aimSens", aimSens).putInt("callMode", callMode).putBoolean("prediction", prediction).apply()
         refreshRecord()
     }
 
@@ -163,6 +165,13 @@ class MenuActivity : Activity() {
         skillBlock.addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(40f)))
         skillBlock.visibility = if (vsCpu) View.VISIBLE else View.GONE
         matchBlock.addView(skillBlock)
+
+        // Called pocket
+        matchBlock.addView(section("CALL POCKET"))
+        matchBlock.addView(segmented(listOf("Off", "8 & 9 only", "Every shot"), callMode) { callMode = it; save() })
+        matchBlock.addView(label("Tap a pocket to call it. A ball in the wrong pocket is slop: your turn ends " +
+            "(the 8 in the wrong pocket loses; a 9 in the wrong pocket is respotted).", 12f, 0xFF8A97A1.toInt())
+            .apply { setPadding(0, dpi(6f), 0, 0) })
 
         // Shot clock
         matchBlock.addView(section("SHOT CLOCK"))

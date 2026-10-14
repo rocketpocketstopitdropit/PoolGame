@@ -87,6 +87,47 @@ class EngineTest {
         }
     }
 
+    /** Shoots ball [id] straight into corner pocket 0 with [called] as the called pocket. */
+    private fun potIntoCorner(m: Match, id: Int, called: Int): ShotOutcome {
+        for (b in m.world.balls) { b.onTable = false; b.stop() }
+        m.world.put(id, 0.6, 0.3); m.world.put(0, 1.0, 0.5)
+        if (m.mode == GameMode.EIGHT_BALL) m.world.put(if (id == 8) 15 else 8, 2.2, 1.0)   // keep the 8 / a stripe on the table
+        if (m.mode == GameMode.NINE_BALL && id != 9) m.world.put(9, 2.2, 1.0)
+        val pk = Table.pockets[0]
+        val d = hypot(pk.aimX - 0.6, pk.aimY - 0.3)
+        val gx = 0.6 - (pk.aimX - 0.6) / d * 2 * P.R; val gy = 0.3 - (pk.aimY - 0.3) / d * 2 * P.R
+        m.isBreak = false; m.ballInHand = false
+        m.calledPocket = called
+        m.shoot(atan2(gy - 0.5, gx - 1.0), 2.0, 0.0, 0.0); m.world.simulate()
+        return m.resolve()
+    }
+
+    @Test fun calledPocketEveryShotSlop() {
+        val m = Match(GameMode.EIGHT_BALL, arrayOf("You", "CPU")); m.callMode = CallMode.EVERY_SHOT
+        m.groups[0] = Group.SOLIDS; m.groups[1] = Group.STRIPES
+        val wrong = potIntoCorner(m, 3, 5)
+        assertTrue(3 in m.world.log.pocketed)
+        assertTrue(!wrong.keepTurn && !wrong.foul); assertEquals(1, m.current)
+        val m2 = Match(GameMode.EIGHT_BALL, arrayOf("You", "CPU")); m2.callMode = CallMode.EVERY_SHOT
+        m2.groups[0] = Group.SOLIDS; m2.groups[1] = Group.STRIPES
+        assertTrue(potIntoCorner(m2, 3, 0).keepTurn)
+    }
+
+    @Test fun eightInWrongPocketLoses() {
+        val m = Match(GameMode.EIGHT_BALL, arrayOf("You", "CPU")); m.callMode = CallMode.MONEY_BALL
+        m.groups[0] = Group.SOLIDS; m.groups[1] = Group.STRIPES
+        assertEquals(1, potIntoCorner(m, 8, 2).winner)
+        val m2 = Match(GameMode.EIGHT_BALL, arrayOf("You", "CPU")); m2.callMode = CallMode.MONEY_BALL
+        m2.groups[0] = Group.SOLIDS; m2.groups[1] = Group.STRIPES
+        assertEquals(0, potIntoCorner(m2, 8, 0).winner)
+    }
+
+    @Test fun uncalledNineIsRespotted() {
+        val m = Match(GameMode.NINE_BALL, arrayOf("You", "CPU")); m.callMode = CallMode.MONEY_BALL
+        val out = potIntoCorner(m, 9, 3)
+        assertEquals(-1, out.winner); assertTrue(m.world.balls[9].onTable)
+    }
+
     @Test fun youWinGrammar() {
         val m = Match(GameMode.NINE_BALL, arrayOf("You", "CPU"))
         assertEquals("You win!", m.winsText(0))
