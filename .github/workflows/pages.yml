@@ -6,9 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
@@ -35,16 +33,14 @@ jobs:
       - name: Build the web version
         run: KOTLIN_HOME="$RUNNER_TEMP/kotlinc" bash web/build.sh
 
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: web/build/site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@v4
+      # Publish the built site to the gh-pages branch, which GitHub Pages serves.
+      - name: Publish to gh-pages
+        run: |
+          cd web/build/site
+          touch .nojekyll
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
