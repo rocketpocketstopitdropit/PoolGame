@@ -1,0 +1,76 @@
+package com.poolgame.app.core
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import kotlin.math.PI
+import kotlin.math.atan2
+import kotlin.math.hypot
+import kotlin.random.Random
+
+class EngineTest {
+    private fun World.put(id: Int, x: Double, y: Double) {
+        val b = balls[id]; b.x = x; b.y = y; b.onTable = true; b.stop()
+    }
+    private fun World.clearAll() { for (b in balls) { b.onTable = false; b.stop() } }
+
+    @Test fun centreHitReachesNaturalRoll() {
+        val w = World(); w.clearAll(); w.put(0, 0.3, 0.6)
+        w.strike(0.0, 2.0, 0.0, 0.0)
+        w.advance(0.5)
+        val c = w.balls[0]
+        assertEquals(0.0, c.vx + P.R * c.wy, 1e-6)          // no slip: rolling
+        assertEquals(2.0 * 5 / 7, c.vx, 0.08)
+    }
+
+    @Test fun drawComesBackFollowGoesThrough() {
+        fun cueEnd(vert: Double): Double {
+            val w = World(); w.clearAll(); w.put(0, 1.0, 0.635); w.put(1, 1.3, 0.635)
+            w.strike(0.0, 2.5, 0.0, vert); w.simulate(); return w.balls[0].x
+        }
+        assertTrue("draw", cueEnd(-0.45) < 1.2)
+        assertTrue("follow", cueEnd(0.45) > 1.45)
+    }
+
+    @Test fun rightEnglishReboundsRight() {
+        val w = World(); w.clearAll(); w.put(0, 1.0, 0.6)
+        w.strike(-PI / 2, 2.0, 0.4, 0.0)                      // straight up the screen into the top rail
+        while (w.balls[0].vy < 0) w.step(1.0)
+        assertTrue(w.balls[0].vx > 0.1)                         // shooter's right
+    }
+
+    @Test fun straightShotIntoCornerDrops() {
+        val w = World(); w.clearAll()
+        val pk = Table.pockets[0]
+        w.put(3, 0.6, 0.3); w.put(0, 1.0, 0.5)
+        val d = hypot(pk.aimX - 0.6, pk.aimY - 0.3)
+        val gx = 0.6 - (pk.aimX - 0.6) / d * 2 * P.R; val gy = 0.3 - (pk.aimY - 0.3) / d * 2 * P.R
+        w.strike(atan2(gy - 0.5, gx - 1.0), 2.0, 0.0, 0.0); w.simulate()
+        assertTrue(3 in w.log.pocketed)
+    }
+
+    @Test fun scratchIsFoulWithBallInHand() {
+        val m = Match(GameMode.NINE_BALL); m.rack(Random(1), 0)
+        for (b in m.world.balls) if (b.id != 0 && b.id != 1) { b.onTable = false }
+        m.world.put(1, 1.0, 0.6); m.isBreak = false; m.ballInHand = false
+        m.world.put(0, 0.4, 0.4)
+        val pk = Table.pockets[0]                                // send the cue ball straight into a pocket
+        m.shoot(atan2(pk.aimY - 0.4, pk.aimX - 0.4), 2.0, 0.0, 0.0); m.world.simulate()
+        val out = m.resolve()
+        assertTrue(out.foul); assertEquals(1, m.current); assertTrue(m.ballInHand)
+    }
+
+    @Test fun cpuFinishesGames() {
+        for (mode in GameMode.values()) for (seed in 0 until 3) {
+            val m = Match(mode); m.rack(Random(seed), 0)
+            val ai = arrayOf(Ai(8, seed.toLong()), Ai(3, seed + 99L))
+            var shots = 0
+            while (m.winner < 0 && shots < 300) {
+                val p = ai[m.current].plan(m)
+                if (m.ballInHand && p.hasPlacement) assertTrue(m.placeCue(p.placeX, p.placeY))
+                m.shoot(p.angle, p.speed, p.side, p.vert); m.world.simulate(); m.resolve(); shots++
+            }
+            assertTrue("$mode seed $seed unfinished", m.winner >= 0)
+        }
+    }
+}

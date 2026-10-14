@@ -1,0 +1,116 @@
+package com.poolgame.app.core
+
+import kotlin.math.sqrt
+
+/**
+ * Physical constants and table geometry. Units are SI (meters, seconds).
+ *
+ * Coordinates: x runs along the long side (0 = head rail, left on screen), y runs down the
+ * screen (0 = top rail). z points INTO the table, so "up off the cloth" is -z. All physics is
+ * written against this right-handed frame.
+ */
+object P {
+    const val R = 0.028575           // ball radius (2.25" ball)
+    const val L = 2.54               // playing length (9 ft table, cushion nose to nose)
+    const val W = 1.27               // playing width
+    const val G = 9.81
+    const val MU_SLIDE = 0.2         // ball-cloth sliding friction
+    const val MU_ROLL = 0.014        // rolling resistance
+    const val SPIN_DECEL = 20.0      // rad/s^2 decay of vertical-axis (side) spin
+    const val E_BALL = 0.94          // ball-ball restitution
+    const val MU_BALL = 0.06         // ball-ball friction (gives cut-induced and spin-induced throw)
+    const val MU_CUSHION = 0.14      // ball-cushion friction (gives running/reverse english)
+    const val MAX_CUE_SPEED = 8.5    // m/s, a hard break
+    const val MAX_TIP = 0.5          // max tip offset as a fraction of R before a miscue
+
+    const val HEAD_X = L * 0.25      // head string
+    const val FOOT_X = L * 0.75      // foot spot x
+    const val FOOT_Y = W * 0.5
+}
+
+class Seg(val ax: Double, val ay: Double, val bx: Double, val by: Double) {
+    val dx = bx - ax
+    val dy = by - ay
+    val len2 = dx * dx + dy * dy
+}
+
+class Pocket(
+    val cx: Double, val cy: Double,      // capture circle centre
+    val capR: Double,                    // ball centre inside this circle -> it drops
+    val aimX: Double, val aimY: Double,  // where an object ball should be sent (mouth centre)
+    val side: Boolean,
+    val tips: DoubleArray,               // the two jaw tip points (x1,y1,x2,y2)
+    val tolerance: Double                // rough lateral error allowance at the mouth (for AI)
+)
+
+object Table {
+    const val CORNER = 0.085   // distance from corner to where each cushion ends
+    const val SIDE = 0.066     // half-opening of side pockets
+
+    val segs: Array<Seg>
+    val pockets: Array<Pocket>
+
+    init {
+        val L = P.L; val W = P.W
+        val s = ArrayList<Seg>()
+        // Long rails (top y=0 and bottom y=W), split by side pockets
+        for (y in doubleArrayOf(0.0, W)) {
+            s += Seg(CORNER, y, L / 2 - SIDE, y)
+            s += Seg(L / 2 + SIDE, y, L - CORNER, y)
+        }
+        // Short rails
+        s += Seg(0.0, CORNER, 0.0, W - CORNER)
+        s += Seg(L, CORNER, L, W - CORNER)
+
+        val p = ArrayList<Pocket>()
+        // Corner pockets
+        for ((cx0, cy0) in listOf(0.0 to 0.0, L to 0.0, 0.0 to W, L to W)) {
+            val dx = if (cx0 == 0.0) 1.0 else -1.0   // into the table
+            val dy = if (cy0 == 0.0) 1.0 else -1.0
+            val hTipX = cx0 + dx * CORNER; val hTipY = cy0
+            val vTipX = cx0; val vTipY = cy0 + dy * CORNER
+            s += Seg(hTipX, hTipY, cx0 + dx * (CORNER - 0.03), cy0 - dy * 0.055)
+            s += Seg(vTipX, vTipY, cx0 - dx * 0.055, cy0 + dy * (CORNER - 0.03))
+            p += Pocket(
+                cx0 - dx * 0.02, cy0 - dy * 0.02, 0.068,
+                cx0 + dx * CORNER * 0.42, cy0 + dy * CORNER * 0.42,
+                false, doubleArrayOf(hTipX, hTipY, vTipX, vTipY), 0.030
+            )
+        }
+        // Side pockets
+        for (y0 in doubleArrayOf(0.0, W)) {
+            val dy = if (y0 == 0.0) 1.0 else -1.0
+            val x1 = L / 2 - SIDE; val x2 = L / 2 + SIDE
+            s += Seg(x1, y0, x1 + 0.012, y0 - dy * 0.06)
+            s += Seg(x2, y0, x2 - 0.012, y0 - dy * 0.06)
+            p += Pocket(
+                L / 2, y0 - dy * 0.03, 0.062,
+                L / 2, y0 - dy * 0.012,
+                true, doubleArrayOf(x1, y0, x2, y0), 0.024
+            )
+        }
+        segs = s.toTypedArray()
+        pockets = p.toTypedArray()
+    }
+
+    /** Squared distance from point to segment, and writes the closest point into out[0..1]. */
+    fun closest(sg: Seg, px: Double, py: Double, out: DoubleArray): Double {
+        var t = ((px - sg.ax) * sg.dx + (py - sg.ay) * sg.dy) / sg.len2
+        if (t < 0.0) t = 0.0 else if (t > 1.0) t = 1.0
+        val cx = sg.ax + t * sg.dx
+        val cy = sg.ay + t * sg.dy
+        out[0] = cx; out[1] = cy
+        val ex = px - cx; val ey = py - cy
+        return ex * ex + ey * ey
+    }
+
+    /** Distance from point (px,py) to segment (ax,ay)-(bx,by). */
+    fun pointSegDist(px: Double, py: Double, ax: Double, ay: Double, bx: Double, by: Double): Double {
+        val dx = bx - ax; val dy = by - ay
+        val l2 = dx * dx + dy * dy
+        var t = if (l2 > 0) ((px - ax) * dx + (py - ay) * dy) / l2 else 0.0
+        if (t < 0.0) t = 0.0 else if (t > 1.0) t = 1.0
+        val ex = px - (ax + t * dx); val ey = py - (ay + t * dy)
+        return sqrt(ex * ex + ey * ey)
+    }
+}
