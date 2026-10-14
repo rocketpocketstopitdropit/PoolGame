@@ -38,7 +38,14 @@ exactly where the balls will go — including throw, follow/draw and jumps (yell
 ghost ball with an X means that ball is not a legal first contact; a red ring means a scratch.
 There is no random error on your shots.
 
-**Shot clock** (menu): optional 10–120 s per shot for human players; running out is a foul.
+**Shot clock** (menu): optional 10–120 s per shot for human players; running out is a foul. With
+ball in hand the clock waits until you aim (table or fine-aim wheel) or touch the power bar.
+
+**Practice** (menu → Game → Practice): just you, a cue ball and red/yellow balls (plus the black), no
+numbers, no rules. Tap a ball to aim at it; hold a ball for a moment to pick it up and drag it
+anywhere — including the cue ball — to set up trick shots. *Retry shot* puts every ball back where
+it was before your last shot, *Re-rack* starts over, *Clear table* removes the object balls, and
+tapping a ball in the tray brings it back.
 **Record**: wins and losses are saved per game type and CPU level (and for pass & play), shown on
 the menu and after each game.
 
@@ -48,7 +55,9 @@ the menu and after each game.
   then sink the 8. Sinking the 8 early, or scratching on it, loses. 8 on the break is respotted.
 - **9-ball:** hit the lowest-numbered ball first; any legal pot keeps the turn. Pot the 9 legally
   (combos and breaks count) to win. Three fouls in a row loses.
-- **Fouls** (scratch, no ball hit, wrong ball first, no rail after contact) give the opponent ball in hand anywhere.
+- **Fouls** (scratch, no ball hit, wrong ball first, no rail after contact, a ball jumped off the
+  table) give the opponent ball in hand anywhere. Jumped object balls are respotted; jumping the 8
+  off in 8-ball loses (except on the break).
 - Not modelled: called pockets, push-outs, jumped balls, break rail-count requirement.
 
 ## Physics
@@ -62,7 +71,8 @@ the menu and after each game.
 - Cushions: friction at the nose, so running/reverse english changes rebound angles.
 - Exact time-of-impact rewind on every collision, so cut angles match the aim guide.
 - Jump shots: an elevated cue drives the ball into the slate, which bounces it up; airborne balls
-  fly ballistically, collide in 3D, and pass over pockets and balls.
+  fly ballistically, collide in 3D, and pass over pockets and balls. A ball higher than the cushions
+  flies over them and off the table.
 - Regulation 9-ft table (100″ × 50″), 2¼″ balls, 4.5″ corner and 5″ side pocket mouths.
 
 Tunable constants are in the `P` object in `core/Table.kt`.

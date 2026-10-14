@@ -18,6 +18,7 @@ class GameActivity : Activity(), GameView.Host {
         const val EXTRA_LEVEL = "level"
         const val EXTRA_SOUND = "sound"
         const val EXTRA_CLOCK = "clock"
+        const val EXTRA_PRACTICE = "practice"
     }
 
     private lateinit var game: GameView
@@ -32,10 +33,13 @@ class GameActivity : Activity(), GameView.Host {
         mode = if (intent.getStringExtra(EXTRA_MODE) == GameMode.NINE_BALL.name) GameMode.NINE_BALL else GameMode.EIGHT_BALL
         vsCpu = intent.getBooleanExtra(EXTRA_VS_CPU, true)
         level = intent.getIntExtra(EXTRA_LEVEL, 5).coerceIn(1, 10)
+        val practice = intent.getBooleanExtra(EXTRA_PRACTICE, false)
+        if (practice) { mode = GameMode.EIGHT_BALL; vsCpu = false }
         game = GameView(
             this, mode, vsCpu, level,
             intent.getBooleanExtra(EXTRA_SOUND, true),
-            intent.getIntExtra(EXTRA_CLOCK, 0).coerceIn(0, 300),
+            if (practice) 0 else intent.getIntExtra(EXTRA_CLOCK, 0).coerceIn(0, 300),
+            practice,
             this
         )
         setContentView(game)

@@ -25,6 +25,7 @@ class MenuActivity : Activity() {
     private var vsCpu = true
     private var level = 5
     private var sound = true
+    private var practice = false
     private var clockOn = false
     private var clockSec = 30
     private val stats by lazy { Stats(this) }
@@ -44,6 +45,7 @@ class MenuActivity : Activity() {
         vsCpu = prefs.getBoolean("vsCpu", true)
         level = prefs.getInt("level", 5).coerceIn(1, 10)
         sound = prefs.getBoolean("sound", true)
+        practice = prefs.getBoolean("practice", false)
         clockOn = prefs.getBoolean("clockOn", false)
         clockSec = prefs.getInt("clockSec", 30).coerceIn(10, 120)
         build()
@@ -68,7 +70,8 @@ class MenuActivity : Activity() {
     private fun save() {
         prefs.edit().putString("mode", mode.name).putBoolean("vsCpu", vsCpu)
             .putInt("level", level).putBoolean("sound", sound)
-            .putBoolean("clockOn", clockOn).putInt("clockSec", clockSec).apply()
+            .putBoolean("clockOn", clockOn).putInt("clockSec", clockSec)
+            .putBoolean("practice", practice).apply()
         refreshRecord()
     }
 
@@ -107,23 +110,29 @@ class MenuActivity : Activity() {
         col.addView(card, LinearLayout.LayoutParams(minOf(dpi(560f), resources.displayMetrics.widthPixels - dpi(48f)), ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL })
 
         card.addView(label("POOL", 38f, Color.WHITE, true).apply { letterSpacing = 0.25f; gravity = Gravity.CENTER })
-        card.addView(label("8-Ball · 9-Ball · real spin", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
+        card.addView(label("8-Ball · 9-Ball · practice · real spin", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
 
         // Game type
         card.addView(section("GAME"))
-        val modeRow = segmented(listOf("8-Ball", "9-Ball"), if (mode == GameMode.EIGHT_BALL) 0 else 1) {
-            mode = if (it == 0) GameMode.EIGHT_BALL else GameMode.NINE_BALL; save()
+        var matchBlockRef: View? = null
+        val modeRow = segmented(listOf("8-Ball", "9-Ball", "Practice"), if (practice) 2 else if (mode == GameMode.EIGHT_BALL) 0 else 1) {
+            practice = it == 2
+            if (it < 2) mode = if (it == 0) GameMode.EIGHT_BALL else GameMode.NINE_BALL
+            matchBlockRef?.visibility = if (practice) View.GONE else View.VISIBLE
+            save()
         }
         card.addView(modeRow)
 
+        // Everything below only applies to real games, not practice.
+        val matchBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         // Opponent
-        card.addView(section("OPPONENT"))
+        matchBlock.addView(section("OPPONENT"))
         val skillBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val oppRow = segmented(listOf("Computer", "Pass & Play"), if (vsCpu) 0 else 1) {
             vsCpu = it == 0; save()
             skillBlock.visibility = if (vsCpu) View.VISIBLE else View.GONE
         }
-        card.addView(oppRow)
+        matchBlock.addView(oppRow)
 
         // Skill
         val skillLabel = label("", 15f, Color.WHITE, true)
@@ -142,10 +151,10 @@ class MenuActivity : Activity() {
         }
         skillBlock.addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(40f)))
         skillBlock.visibility = if (vsCpu) View.VISIBLE else View.GONE
-        card.addView(skillBlock)
+        matchBlock.addView(skillBlock)
 
         // Shot clock
-        card.addView(section("SHOT CLOCK"))
+        matchBlock.addView(section("SHOT CLOCK"))
         val clockLabel = label("", 15f, Color.WHITE, true)
         val clockSeek = SeekBar(this)
         fun refreshClock() {
@@ -161,8 +170,8 @@ class MenuActivity : Activity() {
             isChecked = clockOn
             setOnCheckedChangeListener { _, c -> clockOn = c; refreshClock(); save() }
         }
-        card.addView(clockSwitch)
-        card.addView(clockLabel)
+        matchBlock.addView(clockSwitch)
+        matchBlock.addView(clockLabel)
         clockSeek.max = 22   // 10..120 s in 5 s steps
         clockSeek.progress = (clockSec - 10) / 5
         clockSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -170,14 +179,14 @@ class MenuActivity : Activity() {
             override fun onStartTrackingTouch(sb: SeekBar?) {}
             override fun onStopTrackingTouch(sb: SeekBar?) {}
         })
-        card.addView(clockSeek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(40f)))
+        matchBlock.addView(clockSeek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(40f)))
         refreshClock()
 
         // Record
-        card.addView(section("YOUR RECORD"))
+        matchBlock.addView(section("YOUR RECORD"))
         recordText = label("", 14f, 0xFFDDE3E8.toInt()).apply { setLineSpacing(0f, 1.25f) }
-        card.addView(recordText)
-        card.addView(label("Reset record", 13f, 0xFFEB5757.toInt()).apply {
+        matchBlock.addView(recordText)
+        matchBlock.addView(label("Reset record", 13f, 0xFFEB5757.toInt()).apply {
             setPadding(0, dpi(8f), 0, dpi(4f))
             setOnClickListener {
                 android.app.AlertDialog.Builder(this@MenuActivity, android.R.style.Theme_Material_Dialog_Alert)
@@ -189,6 +198,9 @@ class MenuActivity : Activity() {
             }
         })
         refreshRecord()
+        matchBlock.visibility = if (practice) View.GONE else View.VISIBLE
+        card.addView(matchBlock)
+        matchBlockRef = matchBlock
 
         // Sound
         @Suppress("DEPRECATION")
@@ -257,7 +269,8 @@ class MenuActivity : Activity() {
             putExtra(GameActivity.EXTRA_VS_CPU, vsCpu)
             putExtra(GameActivity.EXTRA_LEVEL, level)
             putExtra(GameActivity.EXTRA_SOUND, sound)
-            putExtra(GameActivity.EXTRA_CLOCK, if (clockOn) clockSec else 0)
+            putExtra(GameActivity.EXTRA_CLOCK, if (clockOn && !practice) clockSec else 0)
+            putExtra(GameActivity.EXTRA_PRACTICE, practice)
         })
     }
 }

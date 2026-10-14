@@ -30,6 +30,20 @@ class BallRenderer {
         const val WHITE = 0xFFF4F0E2.toInt()
         const val DOT = 0xFFC8222A.toInt()
         fun isStripe(id: Int) = id in 9..15
+        // Practice set: plain red and yellow balls (plus the black), no numbers.
+        const val PRACTICE_RED = 0xFFC62828.toInt()
+        const val PRACTICE_YELLOW = 0xFFF2BE00.toInt()
+    }
+
+    /** Practice style: solid colours, no stripes or numbers. */
+    var plain = false
+        set(v) { field = v; for (i in 0 until 16) lastQ[i][0] = Double.NaN }
+
+    private fun colorOf(id: Int): Int = if (!plain) BASE[id] else when (id) {
+        0 -> BASE[0]
+        8 -> BASE[8]
+        in 1..7 -> PRACTICE_RED
+        else -> PRACTICE_YELLOW
     }
 
     var radius = 0f
@@ -106,12 +120,13 @@ class BallRenderer {
         if (cached != null && q[0] == b.qw && q[1] == b.qx && q[2] == b.qy && q[3] == b.qz) return cached
         q[0] = b.qw; q[1] = b.qx; q[2] = b.qy; q[3] = b.qz
         matrix(b)
-        val base = BASE[b.id]
+        val base = colorOf(b.id)
         val br = (base shr 16) and 255; val bg = (base shr 8) and 255; val bb = base and 255
         val wr = (WHITE shr 16) and 255; val wg = (WHITE shr 8) and 255; val wb = WHITE and 255
         val dr = (DOT shr 16) and 255; val dg = (DOT shr 8) and 255; val db = DOT and 255
-        val stripe = isStripe(b.id)
+        val stripe = !plain && isStripe(b.id)
         val cue = b.id == 0
+        val numbered = !plain
         val m0 = m[0].toFloat(); val m1 = m[1].toFloat(); val m2 = m[2].toFloat()
         val m3 = m[3].toFloat(); val m4 = m[4].toFloat(); val m5 = m[5].toFloat()
         val m6 = m[6].toFloat(); val m7 = m[7].toFloat(); val m8 = m[8].toFloat()
@@ -129,7 +144,7 @@ class BallRenderer {
                 val dot = max(max(kotlin.math.abs(bx), kotlin.math.abs(by)), kotlin.math.abs(bz)) > 0.975f
                 if (dot) { r = dr; g = dg; bl = db } else { r = wr; g = wg; bl = wb }
             } else {
-                val disc = kotlin.math.abs(bz) > 0.86f
+                val disc = numbered && kotlin.math.abs(bz) > 0.86f
                 val colored = if (stripe) kotlin.math.abs(bx) < 0.52f && !disc else !disc
                 if (colored) { r = br; g = bg; bl = bb } else { r = wr; g = wg; bl = wb }
             }
@@ -156,7 +171,7 @@ class BallRenderer {
             canvas.drawBitmap(bmp, -half, -half, paint)
             canvas.restore()
         }
-        if (b.id == 0 || scale < 0.6f) return
+        if (b.id == 0 || plain || scale < 0.6f) return
         // Number on whichever disc faces the viewer (up is -z in world space).
         matrix(b)
         val s = if (m[8] < 0) 1.0 else -1.0
@@ -184,12 +199,14 @@ class BallRenderer {
     fun drawIcon(canvas: Canvas, id: Int, cx: Float, cy: Float, r: Float, dim: Boolean, p: Paint) {
         p.style = Paint.Style.FILL
         p.shader = null
-        val base = BASE[id]
+        val base = colorOf(id)
         val alphaMul = if (dim) 0.22f else 1f
-        p.color = if (isStripe(id)) WHITE else base
+        val striped = !plain && isStripe(id)
+        p.color = if (striped) WHITE else base
         p.alpha = (255 * alphaMul).toInt()
         canvas.drawCircle(cx, cy, r, p)
-        if (isStripe(id)) {
+        if (plain) { p.alpha = 255; return }
+        if (striped) {
             canvas.save()
             canvas.clipRect(cx - r, cy - r * 0.55f, cx + r, cy + r * 0.55f)
             p.color = base; p.alpha = (255 * alphaMul).toInt()

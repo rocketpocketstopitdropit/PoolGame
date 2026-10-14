@@ -24,6 +24,7 @@ object P {
     const val MAX_TIP = 0.5          // max tip offset as a fraction of R before a miscue
     const val E_SLATE = 0.35         // bounce off the slate when the cue drives the ball down (jump shots)
     const val MAX_ELEVATION = 60.0   // degrees
+    const val RAIL_CLEAR = 0.038     // a ball whose bottom is this high clears the cushions and leaves the table
 
     const val HEAD_X = L * 0.25      // head string
     const val FOOT_X = L * 0.75      // foot spot x

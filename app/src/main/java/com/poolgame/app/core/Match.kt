@@ -43,6 +43,12 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         preTargets = o.preTargets; preOnEight = o.preOnEight
     }
 
+    // "You win" / "CPU wins" — the player named "You" takes the plural verb form.
+    private fun you(p: Int) = names[p] == "You"
+    fun winsText(p: Int) = if (you(p)) "You win!" else "${names[p]} wins!"
+    private fun has(p: Int) = if (you(p)) "You have" else "${names[p]} has"
+    private fun continues(p: Int) = if (you(p)) "You continue" else "${names[p]} continues"
+
     fun ballIds(): IntRange = if (mode == GameMode.EIGHT_BALL) 1..15 else 1..9
 
     // ------------------------------------------------------------------ setup
@@ -163,14 +169,14 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         consecutiveFouls[shooter]++
         if (mode == GameMode.NINE_BALL && consecutiveFouls[shooter] >= 3) {
             winner = opp
-            message = "${names[opp]} wins! (three fouls in a row)"
+            message = "${winsText(opp)} (three fouls in a row)"
             return ShotOutcome(true, "Shot clock", false, opp, message)
         }
         current = opp
         ballInHand = true
         kitchenOnly = false
         if (!world.balls[0].onTable) restoreCue()
-        message = "Foul: shot clock expired · ${names[opp]} has ball in hand"
+        message = "Foul: shot clock expired · ${has(opp)} ball in hand"
         return ShotOutcome(true, "Shot clock", false, -1, message)
     }
 
@@ -180,16 +186,20 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         val shooter = current
         val opp = 1 - shooter
         val pocketed = log.pocketed
+        val jumped = log.jumpedOff
         val cueIn = 0 in pocketed
+        val cueOff = 0 in jumped
         var foul = false
         var reason = ""
         when {
             cueIn -> { foul = true; reason = "Scratch" }
+            cueOff -> { foul = true; reason = "Cue ball jumped off the table" }
             log.firstHit < 0 -> { foul = true; reason = "No ball hit" }
             !(mode == GameMode.EIGHT_BALL && isBreak) && log.firstHit !in preTargets -> {
                 foul = true
                 reason = if (mode == GameMode.NINE_BALL) "Must hit the ${preTargets[0]} first" else "Wrong ball hit first"
             }
+            jumped.isNotEmpty() -> { foul = true; reason = "Ball jumped off the table" }
             pocketed.isEmpty() && !log.railAfterHit -> { foul = true; reason = "No rail after contact" }
         }
 
@@ -197,7 +207,14 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         val notes = ArrayList<String>()
         val objects = pocketed.filter { it != 0 }
 
+        // Jumped object balls go back on the foot spot (the 8 and 9 have their own rules below).
+        for (id in jumped) if (id != 0 && id != 8 && id != 9) respot(id)
         if (mode == GameMode.EIGHT_BALL) {
+            if (9 in jumped) respot(9)
+            if (8 in jumped) {
+                if (isBreak) { respot(8); notes += "8 respotted" }
+                else { win = opp; notes += "${names[shooter]} jumped the 8 off the table" }
+            }
             if (8 in pocketed) {
                 if (isBreak) {
                     respot(8); notes += "8 on the break is respotted"
@@ -218,6 +235,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
                 }
             }
         } else {
+            if (9 in jumped) { respot(9); notes += "9 respotted" }
             if (9 in pocketed) {
                 if (!foul) win = shooter else { respot(9); notes += "9 respotted" }
             }
@@ -242,7 +260,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         isBreak = false
         winner = win
         if (win >= 0) {
-            message = "${names[win]} wins!" + if (notes.isNotEmpty()) " (${notes.joinToString(", ")})" else ""
+            message = winsText(win) + if (notes.isNotEmpty()) " (${notes.joinToString(", ")})" else ""
             return ShotOutcome(foul, reason, false, win, message)
         }
 
@@ -250,18 +268,21 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             current = opp
             ballInHand = true
             kitchenOnly = false
-            if (cueIn || !world.balls[0].onTable) restoreCue()
+            if (cueIn || cueOff || !world.balls[0].onTable) restoreCue()
             notes.add(0, "Foul: $reason")
-            notes += "${names[opp]} has ball in hand"
+            notes += "${has(opp)} ball in hand"
         } else if (!keep) {
             current = opp
             notes += "${names[opp]} to shoot"
         } else {
-            notes += "${names[shooter]} continues"
+            notes += continues(shooter)
         }
         message = notes.joinToString(" · ")
         return ShotOutcome(foul, reason, keep, -1, message)
     }
+
+    /** Put the cue ball back on the table near the head spot (practice mode). */
+    fun respawnCue() = restoreCue()
 
     private fun restoreCue() {
         val c = world.balls[0]

@@ -61,6 +61,23 @@ class EngineTest {
         assertEquals(5, v.log.firstHit)
     }
 
+    @Test fun cueBallJumpedOffTableIsFoul() {
+        val m = Match(GameMode.NINE_BALL, arrayOf("You", "CPU")); m.rack(Random(1), 0)
+        m.isBreak = false; m.ballInHand = false
+        m.world.balls[0].x = 1.0; m.world.balls[0].y = 0.25
+        m.shoot(-PI / 2, 6.0, 0.0, 0.0, Math.toRadians(50.0)); m.world.simulate()
+        assertTrue(0 in m.world.log.jumpedOff)
+        val out = m.resolve()
+        assertTrue(out.foul); assertTrue(m.ballInHand); assertTrue(m.world.balls[0].onTable)
+        assertEquals(1, m.current)
+    }
+
+    @Test fun youWinGrammar() {
+        val m = Match(GameMode.NINE_BALL, arrayOf("You", "CPU"))
+        assertEquals("You win!", m.winsText(0))
+        assertEquals("CPU wins!", m.winsText(1))
+    }
+
     @Test fun predictionMatchesShot() {
         val w = World(); w.clearAll(); w.put(0, 1.0, 0.635); w.put(1, 1.5, 0.635 + P.R)
         val pr = Prediction()

@@ -14,6 +14,7 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.view.Choreographer
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import com.poolgame.app.core.Ai
@@ -46,6 +47,7 @@ class GameView(
     private val cpuLevel: Int,
     soundOn: Boolean,
     private val shotClock: Int,          // seconds per shot, 0 = off
+    private val practice: Boolean,       // free practice: no rules, move any ball
     private val host: Host
 ) : View(context), Choreographer.FrameCallback {
 
@@ -57,7 +59,7 @@ class GameView(
     }
 
     private enum class Phase { HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
-    private enum class Touch { NONE, AIM, POWER, SPIN, ELEV, WHEEL, MOVE_CUE, BUTTON }
+    private enum class Touch { NONE, AIM, POWER, SPIN, ELEV, WHEEL, MOVE_CUE, BUTTON, PENDING, MOVE_BALL }
 
     private val names = if (vsCpu) arrayOf("You", "CPU") else arrayOf("Player 1", "Player 2")
     private val rng = Random(System.nanoTime())
@@ -78,11 +80,28 @@ class GameView(
     private val ptrMode = Array(10) { Touch.NONE }
     private val ptrStartY = FloatArray(10)
     private val ptrLastY = FloatArray(10)
+    private val ptrDownX = FloatArray(10)
+    private val ptrDownY = FloatArray(10)
+    private val ptrDownAt = LongArray(10)
+    private val ptrBall = IntArray(10)
     private var wheelOffset = 0f
     private var dragInvalid = false
     private var dragX = 0f; private var dragY = 0f
 
+    // Practice mode
+    private var practiceSnapshot: World? = null
+    private val retryBtn = RectF()
+    private val rackBtn = RectF()
+    private val clearBtn = RectF()
+    private val trayIds = IntArray(15)
+    private val trayX = FloatArray(15)
+    private var trayN = 0
+    private var trayY = 0f
+    private var trayR = 0f
+    private var movingBall = -1
+
     // Shot clock
+    private var clockStarted = false
     private var clockLeft = 0.0
     private var lastBeep = 0
     var menuOpen = false
@@ -157,6 +176,7 @@ class GameView(
 
     init {
         isFocusable = true
+        balls.plain = practice
         newGame(0)
     }
 
@@ -181,6 +201,12 @@ class GameView(
         match.world.trackOrientation = true
         match.world.listener = makeListener()
         match.rack(rng, breaker)
+        if (practice) {
+            match.ballInHand = false
+            match.kitchenOnly = false
+            match.message = "Practice · hold any ball to move it"
+            practiceSnapshot = null
+        }
         sinks.clear()
         spinX = 0f; spinY = 0f; power = 0f; elevDeg = 0f
         gameOverTitle = ""
@@ -224,6 +250,8 @@ class GameView(
             phase = Phase.HUMAN
             spinX = 0f; spinY = 0f
             clockLeft = shotClock.toDouble()
+            // With ball in hand the clock waits until you start aiming or touch the power bar.
+            clockStarted = !match.ballInHand
             lastBeep = 0
             aimAtNearestTarget()
         }
@@ -254,10 +282,70 @@ class GameView(
     private fun powerFor(speed: Double): Float = ((speed - 0.25) / (P.MAX_CUE_SPEED - 0.25)).coerceIn(0.0, 1.0).pow(1 / 1.6).toFloat()
 
     private fun shoot(angle: Double, speed: Double, side: Double, vert: Double, elev: Double) {
+        if (practice) practiceSnapshot = World().also { it.copyFrom(match.world) }
         sfx.strike(speed)
         match.shoot(angle, speed, side, vert, elev)
         phase = Phase.RUNNING
         clearTouches()
+    }
+
+    /** Practice: holding a finger still on a ball for a moment picks it up. Always returns true. */
+    private fun checkLongPress(): Boolean {
+        if (!practice) return true
+        val now = System.nanoTime()
+        for (i in ptrMode.indices) if (ptrMode[i] == Touch.PENDING && now - ptrDownAt[i] > 280_000_000L) {
+            ptrMode[i] = Touch.MOVE_BALL
+            movingBall = ptrBall[i]
+            dragInvalid = false
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        }
+        return true
+    }
+
+    private fun moveBall(id: Int, x: Float, y: Float) {
+        dragX = x; dragY = y
+        val px = tx(x).coerceIn(P.R, P.L - P.R); val py = ty(y).coerceIn(P.R, P.W - P.R)
+        val w = match.world
+        if (w.isFree(px, py, id)) {
+            val b = w.balls[id]
+            b.x = px; b.y = py; b.stop()
+            dragInvalid = false
+        } else dragInvalid = true
+    }
+
+    private fun practiceRetry() {
+        val snap = practiceSnapshot ?: return
+        if (phase != Phase.HUMAN && phase != Phase.RUNNING) return
+        match.world.copyFrom(snap)
+        for (b in match.world.balls) b.moving = false
+        sinks.clear()
+        phase = Phase.HUMAN
+        power = 0f
+        message = "Shot reset"
+    }
+
+    private fun practiceClear() {
+        for (id in 1..15) { val b = match.world.balls[id]; b.onTable = false; b.stop() }
+        message = "Table cleared · tap balls on the right to bring them back"
+    }
+
+    private fun returnBall(id: Int) {
+        val w = match.world
+        var r = 0.0
+        while (r < 0.6) {
+            val steps = if (r == 0.0) 1 else 12
+            for (k in 0 until steps) {
+                val a = 2 * Math.PI * k / steps
+                val x = P.L / 2 + 0.25 + r * cos(a); val y = P.W / 2 + r * sin(a)
+                if (w.isFree(x, y, id)) {
+                    val b = w.balls[id]
+                    b.x = x; b.y = y; b.stop(); b.onTable = true
+                    message = "Hold the ball to move it"
+                    return
+                }
+            }
+            r += 0.06
+        }
     }
 
     private fun clearTouches() { for (i in ptrMode.indices) ptrMode[i] = Touch.NONE }
@@ -269,7 +357,7 @@ class GameView(
             sinks.removeAll { it.age > 0.35f }
         }
         when (phase) {
-            Phase.HUMAN -> if (shotClock > 0 && !menuOpen) {
+            Phase.HUMAN -> if (checkLongPress() && !practice && shotClock > 0 && !menuOpen && clockStarted) {
                 clockLeft -= dt
                 val secs = ceil(clockLeft).toInt()
                 if (secs in 1..5 && secs != lastBeep) { lastBeep = secs; sfx.beep() }
@@ -284,7 +372,14 @@ class GameView(
             }
             Phase.RUNNING -> {
                 match.world.advance(dt)
-                if (!match.world.anyMoving()) {
+                if (!match.world.anyMoving() && practice) {
+                    if (!match.world.balls[0].onTable) {
+                        match.respawnCue()
+                        message = "Cue ball respotted · hold it to move it"
+                    } else message = ""
+                    phase = Phase.HUMAN
+                    power = 0f
+                } else if (!match.world.anyMoving()) {
                     val out = match.resolve()
                     message = out.message
                     phase = Phase.PAUSE
@@ -396,6 +491,16 @@ class GameView(
         val cardH = hudH - 16 * dp
         leftCard.set(menuBtn.right + 10 * dp, 8 * dp, menuBtn.right + 10 * dp + cardW, 8 * dp + cardH)
         rightCard.set(w - 8 * dp - cardW, 8 * dp, w - 8 * dp, 8 * dp + cardH)
+        run {
+            val gap = 8 * dp
+            val left = leftCard.right + 10 * dp; val right = rightCard.left - 10 * dp
+            val bw = (right - left - 2 * gap) / 3
+            val bh = cardH * 0.78f
+            val top = leftCard.centerY() - bh / 2
+            retryBtn.set(left, top, left + bw, top + bh)
+            rackBtn.set(left + bw + gap, top, left + 2 * bw + gap, top + bh)
+            clearBtn.set(left + 2 * (bw + gap), top, right, top + bh)
+        }
 
         powerShader = LinearGradient(0f, powerRect.top, 0f, powerRect.bottom,
             intArrayOf(0xFF3CCB7F.toInt(), 0xFFF2C94C.toInt(), 0xFFEB5757.toInt()), null, Shader.TileMode.CLAMP)
@@ -502,7 +607,7 @@ class GameView(
             canvas.drawRect(sx(0.0), sy(0.0), sx(P.HEAD_X), sy(P.W), paint)
         }
 
-        if (humanTurn && !anyTouch(Touch.MOVE_CUE)) drawGuide(canvas)
+        if (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) drawGuide(canvas)
 
         val cue = w.balls[0]
         var cueX = cue.x; var cueY = cue.y
@@ -544,7 +649,18 @@ class GameView(
             }
         }
 
-        val showCue = (humanTurn && !anyTouch(Touch.MOVE_CUE)) ||
+        if (humanTurn && movingBall >= 0) {
+            val mb = w.balls[movingBall]
+            guide.pathEffect = null; guide.strokeWidth = 2 * dp
+            guide.color = 0xE0FFD54A.toInt()
+            canvas.drawCircle(sx(mb.x), sy(mb.y), rpx * 1.5f, guide)
+            if (dragInvalid) {
+                guide.color = 0xCCFF4040.toInt()
+                canvas.drawCircle(dragX, dragY, rpx, guide)
+            }
+        }
+
+        val showCue = (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) ||
             (phase == Phase.CPU_ANIM && (plan == null || !plan.hasPlacement || animT >= 0.45))
         if (showCue && cue.onTable) drawCueStick(canvas, sx(cueX), sy(cueY))
 
@@ -594,7 +710,7 @@ class GameView(
         guide.pathEffect = null
 
         if (pr.hitId >= 0) {
-            val legal = pr.hitId in match.legalTargets()
+            val legal = practice || pr.hitId in match.legalTargets()
             val gx = sx(pr.hitX); val gy = sy(pr.hitY)
             guide.strokeWidth = 1.7f * dp
             guide.color = if (legal) 0xE0FFFFFF.toInt() else 0xE0FF5050.toInt()
@@ -674,6 +790,7 @@ class GameView(
         val mx = menuBtn.centerX(); val my = menuBtn.centerY()
         for (i in -1..1) canvas.drawRoundRect(mx - 9 * dp, my + i * 6 * dp - 1.2f * dp, mx + 9 * dp, my + i * 6 * dp + 1.2f * dp, dp, dp, paint)
 
+        if (practice) { drawPracticeHud(canvas); return }
         drawPlayerCard(canvas, leftCard, 0)
         drawPlayerCard(canvas, rightCard, 1)
 
@@ -687,7 +804,8 @@ class GameView(
             Phase.CPU_THINK, Phase.CPU_ANIM -> if (message.isNotEmpty()) message else "CPU is thinking…"
             Phase.HUMAN -> when {
                 match.ballInHand && match.isBreak -> "${names[match.current]}: place the cue ball behind the line, then break"
-                match.ballInHand -> "${names[match.current]}: ball in hand — drag the cue ball"
+                match.ballInHand -> "${names[match.current]}: ball in hand — drag the cue ball" +
+                    if (shotClock > 0 && !clockStarted) " · clock starts when you aim" else ""
                 else -> message
             }
             else -> message
@@ -706,6 +824,47 @@ class GameView(
                 balls.drawIcon(canvas, id, x, subY - r * 0.4f, r, !match.world.balls[id].onTable, paint)
                 x += r * 2.4f
             }
+        }
+    }
+
+    private fun drawPracticeHud(canvas: Canvas) {
+        paint.style = Paint.Style.FILL; paint.shader = null
+        paint.color = 0xFF1E252B.toInt()
+        canvas.drawRoundRect(leftCard, 10 * dp, 10 * dp, paint)
+        canvas.drawRoundRect(rightCard, 10 * dp, 10 * dp, paint)
+        text.textAlign = Paint.Align.LEFT; text.typeface = bold
+        text.textSize = min(16 * dp, leftCard.height() * 0.32f); text.color = Color.WHITE
+        canvas.drawText("PRACTICE", leftCard.left + 12 * dp, leftCard.top + leftCard.height() * 0.42f, text)
+        text.typeface = regular; text.textSize = min(11 * dp, leftCard.height() * 0.22f); text.color = 0xFF9AA7B1.toInt()
+        val sub = if (message.isNotEmpty()) message else "Hold any ball to move it"
+        canvas.drawText(ellipsize(sub, leftCard.width() - 20 * dp), leftCard.left + 12 * dp, leftCard.top + leftCard.height() * 0.78f, text)
+
+        fun button(r: RectF, label: String, enabled: Boolean) {
+            paint.color = if (enabled) 0xFF2F8F5B.toInt() else 0xFF2A3238.toInt()
+            canvas.drawRoundRect(r, 10 * dp, 10 * dp, paint)
+            text.textAlign = Paint.Align.CENTER; text.typeface = bold
+            text.textSize = min(14 * dp, r.height() * 0.38f)
+            text.color = if (enabled) Color.WHITE else 0xFF6B7780.toInt()
+            canvas.drawText(label, r.centerX(), r.centerY() + text.textSize * 0.35f, text)
+        }
+        button(retryBtn, "Retry shot", practiceSnapshot != null)
+        button(rackBtn, "Re-rack", true)
+        button(clearBtn, "Clear table", true)
+
+        // Tray of balls that are off the table: tap one to bring it back.
+        trayN = 0
+        for (id in 1..15) if (!match.world.balls[id].onTable) trayIds[trayN++] = id
+        text.textAlign = Paint.Align.LEFT; text.typeface = regular
+        text.textSize = min(11 * dp, rightCard.height() * 0.22f); text.color = 0xFF9AA7B1.toInt()
+        canvas.drawText(if (trayN == 0) "All balls on the table" else "Tap a ball to put it back",
+            rightCard.left + 12 * dp, rightCard.top + rightCard.height() * 0.32f, text)
+        trayR = min(rightCard.height() * 0.17f, (rightCard.width() - 24 * dp) / (15 * 2.2f))
+        trayY = rightCard.top + rightCard.height() * 0.68f
+        var x = rightCard.left + 12 * dp + trayR
+        for (i in 0 until trayN) {
+            trayX[i] = x
+            balls.drawIcon(canvas, trayIds[i], x, trayY, trayR, false, paint)
+            x += trayR * 2.2f
         }
     }
 
@@ -735,10 +894,10 @@ class GameView(
         // Shot clock on the active human's card
         if (active && phase == Phase.HUMAN && shotClock > 0) {
             val secs = max(0, ceil(clockLeft).toInt())
-            val low = clockLeft <= 5.0
+            val low = clockStarted && clockLeft <= 5.0
             text.textAlign = Paint.Align.RIGHT
-            text.color = if (low) 0xFFFF6B6B.toInt() else 0xFFF2C94C.toInt()
-            canvas.drawText("${secs}s", r.right - 12 * dp, r.top + r.height() * 0.4f, text)
+            text.color = if (!clockStarted) 0xFF9AA7B1.toInt() else if (low) 0xFFFF6B6B.toInt() else 0xFFF2C94C.toInt()
+            canvas.drawText(if (clockStarted) "${secs}s" else "${secs}s ⏸", r.right - 12 * dp, r.top + r.height() * 0.4f, text)
             val frac = (clockLeft / shotClock).toFloat().coerceIn(0f, 1f)
             paint.color = 0x33FFFFFF
             canvas.drawRoundRect(r.left + 10 * dp, r.bottom - 6 * dp, r.right - 10 * dp, r.bottom - 3 * dp, 2 * dp, 2 * dp, paint)
@@ -928,9 +1087,24 @@ class GameView(
             ptrMode[id] = Touch.BUTTON
             return
         }
+        if (practice && first) {
+            when {
+                retryBtn.contains(x, y) -> { practiceRetry(); ptrMode[id] = Touch.BUTTON; return }
+                rackBtn.contains(x, y) -> { newGame(0); ptrMode[id] = Touch.BUTTON; return }
+                clearBtn.contains(x, y) && phase == Phase.HUMAN -> { practiceClear(); ptrMode[id] = Touch.BUTTON; return }
+                phase == Phase.HUMAN && rightCard.contains(x, y) -> {
+                    for (i in 0 until trayN) if (hypot(x - trayX[i], y - trayY) < max(trayR * 1.3f, 14 * dp)) {
+                        returnBall(trayIds[i]); break
+                    }
+                    ptrMode[id] = Touch.BUTTON
+                    return
+                }
+            }
+        }
         if (phase != Phase.HUMAN) return
         val c = match.world.balls[0]
         val spinDist = hypot(x - spinCx, y - spinCy)
+        val grabbed = if (practice && tableArea.contains(x, y)) ballUnder(x, y) else -1
         ptrMode[id] = when {
             powerRect.left - 20 * dp <= x && x <= powerRect.right + 20 * dp && y >= powerRect.top - 30 * dp && y <= powerRect.bottom + 20 * dp -> {
                 if (anyTouch(Touch.POWER)) Touch.NONE else { ptrStartY[id] = y; power = 0f; Touch.POWER }
@@ -949,9 +1123,28 @@ class GameView(
                 hypot(x - sx(c.x), y - sy(c.y)) < max(rpx * 3f, 28 * dp) -> {
                 dragInvalid = false; Touch.MOVE_CUE
             }
+            grabbed >= 0 && !anyTouch(Touch.MOVE_BALL) && !anyTouch(Touch.PENDING) -> {
+                // Practice: a short tap aims at the ball; holding still picks it up.
+                ptrBall[id] = grabbed; ptrDownX[id] = x; ptrDownY[id] = y; ptrDownAt[id] = System.nanoTime()
+                Touch.PENDING
+            }
             tableArea.contains(x, y) -> { aimAt(x, y); Touch.AIM }
             else -> Touch.NONE
         }
+        // The shot clock (when waiting during ball in hand) starts once you aim or touch the power bar.
+        val m = ptrMode[id]
+        if (m == Touch.POWER || m == Touch.WHEEL || m == Touch.AIM) clockStarted = true
+    }
+
+    private fun ballUnder(x: Float, y: Float): Int {
+        val reach = max(rpx * 1.6f, 20 * dp)
+        var best = -1; var bestD = Float.MAX_VALUE
+        for (b in match.world.balls) {
+            if (!b.onTable) continue
+            val d = hypot(x - sx(b.x), y - sy(b.y))
+            if (d < reach && d < bestD) { best = b.id; bestD = d }
+        }
+        return best
     }
 
     private fun onMove(id: Int, x: Float, y: Float) {
@@ -975,6 +1168,11 @@ class GameView(
                 )
             }
             Touch.AIM -> aimAt(x, y)
+            Touch.PENDING -> if (hypot(x - ptrDownX[id], y - ptrDownY[id]) > 10 * dp) {
+                ptrMode[id] = Touch.AIM
+                aimAt(x, y)
+            }
+            Touch.MOVE_BALL -> moveBall(ptrBall[id], x, y)
             else -> {}
         }
     }
@@ -992,6 +1190,8 @@ class GameView(
             } else power = 0f
         }
         if (mode == Touch.MOVE_CUE) dragInvalid = false
+        if (mode == Touch.PENDING) aimAt(ptrDownX[id], ptrDownY[id])
+        if (mode == Touch.MOVE_BALL) { movingBall = -1; dragInvalid = false }
     }
 
     private fun aimAt(x: Float, y: Float) {

@@ -35,15 +35,17 @@ class ShotLog {
     var railAfterHit = false          // any ball touched a cushion after first contact
     var cueCushionsBeforeHit = 0
     var hitX = 0.0; var hitY = 0.0     // cue-ball centre at first contact
+    val jumpedOff = ArrayList<Int>()   // balls that flew off the table
 
     fun reset() {
-        firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0
+        firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0; jumpedOff.clear()
     }
 
     fun copyFrom(o: ShotLog) {
         firstHit = o.firstHit; pocketed.clear(); pocketed.addAll(o.pocketed)
         railAfterHit = o.railAfterHit; cueCushionsBeforeHit = o.cueCushionsBeforeHit
         hitX = o.hitX; hitY = o.hitY
+        jumpedOff.clear(); jumpedOff.addAll(o.jumpedOff)
     }
 }
 
@@ -51,6 +53,7 @@ interface WorldListener {
     fun onBallHit(speed: Double)
     fun onCushion(speed: Double)
     fun onPocket(id: Int)
+    fun onOffTable(id: Int) {}
 }
 
 /**
@@ -315,6 +318,8 @@ class World {
             if (!b.onTable || !b.moving) continue
             // Quick reject: far from every rail.
             if (b.x > 2 * r && b.x < P.L - 2 * r && b.y > 2 * r && b.y < P.W - 2 * r) continue
+            // A ball in the air higher than the cushions flies over them.
+            if (b.z > P.RAIL_CLEAR) continue
             for (sg in Table.segs) {
                 val d2 = Table.closest(sg, b.x, b.y, tmp)
                 if (d2 >= r2) continue
@@ -378,10 +383,16 @@ class World {
                 if (dx * dx + dy * dy < p.capR * p.capR) { drop = true; break }
             }
             if (drop) {
+                val offTable = b.z > 0.0 && (b.x < -r || b.x > P.L + r || b.y < -r || b.y > P.W + r)
                 b.onTable = false
+                if (offTable) {
+                    log.jumpedOff += b.id
+                    listener?.onOffTable(b.id)
+                } else {
+                    log.pocketed += b.id
+                    listener?.onPocket(b.id)
+                }
                 b.stop()
-                log.pocketed += b.id
-                listener?.onPocket(b.id)
             }
         }
     }
