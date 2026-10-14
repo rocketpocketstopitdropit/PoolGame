@@ -29,7 +29,7 @@ You can also start a build manually from the Actions tab with **Run workflow**.
 | **Fine aim** wheel (right) | Nudge the aim ~0.01° per dp of finger travel |
 | **Cue angle** slider (right) | Raise the cue for a jump shot (0–60°). Around 45–55° with a firm stroke hops the cue ball over a blocker |
 | **Spin** cue ball (right) | Touch where the tip strikes: top = follow, bottom = draw, sides = english. Tap the centre to reset |
-| **Power** bar (left) | Pull down to set power, release to shoot. Slide back to the top to cancel |
+| **Power** bar (left) | Pull down to set power, release to shoot. Slide back to the top to cancel. While holding it, you can use another finger on the fine-aim wheel, the table, spin or cue angle |
 | Ball in hand | Drag the cue ball (shaded area only before the break) |
 | ☰ / Back | Pause menu: resume, restart rack, quit |
 

@@ -73,9 +73,11 @@ class GameView(
     private var spinX = 0f            // -1..1 (right english > 0)
     private var spinY = 0f            // -1..1 (screen down = draw)
     private var elevDeg = 0f          // cue elevation, 0..60 degrees (jump shots)
-    private var touch = Touch.NONE
-    private var touchStartY = 0f
-    private var lastTouchY = 0f
+    // Multi-touch: each finger gets its own role, so you can hold the power bar
+    // with one finger and fine-tune the aim with another.
+    private val ptrMode = Array(10) { Touch.NONE }
+    private val ptrStartY = FloatArray(10)
+    private val ptrLastY = FloatArray(10)
     private var wheelOffset = 0f
     private var dragInvalid = false
     private var dragX = 0f; private var dragY = 0f
@@ -255,8 +257,11 @@ class GameView(
         sfx.strike(speed)
         match.shoot(angle, speed, side, vert, elev)
         phase = Phase.RUNNING
-        touch = Touch.NONE
+        clearTouches()
     }
+
+    private fun clearTouches() { for (i in ptrMode.indices) ptrMode[i] = Touch.NONE }
+    private fun anyTouch(t: Touch): Boolean { for (m in ptrMode) if (m == t) return true; return false }
 
     private fun update(dt: Double) {
         if (sinks.isNotEmpty()) {
@@ -269,7 +274,7 @@ class GameView(
                 val secs = ceil(clockLeft).toInt()
                 if (secs in 1..5 && secs != lastBeep) { lastBeep = secs; sfx.beep() }
                 if (clockLeft <= 0) {
-                    touch = Touch.NONE
+                    clearTouches()
                     power = 0f
                     val out = match.timeFoul()
                     message = out.message
@@ -497,7 +502,7 @@ class GameView(
             canvas.drawRect(sx(0.0), sy(0.0), sx(P.HEAD_X), sy(P.W), paint)
         }
 
-        if (humanTurn && touch != Touch.MOVE_CUE) drawGuide(canvas)
+        if (humanTurn && !anyTouch(Touch.MOVE_CUE)) drawGuide(canvas)
 
         val cue = w.balls[0]
         var cueX = cue.x; var cueY = cue.y
@@ -533,13 +538,13 @@ class GameView(
             guide.strokeWidth = 2 * dp
             guide.color = Color.argb((120 + 120 * pulse).toInt(), 255, 214, 64)
             canvas.drawCircle(sx(cue.x), sy(cue.y), rpx * (1.5f + 0.25f * pulse), guide)
-            if (touch == Touch.MOVE_CUE && dragInvalid) {
+            if (anyTouch(Touch.MOVE_CUE) && dragInvalid) {
                 guide.color = 0xCCFF4040.toInt()
                 canvas.drawCircle(dragX, dragY, rpx, guide)
             }
         }
 
-        val showCue = (humanTurn && touch != Touch.MOVE_CUE) ||
+        val showCue = (humanTurn && !anyTouch(Touch.MOVE_CUE)) ||
             (phase == Phase.CPU_ANIM && (plan == null || !plan.hasPlacement || animT >= 0.45))
         if (showCue && cue.onTable) drawCueStick(canvas, sx(cueX), sy(cueY))
 
@@ -899,58 +904,65 @@ class GameView(
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
-        val x = e.x; val y = e.y
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> onDown(x, y)
-            MotionEvent.ACTION_MOVE -> onMove(x, y)
-            MotionEvent.ACTION_UP -> onUp()
-            MotionEvent.ACTION_CANCEL -> { if (touch == Touch.POWER) power = 0f; touch = Touch.NONE }
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val i = e.actionIndex
+                onDown(e.getPointerId(i), e.getX(i), e.getY(i), e.actionMasked == MotionEvent.ACTION_DOWN)
+            }
+            MotionEvent.ACTION_MOVE -> for (i in 0 until e.pointerCount) onMove(e.getPointerId(i), e.getX(i), e.getY(i))
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> onUp(e.getPointerId(e.actionIndex))
+            MotionEvent.ACTION_CANCEL -> { if (anyTouch(Touch.POWER)) power = 0f; clearTouches() }
         }
         return true
     }
 
-    private fun onDown(x: Float, y: Float) {
-        if (menuBtn.contains(x, y) && phase != Phase.OVER) { touch = Touch.BUTTON; host.onMenuRequested(); return }
+    private fun onDown(id: Int, x: Float, y: Float, first: Boolean) {
+        if (id !in ptrMode.indices) return
+        ptrMode[id] = Touch.NONE
+        if (first && menuBtn.contains(x, y) && phase != Phase.OVER) { ptrMode[id] = Touch.BUTTON; host.onMenuRequested(); return }
         if (phase == Phase.OVER) {
-            if (rematchBtn.contains(x, y)) newGame(1 - breaker)
-            else if (menuExitBtn.contains(x, y)) host.onExitToMenu()
-            touch = Touch.BUTTON
+            if (first) {
+                if (rematchBtn.contains(x, y)) newGame(1 - breaker)
+                else if (menuExitBtn.contains(x, y)) host.onExitToMenu()
+            }
+            ptrMode[id] = Touch.BUTTON
             return
         }
-        if (phase != Phase.HUMAN) { touch = Touch.NONE; return }
+        if (phase != Phase.HUMAN) return
         val c = match.world.balls[0]
         val spinDist = hypot(x - spinCx, y - spinCy)
-        when {
+        ptrMode[id] = when {
             powerRect.left - 20 * dp <= x && x <= powerRect.right + 20 * dp && y >= powerRect.top - 30 * dp && y <= powerRect.bottom + 20 * dp -> {
-                touch = Touch.POWER; touchStartY = y; power = 0f
+                if (anyTouch(Touch.POWER)) Touch.NONE else { ptrStartY[id] = y; power = 0f; Touch.POWER }
             }
             spinDist <= spinR * 1.2f -> {
-                touch = Touch.SPIN
                 if (spinDist < spinR * 0.14f) { spinX = 0f; spinY = 0f } else setSpin(x, y)
+                Touch.SPIN
             }
             x >= elevRect.left - 10 * dp && x <= elevRect.right + 10 * dp && y >= elevRect.top - 22 * dp && y <= elevRect.bottom + 10 * dp -> {
-                touch = Touch.ELEV; setCueAngle(x)
+                setCueAngle(x); Touch.ELEV
             }
             x >= wheelRect.left - 16 * dp && x <= wheelRect.right + 16 * dp && y >= wheelRect.top && y <= wheelRect.bottom -> {
-                touch = Touch.WHEEL; lastTouchY = y
+                ptrLastY[id] = y; Touch.WHEEL
             }
-            match.ballInHand && hypot(x - sx(c.x), y - sy(c.y)) < max(rpx * 3f, 28 * dp) -> {
-                touch = Touch.MOVE_CUE; dragInvalid = false
+            match.ballInHand && !anyTouch(Touch.POWER) && !anyTouch(Touch.MOVE_CUE) &&
+                hypot(x - sx(c.x), y - sy(c.y)) < max(rpx * 3f, 28 * dp) -> {
+                dragInvalid = false; Touch.MOVE_CUE
             }
-            tableArea.contains(x, y) -> { touch = Touch.AIM; aimAt(x, y) }
-            else -> touch = Touch.NONE
+            tableArea.contains(x, y) -> { aimAt(x, y); Touch.AIM }
+            else -> Touch.NONE
         }
     }
 
-    private fun onMove(x: Float, y: Float) {
-        if (phase != Phase.HUMAN) return
-        when (touch) {
-            Touch.POWER -> power = ((y - touchStartY) / (powerRect.height() * 0.9f)).coerceIn(0f, 1f)
+    private fun onMove(id: Int, x: Float, y: Float) {
+        if (phase != Phase.HUMAN || id !in ptrMode.indices) return
+        when (ptrMode[id]) {
+            Touch.POWER -> power = ((y - ptrStartY[id]) / (powerRect.height() * 0.9f)).coerceIn(0f, 1f)
             Touch.SPIN -> setSpin(x, y)
             Touch.ELEV -> setCueAngle(x)
             Touch.WHEEL -> {
-                val d = y - lastTouchY
-                lastTouchY = y
+                val d = y - ptrLastY[id]
+                ptrLastY[id] = y
                 wheelOffset += d
                 aimAngle += d / dp * 0.0002   // ~0.01 degree per dp of finger travel
             }
@@ -967,18 +979,19 @@ class GameView(
         }
     }
 
-    private fun onUp() {
-        if (phase == Phase.HUMAN) {
-            if (touch == Touch.POWER) {
-                if (power > 0.02f) {
-                    lastPower = power
-                    shoot(aimAngle, speedFor(power), (spinX * P.MAX_TIP).toDouble(), (-spinY * P.MAX_TIP).toDouble(),
-                        Math.toRadians(elevDeg.toDouble()))
-                } else power = 0f
-            }
-            if (touch == Touch.MOVE_CUE) dragInvalid = false
+    private fun onUp(id: Int) {
+        if (id !in ptrMode.indices) return
+        val mode = ptrMode[id]
+        ptrMode[id] = Touch.NONE
+        if (phase != Phase.HUMAN) return
+        if (mode == Touch.POWER) {
+            if (power > 0.02f) {
+                lastPower = power
+                shoot(aimAngle, speedFor(power), (spinX * P.MAX_TIP).toDouble(), (-spinY * P.MAX_TIP).toDouble(),
+                    Math.toRadians(elevDeg.toDouble()))
+            } else power = 0f
         }
-        touch = Touch.NONE
+        if (mode == Touch.MOVE_CUE) dragInvalid = false
     }
 
     private fun aimAt(x: Float, y: Float) {
