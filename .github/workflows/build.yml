@@ -25,10 +25,26 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run engine tests
-        run: ./gradlew testDebugUnitTest --no-daemon
+        run: |
+          set -o pipefail
+          ./gradlew testDebugUnitTest --no-daemon 2>&1 | tee gradle.log
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug --no-daemon 2>&1 | tee -a gradle.log
+
+      # Turn compiler errors and failed tests into annotations, so they show on the run's summary page.
+      - name: Report errors
+        if: failure()
+        run: |
+          grep -E "^e: |FAILED|AssertionError|Exception|expected:" gradle.log | head -40 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          for f in app/build/test-results/testDebugUnitTest/*.xml; do
+            [ -f "$f" ] && grep -oE '<failure message="[^"]{0,300}' "$f" | head -10 | sed 's/^/::error::/'
+          done
+          true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
