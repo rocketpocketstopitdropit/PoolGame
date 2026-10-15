@@ -203,7 +203,7 @@ class BallRenderer {
         canvas.save()
         canvas.translate(sx + radius * 0.22f, sy + radius * 0.32f)
         canvas.scale(scale, scale)
-        canvas.drawBitmap(sh, -size, -size, shadowPaint)
+        canvas.drawBitmap(sh, -size.toFloat(), -size.toFloat(), shadowPaint)
         canvas.restore()
     }
 
