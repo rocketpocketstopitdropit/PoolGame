@@ -1015,6 +1015,13 @@ class Game(
             ctx.strokeStyle = "rgba(255,80,80,0.88)"; ctx.lineWidth = 2.0
             ctx.circle(sx(pr.cueX[pr.cueN - 1].toDouble()), sy(pr.cueY[pr.cueN - 1].toDouble()), rpx * 1.3); ctx.stroke()
         }
+        // Jump shots: where the cue ball first comes down. It slides smoothly as you add power.
+        if (!pr.landX.isNaN()) {
+            ctx.setLineDash(noDash)
+            ctx.strokeStyle = "rgba(255,213,74,0.94)"; ctx.lineWidth = 2.0
+            ctx.circle(sx(pr.landX), sy(pr.landY), rpx); ctx.stroke()
+            ctx.fillStyle = "rgba(255,213,74,0.94)"; ctx.circle(sx(pr.landX), sy(pr.landY), 2.2); ctx.fill()
+        }
     }
 
     private fun drawCueStick(ctx: Ctx2D, cx: Double, cy: Double) {
@@ -1547,9 +1554,7 @@ class Game(
     fun pointerMove(id: Int, x: Double, y: Double) {
         if (phase != Phase.HUMAN || id !in ptrMode.indices) return
         when (ptrMode[id]) {
-            // Power moves in whole percents, so a trembling finger doesn't make the guide flicker,
-            // and the shot is exactly the one the guide showed.
-            Touch.POWER -> power = kotlin.math.round(((y - ptrStartY[id]) / (powerRect.h * 0.9)).coerceIn(0.0, 1.0) * 100) / 100
+            Touch.POWER -> power = ((y - ptrStartY[id]) / (powerRect.h * 0.9)).coerceIn(0.0, 1.0)
             Touch.SPIN -> setSpin(x, y)
             Touch.ELEV -> setCueAngle(y)
             Touch.WHEEL -> {

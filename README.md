@@ -59,7 +59,8 @@ game (most throws, ties included) and the average number of throws to a winner a
 **Crowd**: scratching the cue ball or knocking any ball off the table gets a synthesized crowd "awww".
 **Shot guide**: the cue ball's path is shown up to the first ball it hits (or just past its first cushion), then
 only a short stretch of where each ball goes — enough to see the angle, draw, follow and curve, not the whole
-result. Power moves in whole percents so the guide doesn't flicker. A ball in the air is drawn lifted and bigger
+result. On a jump shot a yellow ring marks where the cue ball first comes down; it slides smoothly as you add
+power. A ball in the air is drawn lifted and bigger
 (height exaggerated on screen; the distance is real) with its shadow left on the cloth.
 
 A table foul — hitting nothing, hitting the wrong ball first, or no rail and nothing potted — plays your

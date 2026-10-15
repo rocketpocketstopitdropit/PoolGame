@@ -14,8 +14,11 @@ class Prediction {
     val objX = FloatArray(MAX); val objY = FloatArray(MAX)
     var objN = 0
     var scratch = false
+    /** Where the cue ball first comes down after a jump (before it hits anything), or NaN. */
+    var landX = Double.NaN
+    var landY = Double.NaN
 
-    fun reset() { cueN = 0; contactIndex = -1; hitId = -1; objN = 0; scratch = false }
+    fun reset() { cueN = 0; contactIndex = -1; hitId = -1; objN = 0; scratch = false; landX = Double.NaN; landY = Double.NaN }
 
     internal fun addCue(x: Double, y: Double, air: Boolean) {
         if (cueN >= MAX) return
@@ -67,6 +70,9 @@ object Predictor {
             t += scratch.step(0.02)
             steps++
             val log = scratch.log
+            if (out.landX.isNaN() && !log.cueLandX.isNaN() && (out.hitId < 0 || log.firstHit < 0)) {
+                out.landX = log.cueLandX; out.landY = log.cueLandY
+            }
             if (out.hitId < 0 && log.firstHit >= 0) {
                 out.hitId = log.firstHit
                 out.hitX = log.hitX; out.hitY = log.hitY
@@ -77,7 +83,12 @@ object Predictor {
                 ox = o.x; oy = o.y
                 out.addObj(ox, oy)
             }
-            if (!c.onTable) { out.scratch = true; out.addCue(lx, ly, false); break }
+            if (!c.onTable) {
+                // Only show a scratch (or a drop into the gap) if it happens within the part of the
+                // path the guide shows; otherwise the guide would draw a long line to where it ends up.
+                if (out.hitId < 0 || after < cueAfter) { out.scratch = true; out.addCue(lx, ly, false) }
+                break
+            }
             val d = hypot(c.x - lx, c.y - ly)
             if (d >= 0.006 || (c.z > 0) != out.cueAir[out.cueN - 1]) {
                 val doneCue = out.hitId >= 0 && after >= cueAfter

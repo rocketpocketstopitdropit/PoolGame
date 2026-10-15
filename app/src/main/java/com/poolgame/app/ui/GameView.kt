@@ -1169,6 +1169,14 @@ class GameView(
             guide.color = 0xE0FF5050.toInt(); guide.strokeWidth = 2 * dp
             canvas.drawCircle(sx(pr.cueX[pr.cueN - 1]), sy(pr.cueY[pr.cueN - 1]), rpx * 1.3f, guide)
         }
+        // Jump shots: where the cue ball first comes down. It slides smoothly as you add power.
+        if (!pr.landX.isNaN()) {
+            val lx = sx(pr.landX); val ly = sy(pr.landY)
+            guide.color = 0xF0FFD54A.toInt(); guide.strokeWidth = 2 * dp
+            canvas.drawCircle(lx, ly, rpx, guide)
+            paint.style = Paint.Style.FILL; paint.shader = null; paint.color = 0xF0FFD54A.toInt()
+            canvas.drawCircle(lx, ly, 2.2f * dp, paint)
+        }
     }
 
     private fun drawCueStick(canvas: Canvas, cx: Float, cy: Float) {
@@ -1814,9 +1822,7 @@ class GameView(
     private fun onMove(id: Int, x: Float, y: Float, t: Long) {
         if (phase != Phase.HUMAN || id !in ptrMode.indices) return
         when (ptrMode[id]) {
-            // Power moves in whole percents, so a trembling finger doesn't make the guide flicker,
-            // and the shot is exactly the one the guide showed.
-            Touch.POWER -> power = Math.round(((y - ptrStartY[id]) / (powerRect.height() * 0.9f)).coerceIn(0f, 1f) * 100f) / 100f
+            Touch.POWER -> power = ((y - ptrStartY[id]) / (powerRect.height() * 0.9f)).coerceIn(0f, 1f)
             Touch.SPIN -> setSpin(x, y)
             Touch.ELEV -> setCueAngle(y)
             Touch.WHEEL -> {

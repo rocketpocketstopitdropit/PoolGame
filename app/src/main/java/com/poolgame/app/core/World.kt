@@ -47,12 +47,16 @@ class ShotLog {
     var cueAirTouched = 0
     /** Cut angle of the cue ball's first contact, in degrees (0 = straight on), or NaN. */
     var cutDeg = Double.NaN
+    /** Where the cue ball first came down after a jump, or NaN. */
+    var cueLandX = Double.NaN
+    var cueLandY = Double.NaN
 
     fun reset() {
         firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0; jumpedOff.clear()
         fell.clear()
         pocketIn.fill(-1)
         touched.fill(0); cueLanded = false; cueAirTouched = 0; cutDeg = Double.NaN
+        cueLandX = Double.NaN; cueLandY = Double.NaN
     }
 
     fun copyFrom(o: ShotLog) {
@@ -63,6 +67,7 @@ class ShotLog {
         fell.clear(); fell.addAll(o.fell)
         o.pocketIn.copyInto(pocketIn)
         o.touched.copyInto(touched); cueLanded = o.cueLanded; cueAirTouched = o.cueAirTouched; cutDeg = o.cutDeg
+        cueLandX = o.cueLandX; cueLandY = o.cueLandY
     }
 }
 
@@ -201,13 +206,23 @@ class World {
 
     /** Ballistic flight after a jump; bounces on the slate until it settles (over the gap there is no slate). */
     private fun flight(b: Ball, dt: Double) {
+        val z0 = b.z; val vz0 = b.vz
         b.z += b.vz * dt
         b.vz -= P.G * dt
         if (b.z <= 0.0 && b.vz < 0.0 && !Table.overGap(b.x)) {
-            if (b.id == 0 && Table.gap && b.x > Table.GAP_X1) log.cueLanded = true
-            b.z = 0.0
-            val impact = -b.vz
-            b.vz = if (impact > 0.25) impact * 0.45 else 0.0
+            // Find when in this step it actually touched down, and bounce from that moment, so the
+            // landing spot moves smoothly with the stroke instead of in step-sized jumps.
+            val frac = if (z0 > 0.0 && z0 - b.z > 1e-12) (z0 / (z0 - b.z)).coerceIn(0.0, 1.0) else 1.0
+            val impact = (-(vz0 - P.G * dt * frac)).coerceAtLeast(0.0)
+            if (b.id == 0) {
+                val lx = b.x + b.vx * dt * frac; val ly = b.y + b.vy * dt * frac
+                if (log.cueLandX.isNaN()) { log.cueLandX = lx; log.cueLandY = ly }
+                if (Table.gap && lx > Table.GAP_X1) log.cueLanded = true
+            }
+            val up = if (impact > 0.25) impact * 0.45 else 0.0
+            val rest = dt * (1 - frac)
+            if (up > 0.0) { b.z = up * rest; b.vz = up - P.G * rest } else { b.z = 0.0; b.vz = 0.0 }
+            if (b.z < 0.0) b.z = 0.0
             b.vx *= 0.96; b.vy *= 0.96
             listener?.onCushion(impact * 0.6)
         }
