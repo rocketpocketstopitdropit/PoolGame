@@ -230,8 +230,8 @@ class World {
                 val hc = b.z + r                           // centre height above the cloth
                 if (hc < 0.0) {
                     // Below the cloth: the cut face of the slate.
-                    if (slabLeft && b.x < edge + r) { b.x = edge + r; if (b.vx < 0) b.vx = -0.3 * b.vx }
-                    if (!slabLeft && b.x > edge - r) { b.x = edge - r; if (b.vx > 0) b.vx = -0.3 * b.vx }
+                    if (slabLeft && b.x < edge + r) { b.x = edge + r; if (b.vx < 0) { b.vx = -0.3 * b.vx; b.vy *= 0.3 } }
+                    if (!slabLeft && b.x > edge - r) { b.x = edge - r; if (b.vx > 0) { b.vx = -0.3 * b.vx; b.vy *= 0.3 } }
                     continue
                 }
                 val dx = b.x - edge
@@ -244,8 +244,12 @@ class World {
                 val vn = b.vx * nx + b.vz * nz
                 if (vn < 0) {
                     val e = if (-vn < 0.6) 0.0 else 0.35   // slow contact rolls over the lip, a hard one bounces
+                    val vx0 = b.vx
                     b.vx -= (1 + e) * vn * nx
                     b.vz -= (1 + e) * vn * nz
+                    // Friction with the edge slows the ball's sideways roll as much as its forward speed,
+                    // so it keeps its heading (seen from above) instead of veering along the edge.
+                    if (abs(vx0) > 1e-6) b.vy *= (abs(b.vx) / abs(vx0)).coerceAtMost(1.0)
                     if (-vn > 0.6) listener?.onCushion(-vn * 0.5)
                 }
             }

@@ -268,6 +268,18 @@ class EngineTest {
         assertTrue(0 in v.log.fell)
     }
 
+    @Test fun clippingTheLipDoesntSwerveTheBall() {
+        Table.useGap()
+        val w = World(); w.clearAll()
+        val b = w.balls[0]
+        b.x = Table.GAP_X1 - 0.008; b.y = 0.6; b.z = 0.004; b.vx = 1.2; b.vy = 0.6; b.vz = -0.3
+        b.onTable = true; b.moving = true
+        val before = kotlin.math.atan2(b.vy, b.vx)
+        repeat(40) { w.step(0.002) }                         // just past the lip
+        val after = kotlin.math.atan2(b.vy, b.vx)
+        assertTrue("heading changed ${Math.toDegrees(after - before)}°", kotlin.math.abs(after - before) < Math.toRadians(5.0))
+    }
+
     @Test fun bankJobPenFollowsTheCueBall() {
         val bank = Trick.LEVELS.first { it.name == "Bank job" }
         assertEquals(2, bank.zones.size)
