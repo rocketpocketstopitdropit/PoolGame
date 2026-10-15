@@ -23,6 +23,7 @@ class GameActivity : Activity(), GameView.Host {
         const val EXTRA_CLOCK = "clock"
         const val EXTRA_PRACTICE = "practice"
         const val EXTRA_RESUME = "resume"
+        const val EXTRA_TRICK_LEVEL = "trickLevel"
 
         const val PREFS = "pool"
         const val KEY_SAVED = "savedGame"
@@ -33,6 +34,7 @@ class GameActivity : Activity(), GameView.Host {
             val s = GameSave.readSettings(text) ?: return null
             val name = Stats.modeName(s.mode)
             return when {
+                s.practice && s.mode == GameMode.TRICK -> "Trick-shot practice"
                 s.practice -> "Practice"
                 s.vsCpu -> "$name vs CPU level ${s.level}"
                 else -> "$name pass & play"
@@ -71,7 +73,7 @@ class GameActivity : Activity(), GameView.Host {
         } else {
             prefs.edit().remove(KEY_SAVED).apply()   // starting fresh replaces any paused game
         }
-        if (practice) { mode = GameMode.EIGHT_BALL; vsCpu = false; clock = 0 }
+        if (practice) { if (mode != GameMode.TRICK) mode = GameMode.EIGHT_BALL; vsCpu = false; clock = 0 }
         if (mode == GameMode.TRICK) call = CallMode.OFF
 
         game = GameView(
@@ -79,6 +81,7 @@ class GameActivity : Activity(), GameView.Host {
             intent.getBooleanExtra(EXTRA_SOUND, prefs.getBoolean("sound", true)),
             clock,
             practice,
+            intent.getIntExtra(EXTRA_TRICK_LEVEL, 0),
             prefs.getInt("aimSens", 5),
             prefs.getBoolean("prediction", true),
             resume,

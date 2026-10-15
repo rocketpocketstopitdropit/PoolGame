@@ -190,9 +190,21 @@ class BallRenderer {
         canvas.restore()
     }
 
-    fun drawShadow(canvas: Canvas, sx: Float, sy: Float) {
+    private val shadowPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+
+    /** The ball's shadow on the cloth; [scale] and [alpha] let a ball in the air cast a smaller, fainter one. */
+    fun drawShadow(canvas: Canvas, sx: Float, sy: Float, scale: Float = 1f, alpha: Int = 255) {
         val sh = shadow ?: return
-        canvas.drawBitmap(sh, sx - size + radius * 0.22f, sy - size + radius * 0.32f, null)
+        if (scale == 1f && alpha == 255) {
+            canvas.drawBitmap(sh, sx - size + radius * 0.22f, sy - size + radius * 0.32f, null)
+            return
+        }
+        shadowPaint.alpha = alpha
+        canvas.save()
+        canvas.translate(sx + radius * 0.22f, sy + radius * 0.32f)
+        canvas.scale(scale, scale)
+        canvas.drawBitmap(sh, -size, -size, shadowPaint)
+        canvas.restore()
     }
 
     // Unit-circle shading laid over a flat icon to make it look like a lit ball.

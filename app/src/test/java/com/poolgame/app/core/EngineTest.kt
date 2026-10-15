@@ -250,6 +250,59 @@ class EngineTest {
         assertEquals(Table.pockets.size - 1, w.log.pocketIn[3])
     }
 
+    @Test fun ballComingDownJustShortCatchesTheLip() {
+        Table.useGap()
+        val w = World(); w.clearAll()
+        val b = w.balls[0]
+        // Centre a few millimetres short of the far edge, low and moving forward: it hits the lip and
+        // carries onto the far table instead of dropping straight through.
+        b.x = Table.GAP_X1 - 0.008; b.y = 0.6; b.z = 0.004; b.vx = 1.2; b.vz = -0.3; b.onTable = true; b.moving = true
+        w.simulate()
+        assertTrue("fell through", 0 !in w.log.fell)
+        assertTrue(w.balls[0].x > Table.GAP_X1)
+        // Well short, it drops into the gap (and can't pass through the cut face below the lip).
+        val v = World(); v.clearAll()
+        val c = v.balls[0]
+        c.x = Table.GAP_X1 - 0.05; c.y = 0.6; c.z = 0.0; c.vx = 0.6; c.vz = -0.2; c.onTable = true; c.moving = true
+        v.simulate()
+        assertTrue(0 in v.log.fell)
+    }
+
+    @Test fun bankJobPenFollowsTheCueBall() {
+        val bank = Trick.LEVELS.first { it.name == "Bank job" }
+        assertEquals(2, bank.zones.size)
+        assertFalse(bank.farCorners)
+        Table.useGap(bank.holes, bank.farCorners)
+        assertEquals(3, Table.pockets.size)                  // two near corners and the hole
+        val w = World(); w.clearAll()
+        for ((id, x, y) in bank.balls) w.put(id, x, y)
+        val pen = bank.pens[1]
+        val z = bank.zones[1]
+        assertTrue(Trick.place(bank, w, (z[0] + z[2]) / 2, (z[1] + z[3]) / 2))
+        for ((id, x, y) in pen) { assertEquals(x, w.balls[id].x, 1e-9); assertEquals(y, w.balls[id].y, 1e-9) }
+        assertFalse(Trick.place(bank, w, 0.2, P.W / 2))     // outside both pens
+    }
+
+    @Test fun bullseyeWallHasNoGapsToRollThrough() {
+        val bull = Trick.LEVELS.first { it.name == "Bullseye" }
+        val ring = bull.balls.filter { it.first != 1 }.sortedBy { it.third }
+        for (k in 1 until ring.size) {
+            val d = kotlin.math.hypot(ring[k].second - ring[k - 1].second, ring[k].third - ring[k - 1].third)
+            assertTrue("gap between ${ring[k - 1].first} and ${ring[k].first}", d - 2 * P.R < 2 * P.R)
+        }
+    }
+
+    @Test fun trickPracticeJudgesAndResets() {
+        val m = Match(GameMode.TRICK, arrayOf("You", "You")); m.rack(Random(1), 0)
+        m.trick.level = 0; m.setupTrickLevel()
+        m.shoot(0.0, 1.5, 0.0, 0.0); m.world.simulate()
+        val out = m.resolveTrickPractice()
+        assertFalse(out.made); assertTrue(m.trick.resetPending)
+        m.prepareTurn()
+        assertTrue(m.world.balls[0].onTable && m.ballInHand)
+        assertEquals(-1, m.winner)
+    }
+
     private fun lv(i: Int) = Trick.LEVELS[i]
     private fun log(first: Int, potted: List<Int>, init: ShotLog.() -> Unit = {}) = ShotLog().apply {
         firstHit = first; pocketed.addAll(potted); init()
@@ -290,7 +343,7 @@ class EngineTest {
             m.trick.level = li; m.setupTrickLevel()
             val ok = Trick.HINTS[li].count { h ->
                 val w = World(); w.copyFrom(m.world)
-                w.balls[0].x = h[0]; w.balls[0].y = h[1]
+                if (!Trick.place(Trick.LEVELS[li], w, h[0], h[1])) return@count false
                 w.strike(h[2], h[3], h[4], h[5], h[6]); w.simulate()
                 Trick.judge(Trick.LEVELS[li], w.log).made
             }
@@ -304,7 +357,8 @@ class EngineTest {
         if (make) {
             val lvl = Trick.LEVELS[m.trick.level]
             val h = Trick.HINTS[m.trick.level].first { h ->
-                val w = World(); w.copyFrom(m.world); w.balls[0].x = h[0]; w.balls[0].y = h[1]
+                val w = World(); w.copyFrom(m.world)
+                if (!Trick.place(lvl, w, h[0], h[1])) return@first false
                 w.strike(h[2], h[3], h[4], h[5], h[6]); w.simulate()
                 Trick.judge(lvl, w.log).made
             }
@@ -332,7 +386,7 @@ class EngineTest {
 
     @Test fun bonusBallTakesAnAttemptOffAndTiesGoToTheRunner() {
         val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.rack(Random(1), 0)
-        m.trick.level = 5; m.setupTrickLevel()                // bank job: four guard balls, bonus possible
+        m.trick.level = 5; m.setupTrickLevel()                // bank job: guard rows, bonus possible
         fun fake(potted: List<Int>): ShotOutcome {
             m.prepareTurn()
             m.world.log.reset()

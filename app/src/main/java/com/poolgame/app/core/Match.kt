@@ -177,11 +177,16 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     }
 
     fun canPlaceCue(x: Double, y: Double): Boolean {
+        if (mode == GameMode.TRICK) {
+            val lv = Trick.LEVELS[trick.level]
+            return if (lv.zones.isEmpty()) x <= Table.GAP_X0 - 0.61 * P.R && world.isFree(x, y, 0) else Trick.zoneAt(lv, x, y) >= 0
+        }
         if (kitchenOnly && x > P.HEAD_X) return false
         return world.isFree(x, y, 0)
     }
 
     fun placeCue(x: Double, y: Double): Boolean {
+        if (mode == GameMode.TRICK) return Trick.place(Trick.LEVELS[trick.level], world, x, y)
         if (!canPlaceCue(x, y)) return false
         val c = world.balls[0]
         c.x = x; c.y = y; c.onTable = true; c.stop()
@@ -369,7 +374,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     }
 
     /** The table for the current level (some levels have a hole cut in the cloth). */
-    fun applyTrickLayout() { Table.useGap(Trick.LEVELS[trick.level].holes) }
+    fun applyTrickLayout() { val lv = Trick.LEVELS[trick.level]; Table.useGap(lv.holes, lv.farCorners) }
 
     /** Puts the balls where the current level has them, with the cue ball in hand in the break area. */
     fun setupTrickLevel() {
@@ -391,6 +396,21 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     /** Trick shots: after each attempt the balls go back to the level's layout at the start of the next turn. */
     fun prepareTurn() {
         if (mode == GameMode.TRICK && trick.resetPending && winner < 0) setupTrickLevel()
+    }
+
+    /** Trick-shot practice: judge the attempt, nothing else (the layout resets for the next one). */
+    fun resolveTrickPractice(): ShotOutcome {
+        val log = world.log
+        val j = Trick.judge(Trick.LEVELS[trick.level], log)
+        val cueLost = 0 in log.pocketed || 0 in log.jumpedOff
+        trick.resetPending = true
+        ballInHand = true; kitchenOnly = true
+        message = when {
+            !j.made -> "Missed: ${j.why}"
+            j.bonusText.isNotEmpty() -> "Made it! ${j.bonusText}"
+            else -> "Made it!"
+        }
+        return ShotOutcome(!j.made, j.why, false, -1, message, !j.made && !cueLost && log.firstHit < 0, j.made)
     }
 
     private fun resolveTrick(): ShotOutcome {

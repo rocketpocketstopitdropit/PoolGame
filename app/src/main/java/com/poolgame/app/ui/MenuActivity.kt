@@ -29,6 +29,8 @@ class MenuActivity : Activity() {
     private var level = 5
     private var sound = true
     private var practice = false
+    private var practiceTrick = false      // practice: a trick shot instead of the free table
+    private var practiceLevel = 0
     private var aimSens = 5
     private var callMode = 0
     private var prediction = true
@@ -61,6 +63,8 @@ class MenuActivity : Activity() {
         level = prefs.getInt("level", 5).coerceIn(1, 10)
         sound = prefs.getBoolean("sound", true)
         practice = prefs.getBoolean("practice", false)
+        practiceTrick = prefs.getBoolean("practiceTrick", false)
+        practiceLevel = prefs.getInt("practiceLevel", 0).coerceIn(0, com.poolgame.app.core.Trick.LEVELS.size - 1)
         aimSens = prefs.getInt("aimSens", 5).coerceIn(1, 10)
         callMode = prefs.getInt("callMode", 0).coerceIn(0, 2)
         prediction = prefs.getBoolean("prediction", true)
@@ -95,6 +99,7 @@ class MenuActivity : Activity() {
             .putInt("level", level).putBoolean("sound", sound)
             .putBoolean("clockOn", clockOn).putInt("clockSec", clockSec)
             .putBoolean("practice", practice)
+            .putBoolean("practiceTrick", practiceTrick).putInt("practiceLevel", practiceLevel)
             .putInt("aimSens", aimSens).putInt("callMode", callMode).putBoolean("prediction", prediction).apply()
         refreshRecord()
     }
@@ -144,7 +149,51 @@ class MenuActivity : Activity() {
             "Jump the cue ball across the gap and sink the 1. Five levels, taking turns with the computer " +
             "or a friend: whoever makes it in fewer shots wins the level, and most levels wins the match.",
             12.5f, 0xFF8A97A1.toInt()).apply { setPadding(0, dpi(8f), 0, 0); setLineSpacing(0f, 1.15f) }
+        // Practice: the free table, or one trick shot (pick which).
+        val practiceBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val levelBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        practiceBlock.addView(section("PRACTICE"))
+        practiceBlock.addView(segmented(listOf("Free table", "Trick shot"), if (practiceTrick) 1 else 0) {
+            practiceTrick = it == 1
+            levelBlock.visibility = if (practiceTrick) View.VISIBLE else View.GONE
+            save()
+        })
+        val names = com.poolgame.app.core.Trick.LEVELS.map { it.name }
+        levelBlock.addView(section("WHICH TRICK SHOT"))
+        // Two rows of three; one selection across both.
+        val rows = ArrayList<LinearLayout>()
+        val cells = ArrayList<TextView>()
+        fun paintLevels() {
+            cells.forEachIndexed { i, v ->
+                v.background = if (i == practiceLevel) rounded(0xFF2F8F5B.toInt(), dp(9f)) else null
+                v.setTextColor(if (i == practiceLevel) Color.WHITE else 0xFF9AA7B1.toInt())
+            }
+        }
+        for (r in 0 until (names.size + 2) / 3) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                background = rounded(0xFF0E1215.toInt(), dp(12f))
+                setPadding(dpi(4f), dpi(4f), dpi(4f), dpi(4f))
+            }
+            for (c in 0 until 3) {
+                val i = r * 3 + c
+                if (i >= names.size) break
+                val v = label(names[i], 14f, Color.WHITE, true).apply {
+                    gravity = Gravity.CENTER
+                    setOnClickListener { practiceLevel = i; paintLevels(); save() }
+                }
+                cells += v
+                row.addView(v, LinearLayout.LayoutParams(0, dpi(40f), 1f))
+            }
+            rows += row
+            levelBlock.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (r > 0) topMargin = dpi(6f) })
+        }
+        paintLevels()
+        levelBlock.visibility = if (practiceTrick) View.VISIBLE else View.GONE
+        practiceBlock.addView(levelBlock)
+
         fun refreshMode() {
+            practiceBlock.visibility = if (practice) View.VISIBLE else View.GONE
             matchBlockRef?.visibility = if (practice) View.GONE else View.VISIBLE
             callBlockRef?.visibility = if (mode == GameMode.TRICK) View.GONE else View.VISIBLE
             trickHelp.visibility = if (mode == GameMode.TRICK && !practice) View.VISIBLE else View.GONE
@@ -158,6 +207,7 @@ class MenuActivity : Activity() {
         }
         card.addView(modeRow)
         card.addView(trickHelp)
+        card.addView(practiceBlock)
 
         // Everything below only applies to real games, not practice.
         val matchBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -438,7 +488,12 @@ class MenuActivity : Activity() {
     private fun startGame() {
         save()
         startActivity(Intent(this, GameActivity::class.java).apply {
-            putExtra(GameActivity.EXTRA_MODE, mode.name)
+            putExtra(GameActivity.EXTRA_MODE, when {
+                practice && practiceTrick -> GameMode.TRICK.name
+                practice -> GameMode.EIGHT_BALL.name
+                else -> mode.name
+            })
+            putExtra(GameActivity.EXTRA_TRICK_LEVEL, practiceLevel)
             putExtra(GameActivity.EXTRA_VS_CPU, vsCpu)
             putExtra(GameActivity.EXTRA_LEVEL, level)
             putExtra(GameActivity.EXTRA_SOUND, sound)

@@ -31,6 +31,8 @@
   .seg button { flex: 1; height: 42px; border: 0; border-radius: 9px; background: transparent; color: #9AA7B1;
     font: bold 15px "Arial Narrow", Arial, sans-serif; }
   .seg button.on { background: #2F8F5B; color: #fff; }
+  .seg.wrap { flex-wrap: wrap; }
+  .seg.wrap button { flex: 1 1 30%; }
   .val { color: #fff; font: bold 15px "Arial Narrow", Arial, sans-serif; margin: 2px 0; }
   input[type=range] { width: 100%; accent-color: #F2C94C; height: 32px; }
   input[type=range]:disabled { opacity: 0.35; }
@@ -69,6 +71,14 @@
       far end. Jump the cue ball across the gap and sink the 1. Five levels, taking turns with the computer or a friend:
       whoever makes it in fewer shots wins the level, and most levels wins the match.</p>
 
+    <div id="practiceOpts" style="display:none">
+      <div class="sec">PRACTICE</div>
+      <div class="seg" id="seg-ptype"><button>Free table</button><button>Trick shot</button></div>
+      <div id="plevelBlock">
+        <div class="sec">WHICH TRICK SHOT</div>
+        <div class="seg wrap" id="seg-plevel"></div>
+      </div>
+    </div>
     <div id="matchOpts">
       <div class="sec">OPPONENT</div>
       <div class="seg" id="seg-opp"><button>Computer</button><button>Pass &amp; Play</button></div>

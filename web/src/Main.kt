@@ -32,6 +32,8 @@ class App : GameHost {
     private var aimSens = Store.getInt("aimSens", 5).coerceIn(1, 10)
     private var callIdx = Store.getInt("callMode", 0).coerceIn(0, 2)
     private var prediction = Store.getBool("prediction", true)
+    private var practiceTrick = Store.getBool("practiceTrick", false)
+    private var practiceLevel = Store.getInt("practiceLevel", 0).coerceIn(0, com.poolgame.app.core.Trick.LEVELS.size - 1)
 
     // What the current game is (may differ from the menu when resuming a saved game)
     private var playingCpu = true
@@ -125,6 +127,14 @@ class App : GameHost {
         segment("seg-mode") { modeIdx = when (it) { 2 -> 3; 3 -> 2; else -> it }; save(); refreshMenu() }
         segment("seg-opp") { vsCpu = it == 0; save(); refreshMenu() }
         segment("seg-call") { callIdx = it; save(); refreshMenu() }
+        segment("seg-ptype") { practiceTrick = it == 1; save(); refreshMenu() }
+        val pl = el("seg-plevel")
+        for ((i, lv) in com.poolgame.app.core.Trick.LEVELS.withIndex()) {
+            val b = document.createElement("button")
+            b.textContent = lv.name
+            b.addEventListener("click", { practiceLevel = i; save(); refreshMenu() })
+            pl.appendChild(b)
+        }
         el("skill").addEventListener("input", { level = (el("skill").value as String).toInt(); save(); refreshMenu() })
         el("clockOn").addEventListener("change", { clockOn = el("clockOn").checked as Boolean; save(); refreshMenu() })
         el("clockSec").addEventListener("input", { clockSec = (el("clockSec").value as String).toInt(); save(); refreshMenu() })
@@ -230,6 +240,10 @@ class App : GameHost {
         setSegment("seg-opp", if (vsCpu) 0 else 1)
         setSegment("seg-call", callIdx)
         el("matchOpts").style.display = if (modeIdx == 2) "none" else "block"
+        el("practiceOpts").style.display = if (modeIdx == 2) "block" else "none"
+        setSegment("seg-ptype", if (practiceTrick) 1 else 0)
+        el("plevelBlock").style.display = if (practiceTrick) "block" else "none"
+        setSegment("seg-plevel", practiceLevel)
         el("callBlock").style.display = if (modeIdx == 3) "none" else "block"
         el("trickHelp").style.display = if (modeIdx == 3) "block" else "none"
         el("skillBlock").style.display = if (vsCpu) "block" else "none"
@@ -262,12 +276,14 @@ class App : GameHost {
         Store.set("level", level.toString()); Store.set("clockOn", clockOn.toString())
         Store.set("clockSec", clockSec.toString()); Store.set("sound", sound.toString())
         Store.set("aimSens", aimSens.toString()); Store.set("callMode", callIdx.toString()); Store.set("prediction", prediction.toString())
+        Store.set("practiceTrick", practiceTrick.toString()); Store.set("practiceLevel", practiceLevel.toString())
     }
 
     private fun savedSummary(): String? {
         val s = GameSave.readSettings(Store.get("savedGame", "")) ?: return null
         val name = nameOf(s.mode)
         return when {
+            s.practice && s.mode == GameMode.TRICK -> "Trick-shot practice"
             s.practice -> "Practice"
             s.vsCpu -> "$name vs CPU level ${s.level}"
             else -> "$name pass & play"
@@ -281,7 +297,7 @@ class App : GameHost {
 
     private fun startGame(resume: Boolean) {
         var practice = modeIdx == 2
-        var mode = menuMode()
+        var mode = if (practice) (if (practiceTrick) GameMode.TRICK else GameMode.EIGHT_BALL) else menuMode()
         var cpu = vsCpu && !practice
         var lvl = level
         var clock = if (clockOn && !practice) clockSec else 0
@@ -301,7 +317,7 @@ class App : GameHost {
         playingCpu = cpu; playingLevel = lvl; playingMode = mode; playingPractice = practice
         el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
         el("restart").textContent = if (mode == GameMode.TRICK) "Restart match" else "Restart rack"
-        game = Game(mode, cpu, lvl, clock, practice, aimSens, prediction, text, call, sounds, this)
+        game = Game(mode, cpu, lvl, clock, practice, practiceLevel, aimSens, prediction, text, call, sounds, this)
         el("menu").style.display = "none"
         canvas.style.display = "block"
         slots.clear()

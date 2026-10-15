@@ -85,10 +85,8 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         val base = m.world
         val lv = Trick.LEVELS[m.trick.level]
         fun run(s: DoubleArray): Boolean {
-            if (s[0] > Table.GAP_X0 || !base.isFree(s[0], s[1], 0)) return false
             w.copyFrom(base)
-            val c = w.balls[0]
-            c.x = s[0]; c.y = s[1]; c.onTable = true; c.stop()
+            if (!Trick.place(lv, w, s[0], s[1])) return false
             w.strike(s[2], s[3].coerceIn(0.2, P.MAX_CUE_SPEED), s[4], s[5], s[6])
             w.simulate()
             simulations++
@@ -122,15 +120,16 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             val b0 = best
             val s = if (b0 != null && rng.nextDouble() < 0.5) {
                 val t = b0.copyOf()
-                t[0] = (t[0] + 0.01 * gauss()).coerceIn(P.R, Table.GAP_X0 - P.R)
-                t[1] = (t[1] + 0.01 * gauss()).coerceIn(P.R, P.W - P.R)
+                val q = Trick.clampPlacement(lv, t[0] + 0.01 * gauss(), t[1] + 0.01 * gauss())
+                t[0] = q[0]; t[1] = q[1]
                 t[2] += toRad(0.3) * gauss()
                 t[3] = (t[3] * (1 + 0.02 * gauss())).coerceIn(1.0, P.MAX_CUE_SPEED)
                 t[6] = (t[6] + toRad(1.5) * gauss()).coerceIn(0.0, toRad(P.MAX_ELEVATION))
                 t
             } else {
-                val cx = rng.nextDouble(0.06, Table.GAP_X0 - 0.03)
-                val cy = rng.nextDouble(0.06, P.W - 0.06)
+                val z = if (lv.zones.isEmpty()) doubleArrayOf(0.06, 0.06, Table.GAP_X0 - 0.03, P.W - 0.06) else lv.zones[rng.nextInt(lv.zones.size)]
+                val cx = rng.nextDouble(z[0], z[2])
+                val cy = rng.nextDouble(z[1], z[3])
                 doubleArrayOf(
                     cx, cy,
                     atan2(tb.y - cy, tb.x - cx) + toRad(rng.nextDouble(-35.0, 35.0)),

@@ -121,8 +121,8 @@ object Table {
      * at the far end. The edges facing the gap have no cushion: a ball that rolls off falls.
      * [holes] are cups cut into the far section's cloth (x, y), for levels that have one.
      */
-    fun useGap(holes: List<DoubleArray> = emptyList()) {
-        val key = holes.joinToString(";") { "${it[0]},${it[1]}" }
+    fun useGap(holes: List<DoubleArray> = emptyList(), farCorners: Boolean = true) {
+        val key = holes.joinToString(";") { "${it[0]},${it[1]}" } + "|$farCorners"
         if (gap && key == holeKey) return
         val L = P.L; val W = P.W
         val s = ArrayList<Seg>()
@@ -132,9 +132,16 @@ object Table {
             s += Seg(GAP_X1, y, L - CORNER, y)
         }
         s += Seg(0.0, CORNER, 0.0, W - CORNER)
-        s += Seg(L, CORNER, L, W - CORNER)
-        // Corner pockets: near section 0..1, far end 2..3; then any holes.
-        for ((cx0, cy0) in listOf(0.0 to 0.0, 0.0 to W, L to 0.0, L to W)) corner(s, p, cx0, cy0)
+        // Corner pockets: near section 0..1, far end 2..3 (unless the level fills them in); then any holes.
+        for ((cx0, cy0) in listOf(0.0 to 0.0, 0.0 to W)) corner(s, p, cx0, cy0)
+        if (farCorners) {
+            s += Seg(L, CORNER, L, W - CORNER)
+            for ((cx0, cy0) in listOf(L to 0.0, L to W)) corner(s, p, cx0, cy0)
+        } else {
+            // No far pockets: the cushions run right into the corners.
+            for (y in doubleArrayOf(0.0, W)) s += Seg(L - CORNER, y, L, y)
+            s += Seg(L, 0.0, L, W)
+        }
         for (h in holes) {
             val r = HOLE_R
             p += Pocket(h[0], h[1], r, h[0], h[1], false, doubleArrayOf(h[0] - r, h[1], h[0] + r, h[1]), r - P.R, hole = true)

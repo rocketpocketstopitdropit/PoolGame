@@ -170,9 +170,13 @@ class Balls {
         ctx.restore()
     }
 
-    fun drawShadow(ctx: Ctx2D, sx: Double, sy: Double) {
-        val sz = shadowSize / dpr
+    /** The ball's shadow on the cloth; [scale] and [alpha] let a ball in the air cast a smaller, fainter one. */
+    fun drawShadow(ctx: Ctx2D, sx: Double, sy: Double, scale: Double = 1.0, alpha: Double = 1.0) {
+        val sz = shadowSize / dpr * scale
+        val a0 = ctx.globalAlpha
+        if (alpha < 1.0) ctx.globalAlpha = a0 * alpha
         ctx.drawImage(shadow, sx - sz / 2 + radius * 0.22, sy - sz / 2 + radius * 0.32, sz, sz)
+        ctx.globalAlpha = a0
     }
 
     /** Flat icon for the HUD. */

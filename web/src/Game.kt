@@ -42,7 +42,8 @@ class Game(
     private val vsCpu: Boolean,
     private val cpuLevel: Int,
     private val shotClock: Int,
-    private val practice: Boolean,
+    private val practiceMode: Boolean,   // practice: the free table, or (with GameMode.TRICK) one trick shot
+    private val trickLevel: Int,
     aimSensitivity: Int,
     var showPrediction: Boolean,
     resume: String?,
@@ -54,7 +55,18 @@ class Game(
     private enum class Rps { PICK, SHAKE, REVEAL }
     private enum class Touch { NONE, AIM, POWER, SPIN, ELEV, WHEEL, MOVE_CUE, BUTTON, PENDING, MOVE_BALL }
 
-    private val names = if (vsCpu) arrayOf("You", "CPU") else arrayOf("Player 1", "Player 2")
+    /** Free-table practice: no rules, move any ball. */
+    private val practice = practiceMode && mode != GameMode.TRICK
+    /** Practising one trick shot on your own: unlimited attempts, the table resets after each. */
+    private val trickPractice = practiceMode && mode == GameMode.TRICK
+    private var tpTries = 0
+    private var tpMade = 0
+
+    private val names = when {
+        vsCpu -> arrayOf("You", "CPU")
+        trickPractice -> arrayOf("You", "You")
+        else -> arrayOf("Player 1", "Player 2")
+    }
     private val rng = Random(now().toLong())
     private var match = Match(mode, names)
     private var breaker = 0
@@ -207,6 +219,12 @@ class Game(
             match.message = "Practice · hold any ball to move it"
             practiceSnapshot = null
         }
+        if (trickPractice) {
+            match.trick.level = trickLevel.coerceIn(0, Trick.LEVELS.size - 1)
+            match.setupTrickLevel()
+            match.message = "Practice · ${Trick.LEVELS[match.trick.level].name}"
+            tpTries = 0; tpMade = 0
+        }
         sinks.clear()
         potN = 0
         spinX = 0.0; spinY = 0.0; power = 0.0; elevDeg = 0.0
@@ -214,7 +232,8 @@ class Game(
         bannerLevel = -1; bannerT = 0.0
         rpsRounds = 0
         message = match.message
-        if (practice) startTurn() else startRps(false)
+        // Trick shots don't need rock, paper, scissors: who goes first doesn't matter.
+        if (practice || trick) startTurn() else startRps(false)
     }
 
     // ------------------------------------------------------------------ rock, paper, scissors
@@ -255,9 +274,9 @@ class Game(
 
     fun restart() = newGame(breaker)
 
-    fun isPractice() = practice
+    fun isPractice() = practiceMode
 
-    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practice, breaker, match.callMode)
+    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practiceMode, breaker, match.callMode)
 
     private fun resumeGame(text: String): Boolean {
         val st = GameSave.readSettings(text) ?: return false
@@ -272,7 +291,11 @@ class Game(
         potN = 0
         spinX = 0.0; spinY = 0.0; power = 0.0; elevDeg = 0.0
         gameOverTitle = ""; recordLine = ""
-        message = if (practice) "Practice · hold any ball to move it" else "Game resumed · " + match.message
+        message = when {
+            practice -> "Practice · hold any ball to move it"
+            trickPractice -> "Practice · ${Trick.LEVELS[match.trick.level].name}"
+            else -> "Game resumed · " + match.message
+        }
         bannerLevel = -1
         startTurn()
         return true
@@ -289,8 +312,9 @@ class Game(
 
     private fun startTurn() {
         match.prepareTurn()
-        if (trick && match.winner < 0 && match.trick.levelNo != bannerLevel) {
-            bannerLevel = match.trick.levelNo
+        val bannerKey = if (trickPractice) match.trick.level else match.trick.levelNo
+        if (trick && match.winner < 0 && bannerKey != bannerLevel) {
+            bannerLevel = bannerKey
             bannerT = 3.2
         }
         if (match.winner >= 0) {
@@ -413,6 +437,23 @@ class Game(
         message = "Shot reset"
     }
 
+    /** Trick-shot practice: go to another level (or reset this one with [delta] = 0). */
+    private fun trickPracticeGo(delta: Int) {
+        if (phase == Phase.CPU_THINK || phase == Phase.CPU_ANIM) return
+        val n = Trick.LEVELS.size
+        generation++
+        if (delta != 0) {
+            match.trick.level = ((match.trick.level + delta) % n + n) % n
+            tpTries = 0; tpMade = 0
+        }
+        match.setupTrickLevel()
+        sinks.clear()
+        potN = 0
+        power = 0.0; elevDeg = 0.0; spinX = 0.0; spinY = 0.0
+        message = "Practice · ${Trick.LEVELS[match.trick.level].name}"
+        startTurn()
+    }
+
     private fun practiceClear() {
         for (id in 1..15) { val b = match.world.balls[id]; b.onTable = false; b.stop() }
         message = "Table cleared · tap a ball in the tray to bring it back"
@@ -491,7 +532,7 @@ class Game(
             }
             Phase.HUMAN -> {
                 checkLongPress()
-                if (!practice && shotClock > 0 && !menuOpen && clockStarted) {
+                if (!practiceMode && shotClock > 0 && !menuOpen && clockStarted) {
                     clockLeft -= dt
                     val secs = ceil(clockLeft).toInt()
                     if (secs in 1..5 && secs != lastBeep) { lastBeep = secs; sfx.beep() }
@@ -508,6 +549,14 @@ class Game(
                     if (practice) {
                         message = if (!match.world.balls[0].onTable) { match.respawnCue(); "Cue ball respotted · hold it to move it" } else ""
                         phase = Phase.HUMAN; power = 0.0
+                    } else if (trickPractice) {
+                        val out = match.resolveTrickPractice()
+                        tpTries++
+                        if (out.made) tpMade++
+                        message = out.message
+                        phase = Phase.PAUSE
+                        pauseT = if (out.made) 1.6 else 1.3
+                        if (out.heckle) window.setTimeout({ sfx.heckle() }, 260)
                     } else {
                         val out = match.resolve()
                         message = out.message
@@ -754,8 +803,15 @@ class Game(
         val humanTurn = phase == Phase.HUMAN
 
         if (humanTurn && match.ballInHand && match.kitchenOnly) {
-            ctx.fillStyle = "rgba(255,255,255,0.13)"
-            ctx.fillRect(sx(0.0), sy(0.0), P.HEAD_X * scale, P.W * scale)
+            val zones = if (trick) Trick.LEVELS[match.trick.level].zones else emptyList()
+            if (zones.isEmpty()) {
+                ctx.fillStyle = "rgba(255,255,255,0.13)"
+                ctx.fillRect(sx(0.0), sy(0.0), P.HEAD_X * scale, P.W * scale)
+            } else {
+                // Start zones: where the cue ball's centre may go (drawn a ball's width bigger).
+                ctx.fillStyle = "rgba(255,255,255,0.2)"
+                for (z in zones) { ctx.roundRect(sx(z[0] - P.R), sy(z[1] - P.R), (z[2] - z[0] + 2 * P.R) * scale, (z[3] - z[1] + 2 * P.R) * scale, rpx); ctx.fill() }
+            }
         }
         if (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) drawGuide(ctx)
 
@@ -767,20 +823,32 @@ class Game(
             cueX = animFromX + (plan.placeX - animFromX) * k
             cueY = animFromY + (plan.placeY - animFromY) * k
         }
+        // Shadows stay on the cloth, right under the ball. A ball in the air casts a smaller, fainter one;
+        // a ball dropping into the gap has no cloth under it, so no shadow.
         for (b in w.balls) if (b.onTable) {
             val bx = if (b.id == 0) cueX else b.x; val by = if (b.id == 0) cueY else b.y
-            val lift = b.z * scale
-            balls.drawShadow(ctx, sx(bx) + lift * 0.4, sy(by) + lift * 0.6)
+            if (b.z < 0.0) continue
+            val h = (b.z / 0.12).coerceIn(0.0, 1.0)
+            balls.drawShadow(ctx, sx(bx), sy(by), 1 - 0.35 * h, 1 - 0.55 * h)
         }
         for (s in sinks) {
             val k = 1 - s.age / 0.35
             balls.draw(ctx, w.balls[s.id], sx(s.x), sy(s.y), 0.55 + 0.45 * k, k.coerceIn(0.0, 1.0))
         }
-        for (b in w.balls) if (b.onTable && b.z <= 0.0) {
+        for (b in w.balls) if (b.onTable && b.z < 0.0) {
+            // Falling into the gap: shrinks as it drops away.
+            balls.draw(ctx, b, sx(b.x), sy(b.y), (1 + b.z * 6).coerceAtLeast(0.45))
+        }
+        for (b in w.balls) if (b.onTable && b.z == 0.0) {
             val bx = if (b.id == 0) cueX else b.x; val by = if (b.id == 0) cueY else b.y
             balls.draw(ctx, b, sx(bx), sy(by))
         }
-        for (b in w.balls) if (b.onTable && b.z > 0.0) balls.draw(ctx, b, sx(b.x), sy(b.y), 1 + b.z * 4)
+        // In the air: the height is exaggerated on screen (the distance is real) so a jump is easy to
+        // see. The ball is drawn lifted toward the top of the screen and bigger, away from its shadow.
+        for (b in w.balls) if (b.onTable && b.z > 0.0) {
+            val lift = b.z * JUMP_LIFT * scale
+            balls.draw(ctx, b, sx(b.x) - lift * 0.25, sy(b.y) - lift, 1 + b.z * JUMP_GROW)
+        }
 
         ctx.setLineDash(noDash)
         if (humanTurn && match.ballInHand) {
@@ -834,8 +902,11 @@ class Game(
         ctx.roundRect(cx - bw / 2, top, bw, bh, 14.0); ctx.stroke()
         ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"
         ctx.font = font(19.0, true); ctx.fillStyle = "#FFF"
-        val head = if (t.suddenDeath) "SUDDEN DEATH · ${lv.name.uppercase()}"
-            else "LEVEL ${t.levelNo + 1} OF ${Trick.LEVELS.size} · ${lv.name.uppercase()}"
+        val head = when {
+            trickPractice -> "PRACTICE · ${lv.name.uppercase()}"
+            t.suddenDeath -> "SUDDEN DEATH · ${lv.name.uppercase()}"
+            else -> "LEVEL ${t.levelNo + 1} OF ${Trick.LEVELS.size} · ${lv.name.uppercase()}"
+        }
         ctx.fillText(ellipsize(ctx, head, bw - 20), cx, top + 27)
         ctx.font = font(13.0, false); ctx.fillStyle = "#CED6DD"
         lines.forEachIndexed { i, l -> ctx.fillText(l, cx, top + 49 + 18.0 * i) }
@@ -982,6 +1053,7 @@ class Game(
         ctx.fillStyle = "#CED6DD"
         for (i in -1..1) { ctx.roundRect(menuBtn.cx - 9, menuBtn.cy + i * 6 - 1.2, 18.0, 2.4, 1.0); ctx.fill() }
         if (practice) { drawPracticeHud(ctx); return }
+        if (trickPractice) { drawTrickPracticeHud(ctx); return }
         drawPlayerCard(ctx, leftCard, 0)
         drawPlayerCard(ctx, rightCard, 1)
         val cardH = leftCard.h
@@ -1016,6 +1088,36 @@ class Game(
             var x = (midL + midR) / 2 - 9 * r * 2.4 / 2 + r
             for (id in 1..9) { balls.icon(ctx, id, x, subY - r * 0.4, r, !match.world.balls[id].onTable); x += r * 2.4 }
         }
+    }
+
+    /** Trick-shot practice: the level and how it's going, with buttons to change level or reset. */
+    private fun drawTrickPracticeHud(ctx: Ctx2D) {
+        ctx.fillStyle = "#1E252B"
+        ctx.roundRect(leftCard, 10.0); ctx.fill()
+        ctx.roundRect(rightCard, 10.0); ctx.fill()
+        val lv = Trick.LEVELS[match.trick.level]
+        ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"
+        ctx.font = font(min(16.0, leftCard.h * 0.32), true); ctx.fillStyle = "#FFF"
+        ctx.fillText(ellipsize(ctx, "PRACTICE · ${lv.name.uppercase()}", leftCard.w - 20), leftCard.l + 12, leftCard.t + leftCard.h * 0.42)
+        ctx.font = font(min(11.0, leftCard.h * 0.22), false); ctx.fillStyle = "#9AA7B1"
+        val sub = if (phase == Phase.HUMAN && match.ballInHand) "Drag the cue ball to place it, then shoot" else message
+        ctx.fillText(ellipsize(ctx, sub, leftCard.w - 20), leftCard.l + 12, leftCard.t + leftCard.h * 0.78)
+        fun button(r: Rect, label: String) {
+            ctx.fillStyle = "#2F8F5B"
+            ctx.roundRect(r, 10.0); ctx.fill()
+            ctx.textAlign = "center"; ctx.textBaseline = "middle"
+            ctx.font = font(min(14.0, r.h * 0.38), true); ctx.fillStyle = "#FFF"
+            ctx.fillText(label, r.cx, r.cy)
+        }
+        button(retryBtn, "◀ Level")
+        button(rackBtn, "Reset")
+        button(clearBtn, "Level ▶")
+        ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"
+        ctx.font = font(min(15.0, rightCard.h * 0.3), true); ctx.fillStyle = "#FFF"
+        ctx.fillText("Level ${match.trick.level + 1} of ${Trick.LEVELS.size}", rightCard.l + 12, rightCard.t + rightCard.h * 0.42)
+        ctx.font = font(min(11.0, rightCard.h * 0.22), false); ctx.fillStyle = "#9AA7B1"
+        val pct = if (tpTries > 0) " (${tpMade * 100 / tpTries}%)" else ""
+        ctx.fillText("Made $tpMade of $tpTries$pct", rightCard.l + 12, rightCard.t + rightCard.h * 0.78)
     }
 
     private fun drawPracticeHud(ctx: Ctx2D) {
@@ -1366,6 +1468,13 @@ class Game(
             }
             return
         }
+        if (trickPractice && first) {
+            when {
+                retryBtn.contains(x, y) -> { trickPracticeGo(-1); ptrMode[id] = Touch.BUTTON; return }
+                rackBtn.contains(x, y) -> { trickPracticeGo(0); ptrMode[id] = Touch.BUTTON; return }
+                clearBtn.contains(x, y) -> { trickPracticeGo(1); ptrMode[id] = Touch.BUTTON; return }
+            }
+        }
         if (practice && first) {
             when {
                 retryBtn.contains(x, y) -> { practiceRetry(); ptrMode[id] = Touch.BUTTON; return }
@@ -1438,7 +1547,9 @@ class Game(
     fun pointerMove(id: Int, x: Double, y: Double) {
         if (phase != Phase.HUMAN || id !in ptrMode.indices) return
         when (ptrMode[id]) {
-            Touch.POWER -> power = ((y - ptrStartY[id]) / (powerRect.h * 0.9)).coerceIn(0.0, 1.0)
+            // Power moves in whole percents, so a trembling finger doesn't make the guide flicker,
+            // and the shot is exactly the one the guide showed.
+            Touch.POWER -> power = kotlin.math.round(((y - ptrStartY[id]) / (powerRect.h * 0.9)).coerceIn(0.0, 1.0) * 100) / 100
             Touch.SPIN -> setSpin(x, y)
             Touch.ELEV -> setCueAngle(y)
             Touch.WHEEL -> {
@@ -1453,12 +1564,14 @@ class Game(
             }
             Touch.MOVE_CUE -> {
                 dragX = x; dragY = y
-                val maxX = when {
-                    !match.kitchenOnly -> P.L - P.R
-                    Table.gap -> Table.GAP_X0 - 0.61 * P.R     // stay on the near section
-                    else -> P.HEAD_X
+                if (trick) {
+                    // Stay in the break area (or the nearest of the level's start zones).
+                    val q = Trick.clampPlacement(Trick.LEVELS[match.trick.level], tx(x), ty(y))
+                    dragInvalid = !match.placeCue(q[0], q[1])
+                } else {
+                    val maxX = if (match.kitchenOnly) P.HEAD_X else P.L - P.R
+                    dragInvalid = !match.placeCue(tx(x).coerceIn(P.R, maxX), ty(y).coerceIn(P.R, P.W - P.R))
                 }
-                dragInvalid = !match.placeCue(tx(x).coerceIn(P.R, maxX), ty(y).coerceIn(P.R, P.W - P.R))
             }
             Touch.AIM -> aimAt(x, y)
             Touch.PENDING -> if (hypot(x - ptrDownX[id], y - ptrDownY[id]) > 10) { ptrMode[id] = Touch.AIM; aimAt(x, y) }
@@ -1509,6 +1622,10 @@ class Game(
 
     private companion object {
         const val RPS_BEAT = 0.42
+        /** On screen, a jumping ball is drawn this many times higher than it really is. */
+        const val JUMP_LIFT = 1.6
+        /** ...and this much bigger per metre of height (closer to the viewer). */
+        const val JUMP_GROW = 8.0
         val GESTURES = arrayOf("\u270A", "\u270B", "\u270C\uFE0F")   // fist, flat hand, peace sign
         val GESTURE_NAMES = arrayOf("Rock", "Paper", "Scissors")
         val SHAKE_WORDS = arrayOf("Rock…", "Paper…", "Scissors…")

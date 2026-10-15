@@ -57,6 +57,11 @@ other: the left one is the mirror image of the right one. Your rock, paper, scis
 game (most throws, ties included) and the average number of throws to a winner are kept with your record.
 
 **Crowd**: scratching the cue ball or knocking any ball off the table gets a synthesized crowd "awww".
+**Shot guide**: the cue ball's path is shown up to the first ball it hits (or just past its first cushion), then
+only a short stretch of where each ball goes — enough to see the angle, draw, follow and curve, not the whole
+result. Power moves in whole percents so the guide doesn't flicker. A ball in the air is drawn lifted and bigger
+(height exaggerated on screen; the distance is real) with its shadow left on the cloth.
+
 A table foul — hitting nothing, hitting the wrong ball first, or no rail and nothing potted — plays your
 **foul voice**: record it in the menu (FOUL VOICE → Record, up to 3 seconds; Play to check, Delete to remove).
 It's trimmed and levelled automatically and kept on that device. Until you record one, a synthesized cough plays.
@@ -94,23 +99,28 @@ the menu and after each game.
 
 The table's second quarter — from the head string to the side pockets — is cut away. The cue ball starts in
 the break area (the near section; drag it anywhere there) and has to be jumped across the 25″ gap to sink the
-1-ball on the far section. A ball that rolls off either edge falls to the floor. The far section has only its two
-corner pockets at the far end (one level adds a hole cut into the cloth).
+1-ball on the far section. A ball that rolls off either edge falls to the floor; one that comes down just short of
+the far edge can catch the lip and bounce or roll onto the table, like a real cut edge. The far section has only its
+two corner pockets at the far end (Bank job fills those in and has a hole cut in the cloth instead). There's no rock,
+paper, scissors for trick shots: who goes first doesn't matter.
 
 | Level | Rule (besides sinking the 1) | Bonus |
 |---|---|---|
 | Leap of faith | — | — |
 | Off the rail | The cue ball must hit a cushion before the 1 | each extra cushion before the 1 |
 | Picket fence | The cue ball can't touch the fence until it has landed on the far section | each fence ball sunk too |
-| Bullseye | The cue ball may touch only the 1, not the ring around it | each ring ball sunk too |
+| Bullseye | The 1 sits inside a ring whose side facing you is a solid wall of nine balls; the cue ball may touch only the 1 | each ring ball sunk too |
 | Traffic jam | The 1 must be cut (at least 12°) and may not touch any other ball; the cue ball must hit the 1 first | none |
-| Bank job | The 1 sits under a row of four guard balls; sink it in the hole in the cloth or a corner | each guard ball sunk too |
+| Bank job | Start from either pen of balls (drag the cue ball into the top or bottom one; the pen moves with it) and jump out. A row of four runs along each long cushion with a ball behind it (the 1 at the top, the 10 at the bottom); the only pocket is a hole in the middle of the far section | each other ball sunk too |
 
 Play the computer or pass & play. Players take turns until each has made it (8 attempts each at most).
 Your score on a level is the attempt you made it on minus your bonus — so making it on your 4th shot with an
 extra ball counts as 3. Lower score wins the level; an equal score goes to whoever earned more bonus (the tie
 goes to the runner). A player who can no longer catch up stops early. Most levels won takes the match; a tie
-goes to sudden death. The balls reset after every attempt. Every level was checked with the physics engine
+goes to sudden death. The balls reset after every attempt.
+
+**Practice a trick shot**: menu → Game → Practice → Trick shot, then pick the level. Unlimited attempts on your
+own, with a made/attempts count; ◀ Level / Level ▶ switch levels and Reset puts the balls back. Every level was checked with the physics engine
 (`core/Trick.kt` holds known working shots, and a unit test makes sure each level still has one).
 
 ## Physics

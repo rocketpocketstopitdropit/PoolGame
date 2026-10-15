@@ -146,11 +146,12 @@ class World {
         lastDt = dt
         for (b in balls) {
             if (!b.onTable || !b.moving) continue
-            if (b.z > 0.0 || b.vz > 0.0) flight(b, dt) else cloth(b, dt)
+            if (b.z > 0.0 || b.vz > 0.0 || Table.overGap(b.x)) flight(b, dt) else cloth(b, dt)
             b.x += b.vx * dt
             b.y += b.vy * dt
             if (trackOrientation) rotate(b, dt)
         }
+        if (Table.gap) gapEdges()
         collideBalls()
         collideCushions()
         checkPockets()
@@ -209,6 +210,45 @@ class World {
             b.vz = if (impact > 0.25) impact * 0.45 else 0.0
             b.vx *= 0.96; b.vy *= 0.96
             listener?.onCushion(impact * 0.6)
+        }
+    }
+
+    /**
+     * The two cut edges of the gap. A ball dropping into the gap falls past the slate's edge: it can
+     * catch the lip (the top corner of the cut) and bounce or roll off it, and it can't pass through
+     * the cut face below the lip. Without this a ball that came down a hair short fell straight
+     * through, even with most of it over the far table.
+     */
+    private fun gapEdges() {
+        val r = P.R
+        for (b in balls) {
+            if (!b.onTable || !b.moving) continue
+            if (b.x < Table.GAP_X0 - r || b.x > Table.GAP_X1 + r) continue
+            for (k in 0..1) {
+                val edge = if (k == 0) Table.GAP_X0 else Table.GAP_X1
+                val slabLeft = k == 0                      // the near section is left of its edge
+                val hc = b.z + r                           // centre height above the cloth
+                if (hc < 0.0) {
+                    // Below the cloth: the cut face of the slate.
+                    if (slabLeft && b.x < edge + r) { b.x = edge + r; if (b.vx < 0) b.vx = -0.3 * b.vx }
+                    if (!slabLeft && b.x > edge - r) { b.x = edge - r; if (b.vx > 0) b.vx = -0.3 * b.vx }
+                    continue
+                }
+                val dx = b.x - edge
+                if (if (slabLeft) dx <= 0.0 else dx >= 0.0) continue   // centre over the slate: the cloth holds it
+                val d = hypot(dx, hc)
+                if (d >= r || d < 1e-9) continue
+                val nx = dx / d; val nz = hc / d
+                b.x = edge + nx * r
+                b.z = nz * r - r
+                val vn = b.vx * nx + b.vz * nz
+                if (vn < 0) {
+                    val e = if (-vn < 0.6) 0.0 else 0.35   // slow contact rolls over the lip, a hard one bounces
+                    b.vx -= (1 + e) * vn * nx
+                    b.vz -= (1 + e) * vn * nz
+                    if (-vn > 0.6) listener?.onCushion(-vn * 0.5)
+                }
+            }
         }
     }
 
@@ -415,8 +455,8 @@ class World {
         val r = P.R
         for (b in balls) {
             if (!b.onTable || !b.moving) continue
-            // Trick-shot table: a ball whose centre is over the gap and isn't flying falls to the floor.
-            val inGap = b.z <= 0.0 && Table.overGap(b.x)
+            // Trick-shot table: a ball that has dropped below the table into the gap falls to the floor.
+            val inGap = b.z < -2.0 * P.R && Table.overGap(b.x)
             if (!inGap && !Table.hasHoles && b.x > 0.1 && b.x < P.L - 0.1 && b.y > 0.1 && b.y < P.W - 0.1) continue
             var drop = b.x < -r || b.x > P.L + r || b.y < -r || b.y > P.W + r
             if (!drop && b.z < P.R * 0.6) for (p in Table.pockets) {

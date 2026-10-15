@@ -33,11 +33,18 @@ class Prediction {
  * go — including throw, spin, and jump shots — instead of idealised ghost-ball lines.
  */
 object Predictor {
+    /** How far the guide follows the cue ball after it hits a ball (enough to see draw, follow and curve). */
+    const val CUE_AFTER = 0.15
+    /** How far it follows the object ball: just its starting direction, so the aim still takes skill. */
+    const val OBJ_LEN = 0.28
+    /** After the cue ball's first cushion (with no ball hit yet), only a short stub of the rebound is shown. */
+    const val AFTER_CUSHION = 0.12
+
     fun run(
         src: World, scratch: World,
         angle: Double, speed: Double, side: Double, vert: Double, elevation: Double,
         out: Prediction,
-        cueAfter: Double = 0.35, objLen: Double = 0.7
+        cueAfter: Double = CUE_AFTER, objLen: Double = OBJ_LEN
     ) {
         out.reset()
         scratch.copyFrom(src)
@@ -54,8 +61,9 @@ object Predictor {
         var ox = 0.0; var oy = 0.0
         var t = 0.0
         var steps = 0
+        var afterCushion = 0.0
         // Bounded so aiming never stalls a frame, even when the shot breaks up a cluster.
-        while (t < 4.0 && steps < 900 && scratch.anyMoving()) {
+        while (t < 4.0 && steps < 2500 && scratch.anyMoving()) {
             t += scratch.step(0.02)
             steps++
             val log = scratch.log
@@ -73,8 +81,8 @@ object Predictor {
             val d = hypot(c.x - lx, c.y - ly)
             if (d >= 0.006 || (c.z > 0) != out.cueAir[out.cueN - 1]) {
                 val doneCue = out.hitId >= 0 && after >= cueAfter
-                if (!doneCue) out.addCue(c.x, c.y, c.z > 0.002)
-                if (out.hitId >= 0) after += d else travel += d
+                if (!doneCue) out.addCue(c.x, c.y, c.z > 0.002 || Table.overGap(c.x))
+                if (out.hitId >= 0) after += d else { travel += d; if (log.cueCushionsBeforeHit >= 1) afterCushion += d }
                 lx = c.x; ly = c.y
             }
             if (out.hitId >= 0) {
@@ -86,7 +94,7 @@ object Predictor {
                     objTravel = objLen   // dropped
                 }
                 if (after >= cueAfter && objTravel >= objLen) break
-            } else if (log.cueCushionsBeforeHit >= 2 || travel > 3.0) {
+            } else if (afterCushion >= AFTER_CUSHION || log.cueCushionsBeforeHit >= 2 || travel > 3.0) {
                 break
             }
         }

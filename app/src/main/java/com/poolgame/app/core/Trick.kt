@@ -27,7 +27,16 @@ class TrickLevel(
     /** Holes cut into the cloth (x, y). */
     val holes: List<DoubleArray> = emptyList(),
     val cueX: Double = 0.32,
-    val cueY: Double = P.W / 2
+    val cueY: Double = P.W / 2,
+    /** The far end's two corner pockets (some levels fill them in). */
+    val farCorners: Boolean = true,
+    /**
+     * Where the cue ball may be placed: rectangles (x0, y0, x1, y1) for its centre. Empty = anywhere
+     * in the break area. With zones, [pens] gives the balls that surround each zone (the same ids
+     * for every zone): they move to whichever zone the cue ball is put in.
+     */
+    val zones: List<DoubleArray> = emptyList(),
+    val pens: List<List<Triple<Int, Double, Double>>> = emptyList()
 ) {
     val ids: List<Int> = balls.map { it.first }
     private val others = ids.filter { it != Trick.TARGET }
@@ -113,10 +122,13 @@ object Trick {
             listOf(Triple(1, 2.25, 0.30)) + (0 until 7).map { Triple(2 + it, 1.335, MID - 0.27 + it * 0.09) }
         ),
         TrickLevel(
-            "Bullseye", "The cue ball may touch only the 1 — not the ring",
+            "Bullseye", "Jump the wall and sink the 1 · touch the ring and it's a miss",
             TrickRule.ONLY_THE_1,
-            listOf(Triple(1, 1.95, MID)) + listOf(0.0, 90.0, 135.0, 180.0, 225.0, 270.0).mapIndexed { k, deg ->
-                Triple(2 + k, 1.95 + 0.26 * kotlin.math.cos(toRad(deg)), MID + 0.26 * kotlin.math.sin(toRad(deg)))
+            // The side of the ring facing you is a solid wall of nine balls (no gaps to roll through);
+            // the far side is open, toward the top-right corner.
+            listOf(Triple(1, 1.95, 0.30)) + (0..8).map { k ->
+                val a = toRad(90.0 + 22.5 * k)
+                Triple(2 + k, 1.95 + 0.26 * kotlin.math.cos(a), 0.30 + 0.26 * kotlin.math.sin(a))
             }
         ),
         TrickLevel(
@@ -124,13 +136,37 @@ object Trick {
             TrickRule.THREAD,
             trafficLayout()
         ),
-        TrickLevel(
-            "Bank job", "The 1 is guarded · knock it into the hole in the table",
-            TrickRule.PLAIN,
-            listOf(Triple(1, 1.835, 0.36)) + (0 until 4).map { Triple(2 + it, 1.70 + it * 0.09, 0.25) },
-            holes = listOf(doubleArrayOf(1.835, 0.80))
-        )
+        bankJob()
     )
+
+    /**
+     * Bank job: start from either pen of balls on the near section (drag the cue ball into the top
+     * or bottom one; the pen moves with it) and jump out of it. On the far section a row of four
+     * balls runs along each long cushion with a ball tucked behind it: the 1 at the top, the 10 at
+     * the bottom. The far corner pockets are filled in; the only pocket is a hole in the middle of
+     * the far section. Sinking the 10 as well is a bonus.
+     */
+    private fun bankJob(): TrickLevel {
+        val w = P.W
+        fun mirror(t: List<Triple<Int, Double, Double>>) = t.map { Triple(it.first, it.second, w - it.third) }
+        val top = (0 until 4).map { Triple(2 + it, 1.62 + it * 0.075, 0.30) }
+        val bottom = (0 until 4).map { Triple(6 + it, 1.62 + it * 0.075, w - 0.30) }
+        val targets = listOf(Triple(1, 1.80, 0.13), Triple(10, 1.80, w - 0.13))
+        // Three balls in front (toward the gap) and two on the inside; the cushion closes the pen.
+        val penTop = listOf(Triple(11, 0.53, 0.12), Triple(12, 0.53, 0.215), Triple(13, 0.53, 0.31),
+            Triple(14, 0.36, 0.37), Triple(15, 0.45, 0.37))
+        val zoneTop = doubleArrayOf(0.30, 0.13, 0.46, 0.30)
+        return TrickLevel(
+            "Bank job", "Start in either pen · jump out and get the 1 into the hole",
+            TrickRule.PLAIN,
+            top + bottom + targets + penTop,
+            holes = listOf(doubleArrayOf(1.905, MID)),
+            cueX = 0.38, cueY = 0.215,
+            farCorners = false,
+            zones = listOf(zoneTop, doubleArrayOf(zoneTop[0], w - zoneTop[3], zoneTop[2], w - zoneTop[1])),
+            pens = listOf(penTop, mirror(penTop))
+        )
+    }
 
     /**
      * Traffic jam: the 1 sits off the line to the bottom-right corner, with four balls staggered
@@ -149,6 +185,45 @@ object Trick {
         }
         out += Triple(6, 1.62, 1.10); out += Triple(7, 2.15, 0.55); out += Triple(8, 2.40, 0.85)
         return out
+    }
+
+    /** The zone (index) containing (x, y), or -1. */
+    fun zoneAt(lv: TrickLevel, x: Double, y: Double): Int =
+        lv.zones.indexOfFirst { x >= it[0] && x <= it[2] && y >= it[1] && y <= it[3] }
+
+    /** The nearest allowed spot for the cue ball's centre to (x, y), for dragging it around. */
+    fun clampPlacement(lv: TrickLevel, x: Double, y: Double): DoubleArray {
+        val r = P.R
+        if (lv.zones.isEmpty()) return doubleArrayOf(x.coerceIn(r, Table.GAP_X0 - 0.61 * r), y.coerceIn(r, P.W - r))
+        var best = doubleArrayOf(x, y); var bd = Double.MAX_VALUE
+        for (z in lv.zones) {
+            val cx = x.coerceIn(z[0], z[2]); val cy = y.coerceIn(z[1], z[3])
+            val d = (cx - x) * (cx - x) + (cy - y) * (cy - y)
+            if (d < bd) { bd = d; best = doubleArrayOf(cx, cy) }
+        }
+        return best
+    }
+
+    /**
+     * Put the cue ball at (x, y) for this level: it must be in the break area (or one of the level's
+     * zones, in which case that zone's pen of balls moves there with it). Returns false if it can't go there.
+     */
+    fun place(lv: TrickLevel, w: World, x: Double, y: Double): Boolean {
+        val r = P.R
+        if (lv.zones.isEmpty()) {
+            if (x > Table.GAP_X0 - 0.61 * r || !w.isFree(x, y, 0)) return false
+        } else {
+            val zi = zoneAt(lv, x, y)
+            if (zi < 0) return false
+            for ((id, px, py) in lv.pens[zi]) {
+                val b = w.balls[id]
+                b.x = px; b.y = py; b.onTable = true; b.stop()
+            }
+            if (!w.isFree(x, y, 0)) return false
+        }
+        val c = w.balls[0]
+        c.x = x; c.y = y; c.onTable = true; c.stop()
+        return true
     }
 
     /** Was this attempt a make under the level's rules, and how many attempts does it take off? */
@@ -199,57 +274,57 @@ object Trick {
     val HINTS: List<List<DoubleArray>> = listOf(
         // Leap of faith
         listOf(
-            doubleArrayOf(0.58631, 0.43742, -0.13635, 5.60433, 0.00000, 0.00000, 0.98342),
-            doubleArrayOf(0.52856, 0.71727, -0.30807, 6.52189, -0.14718, 0.30429, 0.57419),
-            doubleArrayOf(0.46671, 0.58529, -0.22043, 6.88049, -0.09565, 0.42779, 0.47336),
-            doubleArrayOf(0.56139, 1.11036, -0.53272, 7.12228, 0.00000, 0.00000, 0.47699),
-            doubleArrayOf(0.59957, 0.95596, -0.46517, 6.93766, 0.00000, 0.00000, 1.01528),
-            doubleArrayOf(0.46636, 0.47616, -0.15247, 6.09461, 0.00000, 0.20468, 0.89665),
+            doubleArrayOf(0.59540, 1.20384, -0.58924, 6.85699, 0.00000, 0.00000, 0.40337),
+            doubleArrayOf(0.58842, 0.44473, -0.13968, 5.64304, 0.00000, 0.00000, 0.95967),
+            doubleArrayOf(0.47392, 1.13234, -0.51943, 6.83019, 0.00000, 0.09907, 0.35732),
+            doubleArrayOf(0.42285, 0.75003, -0.30753, 6.33102, 0.00000, 0.00000, 0.61120),
+            doubleArrayOf(0.43130, 1.00412, -0.44649, 6.20181, 0.00000, 0.00000, 0.72844),
+            doubleArrayOf(0.59430, 1.19694, -0.58731, 7.39902, 0.00000, 0.00000, 0.41551),
         ),
         // Off the rail
         listOf(
-            doubleArrayOf(0.56132, 0.39192, -0.39017, 5.69869, 0.18290, -0.18862, 0.96925),
-            doubleArrayOf(0.09889, 0.08536, -0.14925, 8.16382, 0.00000, 0.00000, 0.33145),
-            doubleArrayOf(0.57783, 0.54326, -0.48898, 6.09448, 0.00000, -0.22211, 0.54590),
-            doubleArrayOf(0.51796, 0.56703, -0.48341, 5.81278, 0.00000, 0.00000, 0.65925),
-            doubleArrayOf(0.60430, 0.45078, -0.44114, 6.40729, 0.00000, 0.00000, 0.49954),
-            doubleArrayOf(0.13475, 0.55805, -0.38631, 7.29467, 0.00000, 0.00000, 0.93081),
+            doubleArrayOf(0.56005, 0.38843, -0.38705, 5.87176, 0.18290, -0.18862, 0.97469),
+            doubleArrayOf(0.51506, 0.50744, -0.45725, 8.07168, 0.00000, 0.24039, 0.31095),
+            doubleArrayOf(0.09939, 0.08507, -0.15015, 8.18468, 0.00000, 0.00000, 0.31252),
+            doubleArrayOf(0.13965, 0.53446, -0.37824, 6.97477, -0.29444, 0.00000, 0.77592),
+            doubleArrayOf(0.60129, 0.44937, -0.44132, 6.36563, 0.00000, 0.00000, 0.49328),
+            doubleArrayOf(0.58002, 0.53727, -0.48724, 6.00887, 0.00000, -0.22211, 0.53807),
         ),
         // Picket fence
         listOf(
-            doubleArrayOf(0.59274, 0.84286, -0.30017, 6.43405, 0.00000, 0.17207, 0.99144),
-            doubleArrayOf(0.58539, 0.94969, -0.35688, 6.14672, 0.37426, 0.00000, 0.89534),
-            doubleArrayOf(0.37315, 1.11449, -0.39790, 7.44172, 0.00000, 0.28294, 1.00103),
-            doubleArrayOf(0.43331, 1.13981, -0.42357, 6.86621, 0.00000, 0.00000, 0.87238),
-            doubleArrayOf(0.53103, 1.20970, 0.56154, 7.62561, 0.00000, 0.00000, 0.57482),
-            doubleArrayOf(0.51489, 0.65161, -0.17912, 6.48584, 0.13184, 0.40236, 0.77960),
+            doubleArrayOf(0.59274, 0.84286, -0.30066, 6.42266, 0.00000, 0.17207, 1.01514),
+            doubleArrayOf(0.52466, 0.65370, -0.18227, 6.35886, 0.13184, 0.40236, 0.78195),
+            doubleArrayOf(0.55851, 0.62972, -0.17310, 6.32429, 0.39571, 0.00000, 0.97659),
+            doubleArrayOf(0.37315, 1.11449, -0.39860, 7.45768, 0.00000, 0.28294, 1.03436),
+            doubleArrayOf(0.58408, 0.95300, -0.36043, 6.13860, 0.37426, 0.00000, 0.90597),
+            doubleArrayOf(0.54498, 1.19186, 0.57329, 7.62578, 0.00000, 0.00000, 0.52024),
         ),
         // Bullseye
         listOf(
-            doubleArrayOf(0.56149, 0.85983, -0.13455, 5.41269, 0.21195, -0.21969, 0.88506),
-            doubleArrayOf(0.49835, 1.16886, 0.54114, 6.41279, -0.38930, 0.00000, 0.39123),
-            doubleArrayOf(0.53957, 1.18567, -0.38247, 6.71780, -0.12819, 0.00000, 0.78174),
-            doubleArrayOf(0.42851, 0.09159, 0.32672, 6.15472, 0.15441, 0.00000, 0.63935),
-            doubleArrayOf(0.49939, 0.08802, 0.34545, 6.30899, 0.00000, 0.19395, 0.83098),
-            doubleArrayOf(0.59581, 0.90279, -0.19945, 7.28073, 0.00000, 0.43308, 0.97982),
+            doubleArrayOf(0.59005, 0.69412, -0.27731, 7.46457, 0.00000, 0.00000, 1.01257),
+            doubleArrayOf(0.59747, 0.81194, -0.35971, 6.95659, 0.00000, 0.00000, 0.71824),
+            doubleArrayOf(0.56403, 0.52310, -0.14994, 6.15530, 0.31756, 0.00000, 1.03452),
+            doubleArrayOf(0.55566, 0.64962, -0.23857, 6.90189, -0.36919, 0.00000, 0.86874),
+            doubleArrayOf(0.51422, 0.68704, -0.25542, 7.29431, 0.00000, -0.16096, 0.96066),
+            doubleArrayOf(0.29651, 0.48197, -0.09910, 7.38759, 0.00000, 0.20631, 0.76471),
         ),
         // Traffic jam
         listOf(
-            doubleArrayOf(0.60140, 0.91124, 0.01238, 5.28886, 0.00000, 0.22297, 0.91142),
-            doubleArrayOf(0.49875, 0.80589, 0.09141, 6.25632, 0.00000, -0.15932, 0.45636),
-            doubleArrayOf(0.58720, 0.75868, 0.13743, 5.60229, 0.00000, 0.00000, 0.80712),
-            doubleArrayOf(0.59997, 0.86974, 0.04916, 5.93227, 0.00000, -0.12357, 0.74977),
-            doubleArrayOf(0.57141, 1.00248, -0.06284, 6.07656, 0.00000, 0.00000, 0.46993),
-            doubleArrayOf(0.55929, 0.85434, 0.05814, 5.29741, 0.00000, 0.00000, 0.77072),
+            doubleArrayOf(0.60122, 0.87080, 0.04669, 5.54219, 0.00000, -0.12357, 0.76600),
+            doubleArrayOf(0.58939, 0.75960, 0.13792, 5.67135, 0.00000, 0.00000, 0.79861),
+            doubleArrayOf(0.57917, 1.01431, -0.07221, 6.25788, 0.00000, 0.00000, 0.42186),
+            doubleArrayOf(0.55696, 1.15817, -0.18442, 5.68135, 0.00000, 0.00000, 0.51649),
+            doubleArrayOf(0.54833, 0.80866, 0.09458, 5.83898, 0.00000, 0.41349, 0.50776),
+            doubleArrayOf(0.36261, 0.87207, 0.03982, 7.18471, 0.00000, 0.05749, 0.42955),
         ),
         // Bank job
         listOf(
-            doubleArrayOf(0.45282, 0.39209, -0.09968, 7.52122, 0.00000, 0.00000, 0.29122),
-            doubleArrayOf(0.55065, 0.39966, -0.11336, 6.68467, 0.00000, 0.00000, 0.45144),
-            doubleArrayOf(0.53386, 0.96357, -0.55008, 6.39492, 0.00000, 0.00000, 0.48618),
-            doubleArrayOf(0.44365, 0.39192, -0.09496, 6.96499, 0.00000, -0.03117, 0.35595),
-            doubleArrayOf(0.50074, 1.09239, -0.61958, 8.50000, 0.33476, 0.00000, 0.28859),
-            doubleArrayOf(0.24412, 0.84352, -0.38248, 7.24975, 0.00000, 0.00000, 0.59328),
+            doubleArrayOf(0.36905, 0.28021, -0.23808, 8.48379, -0.14216, 0.00000, 0.63742),
+            doubleArrayOf(0.45628, 0.14945, 0.43165, 8.34783, 0.00000, 0.00000, 0.81783),
+            doubleArrayOf(0.36485, 1.02846, -0.81017, 8.40865, 0.00000, 0.00000, 0.65210),
+            doubleArrayOf(0.43985, 0.27439, -0.32968, 7.20033, 0.00000, 0.09909, 0.90039),
+            doubleArrayOf(0.44049, 0.14352, 0.39730, 6.97170, 0.31687, 0.00443, 0.72119),
+            doubleArrayOf(0.43790, 0.18838, -0.05665, 6.10588, 0.10254, -0.09912, 0.98329),
         )
     )
 }
