@@ -1,5 +1,7 @@
 package com.poolgame.web
 
+import com.poolgame.app.core.Crowd
+
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -13,12 +15,13 @@ class Sounds {
     private var ac: dynamic = null
     private val rate = 44100
     private val rnd = Random(7)
-    private val last = DoubleArray(5)
+    private val last = DoubleArray(6)
     private var click: dynamic = null
     private var cushion: dynamic = null
     private var pocket: dynamic = null
     private var cue: dynamic = null
     private var tick: dynamic = null
+    private var crowd: dynamic = null
 
     /** Browsers only allow audio after a user gesture, so this is called on the first touch. */
     fun unlock() {
@@ -44,6 +47,8 @@ class Sounds {
                 val e = if (t < 0.005) t / 0.005 else exp(-(t - 0.005) / 0.03)
                 e * 0.6 * sin(2 * PI * 880 * t)
             })
+            // The crowd "awww" takes a moment to synthesize, so it's made just after the first touch.
+            window.setTimeout({ if (crowd == null) crowd = buffer(Crowd.aww(rate)) }, 400)
         }
         try { if (ac.state == "suspended") ac.resume() } catch (_: dynamic) { }
     }
@@ -122,6 +127,7 @@ class Sounds {
     fun drop() = play(2, pocket, 0.9, 40.0)
     fun strike(speed: Double) = play(3, cue, 0.25 + speed / 7.0)
     fun beep() = play(4, tick, 0.7, 200.0)
+    fun aww() = play(5, crowd, 1.0, 2500.0)
 }
 
 /** Settings and win/loss record, kept in the browser's local storage. */

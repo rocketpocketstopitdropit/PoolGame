@@ -176,6 +176,15 @@ class Balls {
     }
 
     /** Flat icon for the HUD. */
+    /** A ball in the pocketed-ball tray: the number faces out, shaded like a sphere. */
+    fun trayBall(ctx: Ctx2D, id: Int, cx: Double, cy: Double, r: Double) {
+        icon(ctx, id, cx, cy, r, false)
+        val g = ctx.createRadialGradient(cx - r * 0.38, cy - r * 0.42, 0.0, cx - r * 0.38, cy - r * 0.42, r * 1.55)
+        g.addColorStop(0.0, "rgba(255,255,255,0.4)"); g.addColorStop(0.32, "rgba(255,255,255,0)")
+        g.addColorStop(0.6, "rgba(0,0,0,0)"); g.addColorStop(1.0, "rgba(0,0,0,0.44)")
+        ctx.fillStyle = g; ctx.circle(cx, cy, r); ctx.fill()
+    }
+
     fun icon(ctx: Ctx2D, id: Int, cx: Double, cy: Double, r: Double, dim: Boolean) {
         val base = colorOf(id)
         ctx.globalAlpha = if (dim) 0.22 else 1.0

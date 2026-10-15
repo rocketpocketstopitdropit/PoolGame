@@ -35,11 +35,12 @@ You can also start a build manually from the Actions tab with **Run workflow**.
 | Control | What it does |
 |---|---|
 | Drag on the table | Aim the cue toward your finger |
-| **Fine aim** wheel (right) | Nudge the aim; speed is adjustable 1–10 in the menu (5 ≈ 0.01° per dp of finger travel, each step 1.6×) |
-| **Cue angle** slider (right) | Raise the cue for a jump shot (0–60°). Around 45–55° with a firm stroke hops the cue ball over a blocker |
+| **Fine aim** wheel (right, below spin) | Wide roller: drag up/down to nudge the aim. It accelerates with finger speed — slow drags are ~3× finer than the base speed, fast swipes up to 25× coarser, so a flick swings the cue a long way. Base speed is adjustable 1–10 in the menu (5 ≈ 0.01° per dp at ~150 dp/s, each step 1.6×) |
+| **JUMP** slider (vertical, left of the spin ball) | Slide up to raise the cue for a jump shot (0–60°). Around 45–55° with a firm stroke hops the cue ball over a blocker |
 | **Spin** cue ball (right) | Touch where the tip strikes: top = follow, bottom = draw, sides = english. Tap the centre to reset |
 | **Power** bar (left) | Pull down to set power, release to shoot. Slide back to the top to cancel. While holding it, you can use another finger on the fine-aim wheel, the table, spin or cue angle |
 | Ball in hand | Drag the cue ball (shaded area only before the break) |
+| Ball tray (left, next to the power bar) | Pocketed balls roll down it and line up bottom-to-top in the order they were made. Respotted balls leave it |
 | ☰ / Back | Pause menu: resume, restart rack, quit |
 
 The aim guide is computed by running the real physics for the first part of the shot, so it shows
@@ -48,6 +49,12 @@ ghost ball with an X means that ball is not a legal first contact; a red ring me
 There is no random error on your shots. **Shot prediction** can be turned off (menu or pause menu); then only a
 straight aim line from the cue ball to the cushion is shown. Pocket holes are drawn exactly the size of the
 drop zone with a bright ring: once a ball's centre crosses the ring it falls.
+
+**Who breaks**: every new game, rematch and restart starts with rock, paper, scissors (fist, flat hand,
+sideways peace sign). Against the CPU you pick and it picks at random; in pass & play each player taps their own
+side (the pick stays hidden until both are in). Ties go again; the winner breaks.
+
+**Crowd**: scratching the cue ball or knocking any ball off the table gets a synthesized crowd "awww".
 
 **Pause & resume**: ☰ → *Main menu* keeps the game; the menu shows *Resume*. The game is also saved if you switch
 apps or close it. A shot that was still rolling is replayed from the start of that turn.
@@ -59,7 +66,7 @@ ball in hand the clock waits until you aim (table or fine-aim wheel) or touch th
 numbers, no rules. Tap a ball to aim at it; hold a ball for a moment to pick it up and drag it
 anywhere — including the cue ball — to set up trick shots. *Retry shot* puts every ball back where
 it was before your last shot, *Re-rack* starts over, *Clear table* removes the object balls, and
-tapping a ball in the tray brings it back.
+tapping a ball in the ball tray (left) brings it back.
 **Record**: wins and losses are saved per game type and CPU level (and for pass & play), shown on
 the menu and after each game.
 
@@ -118,6 +125,7 @@ Head-to-head (headless, 10 games each): L10 beat L1 20/20; L7 beat L4 16/20.
 app/src/main/java/com/poolgame/app/
   core/   Table.kt (constants, rails, pockets)  World.kt (physics)
           Match.kt (racks + rules)              Ai.kt (computer player)
+          Crowd.kt (synthesized crowd "aww", shared with the web version)
   ui/     MenuActivity  GameActivity  GameView (render + input + turn flow)
           BallRenderer (3D ball shading)        Sfx (synthesized sounds)
 app/src/test/  EngineTest.kt

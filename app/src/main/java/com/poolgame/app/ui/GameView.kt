@@ -65,7 +65,8 @@ class GameView(
         fun onGameFinished(winner: Int): String
     }
 
-    private enum class Phase { HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
+    private enum class Phase { RPS, HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
+    private enum class Rps { PICK, SHAKE, REVEAL }
     private enum class Touch { NONE, AIM, POWER, SPIN, ELEV, WHEEL, MOVE_CUE, BUTTON, PENDING, MOVE_BALL }
 
     private val names = if (vsCpu) arrayOf("You", "CPU") else arrayOf("Player 1", "Player 2")
@@ -91,6 +92,8 @@ class GameView(
     private val ptrDownY = FloatArray(10)
     private val ptrDownAt = LongArray(10)
     private val ptrBall = IntArray(10)
+    private val ptrLastT = LongArray(10)     // fine-aim wheel: time of the last move (ms)
+    private val ptrVel = FloatArray(10)      // fine-aim wheel: smoothed finger speed (dp/s)
     private var wheelOffset = 0f
     private var dragInvalid = false
     private var dragX = 0f; private var dragY = 0f
@@ -100,12 +103,28 @@ class GameView(
     private val retryBtn = RectF()
     private val rackBtn = RectF()
     private val clearBtn = RectF()
-    private val trayIds = IntArray(15)
-    private val trayX = FloatArray(15)
-    private var trayN = 0
-    private var trayY = 0f
-    private var trayR = 0f
     private var movingBall = -1
+
+    // Ball tray left of the table: pocketed balls roll down it and line up from the bottom,
+    // in the order they were made, like the ball return on a bar table.
+    private val trayRect = RectF()
+    private var potR = 0f
+    private val potIds = IntArray(16)
+    private val potY = FloatArray(16)
+    private val potV = FloatArray(16)
+    private var potN = 0
+    private var trayShader: Shader? = null
+
+    // Rock, paper, scissors decides who breaks.
+    private var rps = Rps.PICK
+    private val rpsPick = intArrayOf(-1, -1)      // 0 rock, 1 paper, 2 scissors
+    private var rpsT = 0.0
+    private var rpsBeat = 0
+    private var rpsTie = false
+    private val rpsBtn = Array(2) { Array(3) { RectF() } }
+    private val rpsPanel = RectF()
+    private val emoji = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; color = Color.WHITE }
+    private val emojiMetrics = Paint.FontMetrics()
 
     // Fine-aim wheel: level 5 is ~0.01 degrees per dp of finger travel; each step is 1.6x.
     private val wheelRadPerDp = 0.0002 * Math.pow(1.6, (aimSensitivity.coerceIn(1, 10) - 5).toDouble())
@@ -203,8 +222,13 @@ class GameView(
             sfx.drop()
             val b = match.world.balls[id]
             sinks += Sink(id, b.x, b.y, 0f)
+            if (id == 0) crowdAww() else addToTray(id)
         }
+        override fun onOffTable(id: Int) = crowdAww()
     }
+
+    /** Scratch or a ball off the table: the crowd groans, a beat after it happens. */
+    private fun crowdAww() { postDelayed({ sfx.aww() }, 180) }
 
     private fun isCpu(player: Int) = vsCpu && player == 1
 
@@ -225,9 +249,46 @@ class GameView(
             practiceSnapshot = null
         }
         sinks.clear()
+        potN = 0
         spinX = 0f; spinY = 0f; power = 0f; elevDeg = 0f
         gameOverTitle = ""
         recordLine = ""
+        message = match.message
+        if (practice) startTurn() else startRps(false)
+    }
+
+    // ------------------------------------------------------------------ rock, paper, scissors
+
+    private fun startRps(tie: Boolean) {
+        phase = Phase.RPS
+        rps = Rps.PICK
+        rpsPick[0] = -1; rpsPick[1] = -1
+        rpsT = 0.0; rpsBeat = 0
+        rpsTie = tie
+        clearTouches()
+        message = if (tie) "Tie — go again!" else "Rock, paper, scissors — the winner breaks"
+    }
+
+    private fun rpsChoose(player: Int, choice: Int) {
+        if (rps != Rps.PICK || rpsPick[player] >= 0) return
+        rpsPick[player] = choice
+        sfx.ball(1.2)
+        if (vsCpu) rpsPick[1] = rng.nextInt(3)
+        if (rpsPick[0] >= 0 && rpsPick[1] >= 0) { rps = Rps.SHAKE; rpsT = 0.0; rpsBeat = 0 }
+    }
+
+    /** 0 or 1 for the player who won, -1 for a tie. Rock beats scissors, scissors paper, paper rock. */
+    private fun rpsWinner(): Int {
+        val a = rpsPick[0]; val b = rpsPick[1]
+        return when { a == b -> -1; (a - b + 3) % 3 == 1 -> 0; else -> 1 }
+    }
+
+    private fun rpsDone() {
+        val w = rpsWinner()
+        if (w < 0) { startRps(true); return }
+        breaker = w
+        match.current = w
+        match.message = "${names[w]} to break"
         message = match.message
         startTurn()
     }
@@ -248,6 +309,7 @@ class GameView(
         match.world.trackOrientation = true
         match.world.listener = makeListener()
         sinks.clear()
+        potN = 0
         spinX = 0f; spinY = 0f; power = 0f; elevDeg = 0f
         gameOverTitle = ""; recordLine = ""
         message = if (practice) "Practice · hold any ball to move it" else "Game resumed · " + match.message
@@ -260,7 +322,7 @@ class GameView(
      * undone (the saved game is from the start of that turn).
      */
     fun saveState(): String? {
-        if (match.winner >= 0 || phase == Phase.OVER) return null
+        if (match.winner >= 0 || phase == Phase.OVER || phase == Phase.RPS) return null
         return when (phase) {
             Phase.HUMAN, Phase.PAUSE -> GameSave.write(match, settings())
             else -> turnSave ?: GameSave.write(match, settings())
@@ -393,7 +455,7 @@ class GameView(
 
     private fun practiceClear() {
         for (id in 1..15) { val b = match.world.balls[id]; b.onTable = false; b.stop() }
-        message = "Table cleared · tap balls on the right to bring them back"
+        message = "Table cleared · tap a ball in the tray to bring it back"
     }
 
     private fun returnBall(id: Int) {
@@ -418,12 +480,62 @@ class GameView(
     private fun clearTouches() { for (i in ptrMode.indices) ptrMode[i] = Touch.NONE }
     private fun anyTouch(t: Touch): Boolean { for (m in ptrMode) if (m == t) return true; return false }
 
+    private fun inTray(id: Int): Boolean { for (i in 0 until potN) if (potIds[i] == id) return true; return false }
+
+    private fun addToTray(id: Int) {
+        if (id <= 0 || potN >= potIds.size || inTray(id)) return
+        potIds[potN] = id
+        potY[potN] = trayRect.top - potR * 2      // rolls in from the top of the tray
+        potV[potN] = 0f
+        potN++
+    }
+
+    private fun traySlotY(i: Int) = trayRect.bottom - 3 * dp - potR - i * potR * 2.06f
+
+    /**
+     * Keeps the tray in step with the table: balls put back on the table (respotted, or returned in
+     * practice) leave it, and anything off the table that isn't listed yet is added in number order
+     * (a resumed game, or practice's Clear table). Then the balls roll down to their places.
+     */
+    private fun updateTray(dt: Float) {
+        val w = match.world
+        var j = 0
+        for (i in 0 until potN) if (!w.balls[potIds[i]].onTable) {
+            potIds[j] = potIds[i]; potY[j] = potY[i]; potV[j] = potV[i]; j++
+        }
+        potN = j
+        if (phase != Phase.RUNNING) for (id in match.ballIds()) if (!w.balls[id].onTable) addToTray(id)
+        val g = 2200f * dp
+        for (i in 0 until potN) {
+            val target = traySlotY(i)
+            if (potY[i] < target || potV[i] < 0f) {
+                potV[i] += g * dt
+                potY[i] += potV[i] * dt
+                if (potY[i] >= target) {
+                    potY[i] = target
+                    potV[i] = if (potV[i] > 160 * dp) -potV[i] * 0.22f else 0f
+                }
+            } else { potY[i] = target; potV[i] = 0f }
+        }
+    }
+
     private fun update(dt: Double) {
         if (sinks.isNotEmpty()) {
             for (s in sinks) s.age += dt.toFloat()
             sinks.removeAll { it.age > 0.35f }
         }
+        updateTray(dt.toFloat())
         when (phase) {
+            Phase.RPS -> when (rps) {
+                Rps.SHAKE -> {
+                    rpsT += dt
+                    val beat = (rpsT / RPS_BEAT).toInt()
+                    if (beat > rpsBeat) { rpsBeat = beat; if (beat < 3) sfx.rail(2.2) }
+                    if (rpsT >= 3 * RPS_BEAT) { rps = Rps.REVEAL; rpsT = 0.0; sfx.ball(3.0) }
+                }
+                Rps.REVEAL -> { rpsT += dt; if (rpsT >= 2.4) rpsDone() }
+                else -> {}
+            }
             Phase.HUMAN -> if (checkLongPress() && !practice && shotClock > 0 && !menuOpen && clockStarted) {
                 clockLeft -= dt
                 val secs = ceil(clockLeft).toInt()
@@ -532,9 +644,14 @@ class GameView(
         super.onSizeChanged(w, h, oldw, oldh)
         dp = resources.displayMetrics.density
         hudH = max(h * 0.13f, 44 * dp)
-        val leftW = max(w * 0.1f, 64 * dp)
-        val rightW = max(w * 0.15f, 96 * dp)
-        tableArea.set(leftW, hudH, w - rightW, h.toFloat())
+        // Left: power bar, then the ball tray. Right: the cue-angle slider beside the spin ball,
+        // and the fine-aim wheel filling the space below them.
+        val leftW = max(w * 0.08f, 58 * dp)
+        val trayW = 28 * dp
+        val stripW = 26 * dp
+        val rightW = max(w * 0.15f, 96 * dp) + stripW
+        trayRect.set(leftW, hudH + 34 * dp, leftW + trayW, h - 18 * dp)
+        tableArea.set(trayRect.right + 6 * dp, hudH, w - rightW, h.toFloat())
         val rail = 0.115
         val tw = P.L + 2 * rail; val th = P.W + 2 * rail
         scale = (min(tableArea.width() / tw, (tableArea.height() - 6 * dp) / th) * 0.98).toFloat()
@@ -543,15 +660,20 @@ class GameView(
         rpx = (P.R * scale).toFloat()
         balls.setRadius(rpx)
 
-        val pw = leftW * 0.36f
+        val pw = min(leftW * 0.45f, 30 * dp)
         powerRect.set(leftW / 2 - pw / 2, hudH + 34 * dp, leftW / 2 + pw / 2, h - 18 * dp)
-        spinR = min(rightW * 0.32f, (h - hudH) * 0.15f)
-        spinCx = w - rightW / 2
+        val nBalls = match.ballIds().count()
+        potR = min((trayRect.height() - 6 * dp) / (nBalls * 2.06f), trayW / 2 - 3 * dp)
+        for (i in 0 until potN) { potY[i] = traySlotY(i); potV[i] = 0f }
+
+        val colL = w - rightW
+        val stripCx = colL + 4 * dp + stripW / 2
+        val spinL = colL + stripW + 8 * dp; val spinRt = w - 8 * dp
+        spinR = min((spinRt - spinL) * 0.42f, (h - hudH) * 0.15f)
+        spinCx = (spinL + spinRt) / 2
         spinCy = hudH + 24 * dp + spinR
-        val elevTop = spinCy + spinR + 44 * dp
-        elevRect.set(w - rightW + 12 * dp, elevTop, w - 12 * dp, elevTop + 22 * dp)
-        val ww = min(rightW * 0.42f, 52 * dp)
-        wheelRect.set(spinCx - ww / 2, elevRect.bottom + 30 * dp, spinCx + ww / 2, h - 16 * dp)
+        elevRect.set(stripCx - 3 * dp, spinCy - spinR, stripCx + 3 * dp, spinCy + spinR + 16 * dp)
+        wheelRect.set(colL + 8 * dp, elevRect.bottom + 38 * dp, w - 10 * dp, h - 14 * dp)
         menuBtn.set(8 * dp, 8 * dp, 8 * dp + 44 * dp, 8 * dp + 36 * dp)
 
         val cardW = min(w * 0.27f, 260 * dp)
@@ -573,8 +695,12 @@ class GameView(
             intArrayOf(0xFF3CCB7F.toInt(), 0xFFF2C94C.toInt(), 0xFFEB5757.toInt()), null, Shader.TileMode.CLAMP)
         spinShader = RadialGradient(spinCx - spinR * 0.3f, spinCy - spinR * 0.35f, spinR * 1.3f,
             intArrayOf(0xFFFFFFFF.toInt(), 0xFFE9E4D4.toInt(), 0xFFAFA997.toInt()), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
-        wheelShader = LinearGradient(wheelRect.left, 0f, wheelRect.right, 0f,
-            intArrayOf(0xFF15191D.toInt(), 0xFF39434C.toInt(), 0xFF15191D.toInt()), null, Shader.TileMode.CLAMP)
+        // The wheel is a roller turning about a horizontal axis: lit in the middle, dark top and bottom.
+        wheelShader = LinearGradient(0f, wheelRect.top, 0f, wheelRect.bottom,
+            intArrayOf(0xFF0E1215.toInt(), 0xFF3C4750.toInt(), 0xFF0E1215.toInt()), null, Shader.TileMode.CLAMP)
+        trayShader = LinearGradient(trayRect.left, 0f, trayRect.right, 0f,
+            intArrayOf(0xFF2A1408.toInt(), 0xFF0B0604.toInt(), 0xFF0B0604.toInt(), 0xFF3A1E0E.toInt()),
+            floatArrayOf(0f, 0.25f, 0.75f, 1f), Shader.TileMode.CLAMP)
         val buttW = (0.015 * scale).toFloat()
         for (i in 0 until 8) stickShaders[i] = LinearGradient(0f, -buttW, 0f, buttW,
             intArrayOf(stickColors[i * 2 + 1], stickColors[i * 2], stickColors[i * 2 + 1]), null, Shader.TileMode.CLAMP)
@@ -737,9 +863,11 @@ class GameView(
 
         drawHud(canvas)
         drawPowerBar(canvas)
+        drawTray(canvas)
         drawSpin(canvas)
         drawElevation(canvas)
         drawWheel(canvas)
+        if (phase == Phase.RPS) drawRps(canvas)
         if (phase == Phase.OVER) drawGameOver(canvas)
     }
 
@@ -957,21 +1085,11 @@ class GameView(
         button(rackBtn, "Re-rack", true)
         button(clearBtn, "Clear table", true)
 
-        // Tray of balls that are off the table: tap one to bring it back.
-        trayN = 0
-        for (id in 1..15) if (!match.world.balls[id].onTable) trayIds[trayN++] = id
+        // Balls off the table sit in the tray on the left: tap one there to bring it back.
         text.textAlign = Paint.Align.LEFT; text.typeface = regular
         text.textSize = min(11 * dp, rightCard.height() * 0.22f); text.color = 0xFF9AA7B1.toInt()
-        canvas.drawText(if (trayN == 0) "All balls on the table" else "Tap a ball to put it back",
-            rightCard.left + 12 * dp, rightCard.top + rightCard.height() * 0.32f, text)
-        trayR = min(rightCard.height() * 0.17f, (rightCard.width() - 24 * dp) / (15 * 2.2f))
-        trayY = rightCard.top + rightCard.height() * 0.68f
-        var x = rightCard.left + 12 * dp + trayR
-        for (i in 0 until trayN) {
-            trayX[i] = x
-            balls.drawIcon(canvas, trayIds[i], x, trayY, trayR, false, paint)
-            x += trayR * 2.2f
-        }
+        canvas.drawText(if (potN == 0) "All balls on the table" else "Tap a ball in the tray (left) to put it back",
+            rightCard.left + 12 * dp, rightCard.top + rightCard.height() * 0.42f, text)
     }
 
     private fun ellipsize(s: String, maxW: Float): String {
@@ -982,7 +1100,7 @@ class GameView(
     }
 
     private fun drawPlayerCard(canvas: Canvas, r: RectF, player: Int) {
-        val active = match.current == player && phase != Phase.OVER
+        val active = match.current == player && phase != Phase.OVER && phase != Phase.RPS
         paint.style = Paint.Style.FILL; paint.shader = null
         paint.color = if (active) 0xFF2B3A33.toInt() else 0xFF1E252B.toInt()
         canvas.drawRoundRect(r, 10 * dp, 10 * dp, paint)
@@ -1087,24 +1205,55 @@ class GameView(
         canvas.drawText(SPIN_LABELS[v * 3 + h], spinCx, spinCy + spinR + 14 * dp, text)
     }
 
-    private fun drawElevation(canvas: Canvas) {
-        val r = elevRect
-        text.textAlign = Paint.Align.CENTER; text.typeface = bold
-        text.textSize = 11 * dp
-        text.color = if (elevDeg > 0.5f) 0xFFF2C94C.toInt() else 0xFF9AA7B1.toInt()
-        canvas.drawText(if (elevDeg > 0.5f) JUMP_LABELS[elevDeg.toInt().coerceIn(0, 60)] else "CUE ANGLE · level", r.centerX(), r.top - 8 * dp, text)
-        paint.style = Paint.Style.FILL; paint.shader = null
-        paint.color = 0xFF1E252B.toInt()
-        val cy = r.centerY()
-        canvas.drawRoundRect(r.left, cy - 3 * dp, r.right, cy + 3 * dp, 3 * dp, 3 * dp, paint)
-        val f = elevDeg / P.MAX_ELEVATION.toFloat()
-        val kx = r.left + (r.width()) * f
-        paint.color = 0xFFF2C94C.toInt()
-        canvas.drawRoundRect(r.left, cy - 3 * dp, kx, cy + 3 * dp, 3 * dp, 3 * dp, paint)
-        paint.color = Color.WHITE
-        canvas.drawCircle(kx, cy, 8 * dp, paint)
+    /** Ball tray: a dark wooden channel; pocketed balls stack up from the bottom in the order made. */
+    private fun drawTray(canvas: Canvas) {
+        val r = trayRect
+        if (r.height() < 40 * dp || potR <= 0f) return
+        val rad = r.width() / 2
+        paint.style = Paint.Style.FILL
+        paint.shader = trayShader
+        canvas.drawRoundRect(r, rad, rad, paint)
+        paint.shader = null
+        guide.pathEffect = null; guide.strokeWidth = 1.5f * dp; guide.color = 0x30FFFFFF
+        canvas.drawRoundRect(r, rad, rad, guide)
+        canvas.save()
+        canvas.clipRect(r.left, r.top + 2 * dp, r.right, r.bottom)
+        for (i in 0 until potN) balls.drawTrayBall(canvas, potIds[i], r.centerX(), potY[i], potR, paint)
+        canvas.restore()
     }
 
+    /** Cue angle: a vertical slider beside the spin ball. Slide up to raise the cue for a jump. */
+    private fun drawElevation(canvas: Canvas) {
+        val r = elevRect
+        val cx = r.centerX()
+        val raised = elevDeg > 0.5f
+        text.textAlign = Paint.Align.CENTER; text.typeface = bold
+        text.textSize = 11 * dp
+        text.color = if (raised) 0xFFF2C94C.toInt() else 0xFF9AA7B1.toInt()
+        canvas.drawText("JUMP", cx, spinCy - spinR - 8 * dp, text)
+        paint.style = Paint.Style.FILL; paint.shader = null
+        paint.color = 0xFF1E252B.toInt()
+        canvas.drawRoundRect(r, 3 * dp, 3 * dp, paint)
+        // Tick marks every 15 degrees.
+        guide.pathEffect = null; guide.strokeWidth = 1 * dp; guide.color = 0x55FFFFFF
+        for (k in 1..3) {
+            val ty = r.bottom - r.height() * k * 15f / P.MAX_ELEVATION.toFloat()
+            canvas.drawLine(r.left - 5 * dp, ty, r.left - 2 * dp, ty, guide)
+        }
+        val f = elevDeg / P.MAX_ELEVATION.toFloat()
+        val ky = r.bottom - r.height() * f
+        paint.color = 0xFFF2C94C.toInt()
+        canvas.drawRoundRect(r.left, ky, r.right, r.bottom, 3 * dp, 3 * dp, paint)
+        paint.color = Color.WHITE
+        canvas.drawCircle(cx, ky, 8 * dp, paint)
+        text.typeface = regular; text.textSize = 10.5f * dp
+        canvas.drawText(if (raised) DEG_LABELS[elevDeg.toInt().coerceIn(0, 60)] else "level", cx, r.bottom + 22 * dp, text)
+    }
+
+    /**
+     * Fine aim: a wide roller turning about a horizontal axis. Drag up or down; the faster you
+     * drag, the further each movement turns the cue (slow drags are extra fine).
+     */
     private fun drawWheel(canvas: Canvas) {
         val r = wheelRect
         if (r.height() < 40 * dp) return
@@ -1113,20 +1262,145 @@ class GameView(
         canvas.drawText("FINE AIM", r.centerX(), r.top - 8 * dp, text)
         paint.style = Paint.Style.FILL
         paint.shader = wheelShader
-        canvas.drawRoundRect(r, 10 * dp, 10 * dp, paint)
+        canvas.drawRoundRect(r, 12 * dp, 12 * dp, paint)
         paint.shader = null
         canvas.save()
         canvas.clipRect(r)
-        val spacing = 9 * dp
-        var y = r.top + ((wheelOffset % spacing) + spacing) % spacing
-        guide.pathEffect = null; guide.strokeWidth = 2 * dp
-        while (y < r.bottom) {
-            val rel = ((y - r.centerY()) / (r.height() / 2)).coerceIn(-1f, 1f)
-            guide.color = Color.argb((200 * (1 - rel * rel)).toInt(), 150, 165, 178)
-            canvas.drawLine(r.left + 6 * dp, y, r.right - 6 * dp, y, guide)
-            y += spacing
+        val rad = r.height() / 2
+        val cy = r.centerY()
+        val step = 11 * dp / rad
+        val half = (Math.PI / 2).toFloat()
+        var a = (wheelOffset / rad) % step
+        if (a < 0) a += step
+        a -= ceil(half / step) * step
+        guide.pathEffect = null
+        while (a < half) {
+            if (a > -half) {
+                val c = cos(a)
+                val y = cy + rad * sin(a)
+                guide.strokeWidth = (0.6f + 1.8f * c) * dp
+                guide.color = Color.argb((40 + 175 * c).toInt(), 160, 176, 190)
+                canvas.drawLine(r.left + 10 * dp, y, r.right - 10 * dp, y, guide)
+            }
+            a += step
         }
+        // Darker end caps, and a small marker on each side at the centre line.
+        paint.color = 0x66000000
+        canvas.drawRect(r.left, r.top, r.left + 6 * dp, r.bottom, paint)
+        canvas.drawRect(r.right - 6 * dp, r.top, r.right, r.bottom, paint)
+        paint.color = 0xAAF2C94C.toInt()
+        path.reset()
+        path.moveTo(r.left, cy - 5 * dp); path.lineTo(r.left + 6 * dp, cy); path.lineTo(r.left, cy + 5 * dp); path.close()
+        canvas.drawPath(path, paint)
+        path.reset()
+        path.moveTo(r.right, cy - 5 * dp); path.lineTo(r.right - 6 * dp, cy); path.lineTo(r.right, cy + 5 * dp); path.close()
+        canvas.drawPath(path, paint)
         canvas.restore()
+    }
+
+    // ------------------------------------------------------------------ rock, paper, scissors (drawing)
+
+    /** Draws a hand gesture centred at (cx, cy), rotated so it points across at the other player. */
+    private fun drawGesture(canvas: Canvas, g: Int, cx: Float, cy: Float, size: Float, rot: Float, alpha: Int = 255) {
+        emoji.textSize = size
+        emoji.alpha = alpha
+        emoji.getFontMetrics(emojiMetrics)
+        canvas.save()
+        canvas.translate(cx, cy)
+        canvas.rotate(rot)
+        canvas.drawText(GESTURES[g], 0f, -(emojiMetrics.ascent + emojiMetrics.descent) / 2, emoji)
+        canvas.restore()
+    }
+
+    private fun drawRps(canvas: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        paint.style = Paint.Style.FILL; paint.shader = null
+        paint.color = 0xB0000000.toInt()
+        canvas.drawRect(0f, hudH, w, h, paint)
+        val pw = min(w * 0.8f, 660 * dp)
+        val ph = min(h - hudH - 16 * dp, 300 * dp)
+        val top = hudH + (h - hudH - ph) / 2
+        rpsPanel.set(w / 2 - pw / 2, top, w / 2 + pw / 2, top + ph)
+        paint.color = 0xF21E252B.toInt()
+        canvas.drawRoundRect(rpsPanel, 18 * dp, 18 * dp, paint)
+        guide.pathEffect = null; guide.strokeWidth = 2 * dp; guide.color = 0xFFF2C94C.toInt()
+        canvas.drawRoundRect(rpsPanel, 18 * dp, 18 * dp, guide)
+
+        val p = rpsPanel
+        text.textAlign = Paint.Align.CENTER
+        text.typeface = bold; text.textSize = min(20 * dp, ph * 0.08f); text.color = Color.WHITE
+        canvas.drawText("ROCK · PAPER · SCISSORS", p.centerX(), p.top + ph * 0.11f, text)
+        val win = rpsWinner()
+        val sub = when (rps) {
+            Rps.PICK -> when {
+                rpsTie -> "Tie! Go again"
+                vsCpu -> "Pick your hand · the winner breaks"
+                else -> "Both pick on your own side · the winner breaks"
+            }
+            Rps.SHAKE -> SHAKE_WORDS[(rpsT / RPS_BEAT).toInt().coerceIn(0, 2)]
+            Rps.REVEAL -> when {
+                win < 0 -> "Shoot! · Tie — go again"
+                vsCpu && win == 0 -> "Shoot! · You win — you break!"
+                vsCpu -> "Shoot! · CPU wins — CPU breaks"
+                else -> "Shoot! · ${names[win]} wins — ${names[win]} breaks!"
+            }
+        }
+        text.typeface = if (rps == Rps.PICK) regular else bold
+        text.textSize = min(if (rps == Rps.PICK) 13 * dp else 17 * dp, ph * 0.07f)
+        text.color = if (rps == Rps.PICK) 0xFFB8C2CA.toInt() else 0xFFF2C94C.toInt()
+        canvas.drawText(sub, p.centerX(), p.top + ph * 0.2f, text)
+
+        val hand = min(ph * 0.3f, pw * 0.15f)
+        val handY = p.top + ph * 0.5f
+        val sideX = floatArrayOf(p.left + pw * 0.25f, p.left + pw * 0.75f)
+        text.typeface = bold; text.textSize = 15 * dp; text.color = 0xFFF2C94C.toInt()
+        canvas.drawText("VS", p.centerX(), handY + 5 * dp, text)
+        val bob = if (rps == Rps.SHAKE) abs(sin(Math.PI * rpsT / RPS_BEAT)).toFloat() * hand * 0.35f else 0f
+        for (pl in 0..1) {
+            val cx = sideX[pl]
+            val rot = if (pl == 0) 90f else -90f
+            text.typeface = bold; text.textSize = 13 * dp; text.color = Color.WHITE
+            canvas.drawText(if (isCpu(pl)) "CPU" else names[pl].uppercase(), cx, p.top + ph * 0.3f, text)
+            when (rps) {
+                Rps.PICK, Rps.SHAKE -> drawGesture(canvas, 0, cx, handY - bob, hand, rot)
+                Rps.REVEAL -> {
+                    val pop = 1f + 0.18f * (1f - (rpsT / 0.15).toFloat().coerceIn(0f, 1f))
+                    if (win == pl && rpsT > 0.2) {
+                        guide.strokeWidth = 3 * dp; guide.color = 0xFFF2C94C.toInt()
+                        canvas.drawCircle(cx, handY, hand * 0.56f, guide)
+                    }
+                    drawGesture(canvas, rpsPick[pl], cx, handY, hand * pop, rot, if (win >= 0 && win != pl && rpsT > 0.2) 120 else 255)
+                }
+            }
+            // Choices (or "ready") under each hand.
+            val bs = min(pw * 0.5f / 3.5f, ph * 0.26f)
+            val by = p.bottom - 12 * dp - bs
+            if (rps == Rps.PICK && !isCpu(pl) && rpsPick[pl] < 0) {
+                val gap = bs * 0.18f
+                var bx = cx - (3 * bs + 2 * gap) / 2
+                for (c in 0..2) {
+                    val br = rpsBtn[pl][c]
+                    br.set(bx, by, bx + bs, by + bs)
+                    paint.color = 0xFF2A333B.toInt()
+                    canvas.drawRoundRect(br, 12 * dp, 12 * dp, paint)
+                    guide.strokeWidth = 1.5f * dp; guide.color = 0x55F2C94C
+                    canvas.drawRoundRect(br, 12 * dp, 12 * dp, guide)
+                    // Scissors is the peace sign turned sideways.
+                    drawGesture(canvas, c, br.centerX(), br.top + bs * 0.42f, bs * 0.46f, if (c == 2) 90f else 0f)
+                    text.typeface = regular; text.textSize = min(11 * dp, bs * 0.16f); text.color = 0xFFCED6DD.toInt()
+                    canvas.drawText(GESTURE_NAMES[c], br.centerX(), br.bottom - bs * 0.1f, text)
+                    bx += bs + gap
+                }
+            } else if (rps == Rps.PICK) {
+                for (c in 0..2) rpsBtn[pl][c].setEmpty()
+                text.typeface = bold; text.textSize = 14 * dp; text.color = 0xFF3CCB7F.toInt()
+                canvas.drawText(if (isCpu(pl)) "Ready" else "Ready ✓", cx, by + bs / 2 + 5 * dp, text)
+            }
+        }
+        if (rps == Rps.REVEAL && rpsT > 0.6) {
+            text.typeface = regular; text.textSize = 11 * dp; text.color = 0xFF9AA7B1.toInt()
+            canvas.drawText("tap to continue", p.centerX(), p.bottom - 10 * dp, text)
+        }
     }
 
     private fun drawGameOver(canvas: Canvas) {
@@ -1172,16 +1446,16 @@ class GameView(
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val i = e.actionIndex
-                onDown(e.getPointerId(i), e.getX(i), e.getY(i), e.actionMasked == MotionEvent.ACTION_DOWN)
+                onDown(e.getPointerId(i), e.getX(i), e.getY(i), e.actionMasked == MotionEvent.ACTION_DOWN, e.eventTime)
             }
-            MotionEvent.ACTION_MOVE -> for (i in 0 until e.pointerCount) onMove(e.getPointerId(i), e.getX(i), e.getY(i))
+            MotionEvent.ACTION_MOVE -> for (i in 0 until e.pointerCount) onMove(e.getPointerId(i), e.getX(i), e.getY(i), e.eventTime)
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> onUp(e.getPointerId(e.actionIndex))
             MotionEvent.ACTION_CANCEL -> { if (anyTouch(Touch.POWER)) power = 0f; clearTouches() }
         }
         return true
     }
 
-    private fun onDown(id: Int, x: Float, y: Float, first: Boolean) {
+    private fun onDown(id: Int, x: Float, y: Float, first: Boolean, t: Long) {
         if (id !in ptrMode.indices) return
         ptrMode[id] = Touch.NONE
         if (first && menuBtn.contains(x, y) && phase != Phase.OVER) { ptrMode[id] = Touch.BUTTON; host.onMenuRequested(); return }
@@ -1193,15 +1467,24 @@ class GameView(
             ptrMode[id] = Touch.BUTTON
             return
         }
+        if (phase == Phase.RPS) {
+            ptrMode[id] = Touch.BUTTON
+            when (rps) {
+                Rps.PICK -> for (pl in 0..1) if (!isCpu(pl)) for (c in 0..2) if (rpsBtn[pl][c].contains(x, y)) rpsChoose(pl, c)
+                Rps.REVEAL -> if (rpsT > 0.6) rpsDone()
+                else -> {}
+            }
+            return
+        }
         if (practice && first) {
             when {
                 retryBtn.contains(x, y) -> { practiceRetry(); ptrMode[id] = Touch.BUTTON; return }
                 rackBtn.contains(x, y) -> { newGame(0); ptrMode[id] = Touch.BUTTON; return }
                 clearBtn.contains(x, y) && phase == Phase.HUMAN -> { practiceClear(); ptrMode[id] = Touch.BUTTON; return }
-                phase == Phase.HUMAN && rightCard.contains(x, y) -> {
-                    for (i in 0 until trayN) if (hypot(x - trayX[i], y - trayY) < max(trayR * 1.3f, 14 * dp)) {
-                        returnBall(trayIds[i]); break
-                    }
+                phase == Phase.HUMAN && x >= trayRect.left - 8 * dp && x <= trayRect.right + 8 * dp &&
+                    y >= trayRect.top && y <= trayRect.bottom -> {
+                    // Tap a ball in the tray to put it back on the table.
+                    for (i in 0 until potN) if (abs(y - potY[i]) < max(potR * 1.1f, 10 * dp)) { returnBall(potIds[i]); break }
                     ptrMode[id] = Touch.BUTTON
                     return
                 }
@@ -1215,15 +1498,15 @@ class GameView(
             powerRect.left - 20 * dp <= x && x <= powerRect.right + 20 * dp && y >= powerRect.top - 30 * dp && y <= powerRect.bottom + 20 * dp -> {
                 if (anyTouch(Touch.POWER)) Touch.NONE else { ptrStartY[id] = y; power = 0f; Touch.POWER }
             }
+            x >= elevRect.left - 14 * dp && x <= elevRect.right + 9 * dp && y >= elevRect.top - 14 * dp && y <= elevRect.bottom + 12 * dp -> {
+                setCueAngle(y); Touch.ELEV
+            }
             spinDist <= spinR * 1.2f -> {
                 if (spinDist < spinR * 0.14f) { spinX = 0f; spinY = 0f } else setSpin(x, y)
                 Touch.SPIN
             }
-            x >= elevRect.left - 10 * dp && x <= elevRect.right + 10 * dp && y >= elevRect.top - 22 * dp && y <= elevRect.bottom + 10 * dp -> {
-                setCueAngle(x); Touch.ELEV
-            }
-            x >= wheelRect.left - 16 * dp && x <= wheelRect.right + 16 * dp && y >= wheelRect.top && y <= wheelRect.bottom -> {
-                ptrLastY[id] = y; Touch.WHEEL
+            x >= wheelRect.left - 6 * dp && x <= wheelRect.right + 8 * dp && y >= wheelRect.top - 6 * dp && y <= wheelRect.bottom + 8 * dp -> {
+                ptrLastY[id] = y; ptrLastT[id] = t; ptrVel[id] = 0f; Touch.WHEEL
             }
             match.ballInHand && !anyTouch(Touch.POWER) && !anyTouch(Touch.MOVE_CUE) &&
                 hypot(x - sx(c.x), y - sy(c.y)) < max(rpx * 3f, 28 * dp) -> {
@@ -1265,17 +1548,27 @@ class GameView(
         return best
     }
 
-    private fun onMove(id: Int, x: Float, y: Float) {
+    /**
+     * Fine-aim acceleration: how much the cue turns per dp of finger travel, from the finger's
+     * speed. Slow drags (under ~50 dp/s) are about 3x finer than the base setting; ~150 dp/s is
+     * the base speed; fast swipes turn up to 25x as far, so a flick swings the cue a long way.
+     */
+    private fun wheelGain(v: Float): Double = (0.3 + 0.7 * (v / 150.0).pow(1.7)).coerceAtMost(25.0)
+
+    private fun onMove(id: Int, x: Float, y: Float, t: Long) {
         if (phase != Phase.HUMAN || id !in ptrMode.indices) return
         when (ptrMode[id]) {
             Touch.POWER -> power = ((y - ptrStartY[id]) / (powerRect.height() * 0.9f)).coerceIn(0f, 1f)
             Touch.SPIN -> setSpin(x, y)
-            Touch.ELEV -> setCueAngle(x)
+            Touch.ELEV -> setCueAngle(y)
             Touch.WHEEL -> {
                 val d = y - ptrLastY[id]
+                val secs = ((t - ptrLastT[id]) / 1000f).coerceIn(0.004f, 0.1f)
                 ptrLastY[id] = y
+                ptrLastT[id] = t
+                ptrVel[id] = ptrVel[id] * 0.5f + (abs(d) / dp / secs) * 0.5f
                 wheelOffset += d
-                aimAngle += d / dp * wheelRadPerDp
+                aimAngle += d / dp * wheelRadPerDp * wheelGain(ptrVel[id])
             }
             Touch.MOVE_CUE -> {
                 dragX = x; dragY = y
@@ -1328,8 +1621,8 @@ class GameView(
         spinX = u; spinY = v
     }
 
-    private fun setCueAngle(x: Float) {
-        val f = ((x - elevRect.left) / elevRect.width()).coerceIn(0f, 1f)
+    private fun setCueAngle(y: Float) {
+        val f = ((elevRect.bottom - y) / elevRect.height()).coerceIn(0f, 1f)
         var d = f * P.MAX_ELEVATION.toFloat()
         if (d < 3f) d = 0f
         elevDeg = d
@@ -1337,7 +1630,11 @@ class GameView(
 
     private companion object {
         val PCT = Array(101) { "$it%" }
-        val JUMP_LABELS = Array(61) { "JUMP · $it°" }
+        val DEG_LABELS = Array(61) { "$it°" }
+        const val RPS_BEAT = 0.42
+        val GESTURES = arrayOf("\u270A", "\u270B", "\u270C\uFE0F")   // fist, flat hand, peace sign
+        val GESTURE_NAMES = arrayOf("Rock", "Paper", "Scissors")
+        val SHAKE_WORDS = arrayOf("Rock…", "Paper…", "Scissors…")
         val SPIN_LABELS = arrayOf(
             "center", "right", "left",
             "follow", "follow right", "follow left",

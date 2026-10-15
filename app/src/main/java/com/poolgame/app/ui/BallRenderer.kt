@@ -195,6 +195,24 @@ class BallRenderer {
         canvas.drawBitmap(sh, sx - size + radius * 0.22f, sy - size + radius * 0.32f, null)
     }
 
+    // Unit-circle shading laid over a flat icon to make it look like a lit ball.
+    private val trayShade = RadialGradient(-0.38f, -0.42f, 1.55f,
+        intArrayOf(0x66FFFFFF, 0x00FFFFFF, 0x00000000, 0x70000000), floatArrayOf(0f, 0.32f, 0.6f, 1f), Shader.TileMode.CLAMP)
+
+    /** A ball in the pocketed-ball tray: the number faces out, shaded like a sphere. */
+    fun drawTrayBall(canvas: Canvas, id: Int, cx: Float, cy: Float, r: Float, p: Paint) {
+        drawIcon(canvas, id, cx, cy, r, false, p)
+        canvas.save()
+        canvas.translate(cx, cy)
+        canvas.scale(r, r)
+        p.style = Paint.Style.FILL
+        p.color = Color.BLACK
+        p.shader = trayShade
+        canvas.drawCircle(0f, 0f, 1f, p)
+        p.shader = null
+        canvas.restore()
+    }
+
     /** Flat icon used in the HUD. */
     fun drawIcon(canvas: Canvas, id: Int, cx: Float, cy: Float, r: Float, dim: Boolean, p: Paint) {
         p.style = Paint.Style.FILL

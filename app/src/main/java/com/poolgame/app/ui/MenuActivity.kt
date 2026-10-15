@@ -282,9 +282,10 @@ class MenuActivity : Activity() {
         card.addView(play, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(54f)).apply { topMargin = dpi(18f) })
 
         card.addView(label(
-            "Drag on the table to aim, fine-tune with the wheel, touch the cue ball on the right to add spin, " +
-                "raise the cue angle for a jump shot, then pull the power bar down and let go to shoot. " +
-                "With ball in hand, drag the cue ball to place it.",
+            "Rock, paper, scissors decides who breaks. Drag on the table to aim, fine-tune with the wheel " +
+                "(slow drags are extra fine, fast swipes swing the cue a long way), touch the cue ball on the right " +
+                "to add spin, slide the JUMP slider up for a jump shot, then pull the power bar down and let go to " +
+                "shoot. With ball in hand, drag the cue ball to place it.",
             12.5f, 0xFF8A97A1.toInt()
         ).apply { setPadding(0, dpi(14f), 0, 0); setLineSpacing(0f, 1.15f) })
 

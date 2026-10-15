@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.SoundPool
 import android.os.SystemClock
+import com.poolgame.app.core.Crowd
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -27,13 +28,14 @@ class Sfx(context: Context, var enabled: Boolean) {
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
         .build()
     private val rnd = Random(7)
-    private val last = LongArray(5)
+    private val last = LongArray(6)
 
     private val click: Int
     private val cushion: Int
     private val pocket: Int
     private val cue: Int
     private val tick: Int
+    private val crowd: Int
 
     init {
         val dir = File(context.cacheDir, "sfx").apply { mkdirs() }
@@ -62,6 +64,9 @@ class Sfx(context: Context, var enabled: Boolean) {
             val e = if (t < 0.005) t / 0.005 else exp(-(t - 0.005) / 0.03)
             e * 0.6 * sin(2 * PI * 880 * t)
         }
+        // Crowd "awww" on a scratch: synthesized once (it takes a moment), then cached.
+        crowd = if (File(dir, "aww_v1.wav").exists()) loadPcm(dir, "aww_v1", DoubleArray(0))
+            else loadPcm(dir, "aww_v1", Crowd.aww(rate))
     }
 
     private fun load(dir: File, name: String, ms: Int, f: (Double) -> Double): Int {
@@ -144,6 +149,7 @@ class Sfx(context: Context, var enabled: Boolean) {
     fun drop() = play(2, pocket, 0.9f, 40)
     fun strike(speed: Double) = play(3, cue, (0.25 + speed / 7.0).toFloat())
     fun beep() = play(4, tick, 0.7f, 200)
+    fun aww() = play(5, crowd, 1f, 2500)
 
     fun release() { try { pool.release() } catch (_: Throwable) { } }
 }
