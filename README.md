@@ -57,9 +57,9 @@ other: the left one is the mirror image of the right one. Your rock, paper, scis
 game (most throws, ties included) and the average number of throws to a winner are kept with your record.
 
 **Crowd**: scratching the cue ball or knocking any ball off the table gets a synthesized crowd "awww".
-A table foul — hitting nothing, hitting the wrong ball first, or no rail and nothing potted — gets someone
-fake-coughing a "you suck": synthesized coughs with the phone's speech engine saying the words between them,
-muffled as if into a fist (Android renders it once and caches it; the web version uses the browser's voice).
+A table foul — hitting nothing, hitting the wrong ball first, or no rail and nothing potted — plays your
+**foul voice**: record it in the menu (FOUL VOICE → Record, up to 3 seconds; Play to check, Delete to remove).
+It's trimmed and levelled automatically and kept on that device. Until you record one, a synthesized cough plays.
 
 **Pause & resume**: ☰ → *Main menu* keeps the game; the menu shows *Resume*. The game is also saved if you switch
 apps or close it. A shot that was still rolling is replayed from the start of that turn.
@@ -94,15 +94,24 @@ the menu and after each game.
 
 The table's second quarter — from the head string to the side pockets — is cut away. The cue ball starts in
 the break area (the near section; drag it anywhere there) and has to be jumped across the 25″ gap to sink the
-1-ball on the far section. A ball that rolls off either edge falls to the floor. The far section has a corner
-pocket at each corner (the old side pockets became its near corners) plus a pocket in the middle of the back rail.
+1-ball on the far section. A ball that rolls off either edge falls to the floor. The far section has only its two
+corner pockets at the far end (one level adds a hole cut into the cloth).
 
-Five levels: *Leap of faith* (just the 1), *Picket fence* (a row of balls along the far edge), *Bullseye* (the 1
-inside a ring), *Traffic jam* and *Bank job* (the 1 guarded next to a gap-side pocket). Play the computer or pass &
-play: players alternate attempts, and whoever makes it in fewer attempts wins the level (same attempt = tie; five
-rounds without a make = tie). Most levels won takes the match; a tie goes to sudden death. The balls reset after
-every attempt. Every level was checked with the physics engine (`core/Trick.kt` holds known working shots, and a
-unit test makes sure each level still has one).
+| Level | Rule (besides sinking the 1) | Bonus |
+|---|---|---|
+| Leap of faith | — | — |
+| Off the rail | The cue ball must hit a cushion before the 1 | each extra cushion before the 1 |
+| Picket fence | The cue ball can't touch the fence until it has landed on the far section | each fence ball sunk too |
+| Bullseye | The cue ball may touch only the 1, not the ring around it | each ring ball sunk too |
+| Traffic jam | The 1 must be cut (at least 12°) and may not touch any other ball; the cue ball must hit the 1 first | none |
+| Bank job | The 1 sits under a row of four guard balls; sink it in the hole in the cloth or a corner | each guard ball sunk too |
+
+Play the computer or pass & play. Players take turns until each has made it (8 attempts each at most).
+Your score on a level is the attempt you made it on minus your bonus — so making it on your 4th shot with an
+extra ball counts as 3. Lower score wins the level; an equal score goes to whoever earned more bonus (the tie
+goes to the runner). A player who can no longer catch up stops early. Most levels won takes the match; a tie
+goes to sudden death. The balls reset after every attempt. Every level was checked with the physics engine
+(`core/Trick.kt` holds known working shots, and a unit test makes sure each level still has one).
 
 ## Physics
 
@@ -131,7 +140,7 @@ scored on whether they pot and how good the next shot is. With nothing makeable 
 
 Trick shots: it starts from the known working shots for the level, searches for more with the physics engine,
 and picks the one that still goes in most often with its own aim and speed error. Headless, a level-1 CPU made
-about 5% of attempts, level 5 about 40%, and level 10 nearly every level except the bank job (~35%).
+2–10% of attempts, level 5 10–45%, and level 10 about 85% or better on every level.
 
 | Level | Aim error (σ) | Plays position | Spin | Safeties |
 |---|---|---|---|---|
@@ -150,8 +159,10 @@ app/src/main/java/com/poolgame/app/
           Match.kt (racks + rules)              Ai.kt (computer player)
           Crowd.kt (synthesized crowd "aww", shared with the web version)
           Trick.kt (trick-shot levels, match state, known shots)
-          Cough.kt (synthesized coughs for the "you suck" heckle)
+          Cough.kt (synthesized cough, the foul sound until you record one)
+          Voice.kt (cleans up your recorded foul voice)
   ui/     MenuActivity  GameActivity  GameView (render + input + turn flow)
           BallRenderer (3D ball shading)        Sfx (synthesized sounds)
+          VoiceRecorder (records your foul voice)
 app/src/test/  EngineTest.kt
 ```

@@ -197,21 +197,26 @@ class EngineTest {
     }
 
     @Test fun coughSoundsAreClean() {
-        val c = Cough.cough(44100, 3)
+        val c = Cough.coughs(44100)
         assertTrue(c.size > 10000)
         assertTrue(c.all { !it.isNaN() && kotlin.math.abs(it) <= 1.0 })
-        val voice = DoubleArray(12000) { kotlin.math.sin(it * 0.05) * (if (it in 2000..10000) 0.5 else 0.0) }
-        val h = Cough.heckle(44100, voice, 22050)
-        assertTrue(h.size > c.size)
-        assertTrue(h.all { !it.isNaN() && kotlin.math.abs(it) <= 1.0 })
-        assertTrue(Cough.heckle(44100, null, 44100).isNotEmpty())
+    }
+
+    @Test fun recordedVoiceIsTrimmedAndLevelled() {
+        val rate = 22050
+        // Half a second of quiet, a short "word", then more quiet.
+        val raw = DoubleArray(rate * 2) { if (it in rate / 2 until rate) 0.2 * kotlin.math.sin(it * 0.07) else 0.001 }
+        val v = Voice.clean(raw, rate)
+        assertTrue(v.size in rate / 2..rate)                    // the silence is gone
+        assertTrue(v.maxOf { kotlin.math.abs(it) } > 0.8)       // and it's brought up to full level
+        assertEquals(0, Voice.clean(DoubleArray(rate) { 0.0005 }, rate).size)   // nothing heard
     }
 
     // ------------------------------------------------------------------ trick shots (gap table)
 
     @Test fun gapTableSwitchesBack() {
         Match(GameMode.TRICK)
-        assertTrue(Table.gap); assertEquals(7, Table.pockets.size)
+        assertTrue(Table.gap); assertEquals(4, Table.pockets.size)      // only the corner pockets
         Match(GameMode.EIGHT_BALL)
         assertFalse(Table.gap); assertEquals(6, Table.pockets.size)
     }
@@ -227,15 +232,56 @@ class EngineTest {
 
     @Test fun jumpShotCrossesTheGap() {
         Table.useGap()
-        val w = World(); w.clearAll(); w.put(0, 0.3, 0.635)
+        val w = World(); w.clearAll(); w.put(0, 0.3, 0.4)
         w.strike(0.0, 6.5, 0.0, 0.0, Math.toRadians(40.0)); w.simulate()
-        // It lands on the far section (and here rolls on into the back pocket), never into the gap.
-        assertTrue(0 !in w.log.fell && 0 !in w.log.jumpedOff)
-        assertTrue(!w.balls[0].onTable || w.balls[0].x > Table.GAP_X1)
+        assertTrue(w.log.cueLanded)                 // came down on the far section (it may roll back off later)
         // The same stroke with a level cue drops into the gap.
-        val v = World(); v.clearAll(); v.put(0, 0.3, 0.635)
+        val v = World(); v.clearAll(); v.put(0, 0.3, 0.4)
         v.strike(0.0, 6.5, 0.0, 0.0); v.simulate()
         assertTrue(0 in v.log.fell)
+    }
+
+    @Test fun ballDropsIntoAHoleInTheCloth() {
+        Table.useGap(listOf(doubleArrayOf(2.0, 0.6)))
+        val w = World(); w.clearAll(); w.put(3, 1.6, 0.6)
+        w.balls[3].vx = 1.0; w.balls[3].moving = true
+        w.simulate()
+        assertTrue(3 in w.log.pocketed)
+        assertEquals(Table.pockets.size - 1, w.log.pocketIn[3])
+    }
+
+    private fun lv(i: Int) = Trick.LEVELS[i]
+    private fun log(first: Int, potted: List<Int>, init: ShotLog.() -> Unit = {}) = ShotLog().apply {
+        firstHit = first; pocketed.addAll(potted); init()
+    }
+
+    @Test fun cushionLevelNeedsARailFirstAndRewardsMore() {
+        val rail = lv(1); assertEquals(TrickRule.CUSHION, rail.rule)
+        assertFalse(Trick.judge(rail, log(1, listOf(1))).made)
+        val one = Trick.judge(rail, log(1, listOf(1)) { cueCushionsBeforeHit = 1 })
+        assertTrue(one.made); assertEquals(0, one.bonus)
+        assertEquals(2, Trick.judge(rail, log(1, listOf(1)) { cueCushionsBeforeHit = 3 }).bonus)
+    }
+
+    @Test fun fenceCantBeTouchedBeforeLanding() {
+        val fence = lv(2); assertEquals(TrickRule.FENCE, fence.rule)
+        assertFalse(Trick.judge(fence, log(1, listOf(1)) { cueAirTouched = 1 shl 4 }).made)
+        val ok = Trick.judge(fence, log(1, listOf(1, 4)) { cueLanded = true; touched[0] = 1 shl 4 })
+        assertTrue(ok.made); assertEquals(1, ok.bonus)        // the fence ball went in too
+    }
+
+    @Test fun bullseyeCueMayTouchOnlyTheOne() {
+        val bull = lv(3); assertEquals(TrickRule.ONLY_THE_1, bull.rule)
+        assertFalse(Trick.judge(bull, log(1, listOf(1)) { touched[0] = (1 shl 1) or (1 shl 3) }).made)
+        assertTrue(Trick.judge(bull, log(1, listOf(1)) { touched[0] = 1 shl 1 }).made)
+    }
+
+    @Test fun trafficJamMustBeCutAndThreaded() {
+        val jam = lv(4); assertEquals(TrickRule.THREAD, jam.rule)
+        assertFalse(Trick.judge(jam, log(1, listOf(1)) { cutDeg = 4.0 }).made)
+        assertFalse(Trick.judge(jam, log(1, listOf(1)) { cutDeg = 25.0; touched[1] = 1 shl 5 }).made)
+        val ok = Trick.judge(jam, log(1, listOf(1, 5)) { cutDeg = 25.0 })
+        assertTrue(ok.made); assertEquals(0, ok.bonus)         // no bonus balls on this level
     }
 
     @Test fun everyLevelHasAWorkingShot() {
@@ -246,7 +292,7 @@ class EngineTest {
                 val w = World(); w.copyFrom(m.world)
                 w.balls[0].x = h[0]; w.balls[0].y = h[1]
                 w.strike(h[2], h[3], h[4], h[5], h[6]); w.simulate()
-                Trick.TARGET in w.log.pocketed && 0 !in w.log.pocketed && 0 !in w.log.jumpedOff
+                Trick.judge(Trick.LEVELS[li], w.log).made
             }
             assertTrue("level $li ${Trick.LEVELS[li].name}: no hint works", ok > 0)
         }
@@ -256,10 +302,11 @@ class EngineTest {
     private fun attempt(m: Match, make: Boolean): ShotOutcome {
         m.prepareTurn()
         if (make) {
+            val lvl = Trick.LEVELS[m.trick.level]
             val h = Trick.HINTS[m.trick.level].first { h ->
                 val w = World(); w.copyFrom(m.world); w.balls[0].x = h[0]; w.balls[0].y = h[1]
                 w.strike(h[2], h[3], h[4], h[5], h[6]); w.simulate()
-                Trick.TARGET in w.log.pocketed && 0 !in w.log.pocketed && 0 !in w.log.jumpedOff
+                Trick.judge(lvl, w.log).made
             }
             assertTrue(m.placeCue(h[0], h[1]))
             m.shoot(h[2], h[3], h[4], h[5], h[6])
@@ -268,39 +315,49 @@ class EngineTest {
         return m.resolve()
     }
 
-    @Test fun trickLevelGoesToWhoeverMakesItFirst() {
+    @Test fun fewestAttemptsWinsTheLevel() {
         val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.rack(Random(1), 0)
         assertEquals(0, m.current); assertTrue(m.ballInHand)
-        // Round 1: both miss.
         assertFalse(attempt(m, false).made); assertEquals(1, m.current)
         assertTrue(0 in m.world.log.fell)
-        attempt(m, false); assertEquals(0, m.current); assertEquals(2, m.trick.round)
-        // Round 2: you miss, the CPU makes it: the CPU wins level 1 and level 2 starts with the CPU.
+        attempt(m, false); assertEquals(0, m.current)
         attempt(m, false)
-        val out = attempt(m, true)
-        assertTrue(out.made)
+        assertTrue(attempt(m, true).made)                 // the CPU makes it on its 2nd attempt
+        // You've had 2 and can't do better than 3 on this level (no bonus balls), so it's over.
         assertEquals(listOf(1), m.trick.results)
         assertEquals(1, m.trick.levelWins[1]); assertEquals(1, m.trick.level); assertEquals(1, m.current)
-        // The table goes back to the next level's layout before the next shot.
         m.prepareTurn()
-        assertTrue(m.world.balls[2].onTable)          // the picket fence
         assertTrue(m.ballInHand)
+    }
+
+    @Test fun bonusBallTakesAnAttemptOffAndTiesGoToTheRunner() {
+        val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.rack(Random(1), 0)
+        m.trick.level = 5; m.setupTrickLevel()                // bank job: four guard balls, bonus possible
+        fun fake(potted: List<Int>): ShotOutcome {
+            m.prepareTurn()
+            m.world.log.reset()
+            if (potted.isNotEmpty()) { m.world.log.firstHit = 1; m.world.log.pocketed.addAll(potted) }
+            return m.resolve()
+        }
+        fake(emptyList()); fake(emptyList())                  // round 1: both miss
+        fake(emptyList()); assertTrue(fake(listOf(1)).made)    // you miss again, the CPU makes it on its 2nd
+        assertEquals(0, m.current)                             // you're still alive: a bonus could tie it
+        val out = fake(listOf(1, 3))                           // you make it on your 3rd with the 3 as well
+        assertTrue(out.made)
+        assertEquals(listOf(0), m.trick.results)              // 3 - 1 = 2, same as the CPU: tie goes to the runner
     }
 
     @Test fun trickMatchIsWonOnLevels() {
         val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.rack(Random(1), 0)
-        // Five levels: you make every one, the CPU misses every one.
         var guard = 0
-        while (m.winner < 0 && guard++ < 40) attempt(m, m.current == 0)
+        while (m.winner < 0 && guard++ < 80) attempt(m, m.current == 0)
         assertEquals(0, m.winner)
-        assertEquals(5, m.trick.levelWins[0])
+        assertEquals(Trick.LEVELS.size, m.trick.levelWins[0])
     }
 
     @Test fun tiedTrickMatchGoesToSuddenDeath() {
         val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.rack(Random(1), 0)
-        repeat(5) { // both make it in round 1 of every level: five ties
-            attempt(m, true); attempt(m, true)
-        }
+        repeat(Trick.LEVELS.size) { attempt(m, true); attempt(m, true) }   // the same shot both ways: every level tied
         assertTrue(m.trick.suddenDeath); assertEquals(-1, m.winner)
         attempt(m, m.current == 1); attempt(m, m.current == 1)
         assertEquals(1, m.winner)
@@ -315,6 +372,7 @@ class EngineTest {
         assertTrue(GameSave.restore(text, r))
         assertEquals(m.trick.level, r.trick.level); assertEquals(m.trick.levelWins.toList(), r.trick.levelWins.toList())
         assertEquals(m.trick.results, r.trick.results); assertEquals(m.current, r.current)
+        assertEquals(m.trick.tries.toList(), r.trick.tries.toList()); assertEquals(m.trick.made.toList(), r.trick.made.toList())
     }
 
     @Test fun cpuPlaysTrickShots() {

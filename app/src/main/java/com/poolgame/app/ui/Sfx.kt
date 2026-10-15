@@ -3,19 +3,13 @@ package com.poolgame.app.ui
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.SoundPool
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import com.poolgame.app.core.Cough
 import com.poolgame.app.core.Crowd
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
@@ -43,9 +37,7 @@ class Sfx(context: Context, var enabled: Boolean) {
     private val cue: Int
     private val tick: Int
     private val crowd: Int
-    @Volatile private var heckleId: Int = 0
-    private var tts: TextToSpeech? = null
-    private val cacheDir: File
+    private val heckleId: Int
 
     init {
         val dir = File(context.cacheDir, "sfx").apply { mkdirs() }
@@ -77,104 +69,10 @@ class Sfx(context: Context, var enabled: Boolean) {
         // Crowd "awww" on a scratch: synthesized once (it takes a moment), then cached.
         crowd = if (File(dir, "aww_v1.wav").exists()) loadPcm(dir, "aww_v1", DoubleArray(0))
             else loadPcm(dir, "aww_v1", Crowd.aww(rate))
-        cacheDir = dir
-        // The cough-disguised "you suck": the words come from the phone's speech engine the first
-        // time (then it's cached). Until then, or without a speech engine, it's just the coughs.
-        heckleId = if (File(dir, "heckle_v1.wav").exists()) loadPcm(dir, "heckle_v1", DoubleArray(0))
-        else {
-            startVoice(context.applicationContext)
-            loadPcm(dir, "coughs_v1", Cough.heckle(rate, null, rate))
-        }
-    }
-
-    private fun startVoice(ctx: Context) {
-        val main = Handler(Looper.getMainLooper())
-        try {
-            tts = TextToSpeech(ctx) { status -> main.post { onVoiceReady(status) } }
-        } catch (_: Throwable) { tts = null }
-    }
-
-    private fun onVoiceReady(status: Int) {
-        val t = tts ?: return
-        if (status != TextToSpeech.SUCCESS) { stopVoice(); return }
-        val raw = File(cacheDir, "voice_raw.wav")
-        try {
-            try { t.setLanguage(Locale.US) } catch (_: Throwable) { }
-            t.setSpeechRate(1.15f)
-            t.setPitch(0.9f)
-            t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(id: String?) {}
-                override fun onDone(id: String?) {
-                    Thread { buildHeckle(raw) }.apply { isDaemon = true }.start()
-                    Handler(Looper.getMainLooper()).post { stopVoice() }
-                }
-                @Deprecated("Deprecated in Java")
-                override fun onError(id: String?) { Handler(Looper.getMainLooper()).post { stopVoice() } }
-            })
-            if (t.synthesizeToFile("you suck", Bundle(), raw, "heckle") != TextToSpeech.SUCCESS) stopVoice()
-        } catch (_: Throwable) { stopVoice() }
-    }
-
-    private fun stopVoice() {
-        try { tts?.shutdown() } catch (_: Throwable) { }
-        tts = null
-    }
-
-    /** Mix the spoken words between two coughs and swap it in for the coughs-only version. */
-    private fun buildHeckle(raw: File) {
-        try {
-            val (pcm, vRate) = readWav(raw) ?: return
-            if (pcm.size < vRate / 10) return
-            val id = loadPcm(cacheDir, "heckle_v1", Cough.heckle(rate, pcm, vRate))
-            if (id != 0) heckleId = id
-        } catch (_: Throwable) {
-        } finally {
-            raw.delete()
-        }
-    }
-
-    /** Reads a PCM WAV file (8 or 16 bit, any channel count) as mono samples in -1..1. */
-    private fun readWav(f: File): Pair<DoubleArray, Int>? {
-        if (!f.exists()) return null
-        val b = ByteBuffer.wrap(f.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
-        if (b.remaining() < 12) return null
-        val riff = ByteArray(4); b.get(riff)
-        if (String(riff) != "RIFF") return null
-        b.int
-        val wave = ByteArray(4); b.get(wave)
-        var channels = 1; var sr = 22050; var bits = 16
-        while (b.remaining() >= 8) {
-            val idb = ByteArray(4); b.get(idb)
-            val size = b.int
-            val id = String(idb)
-            if (size < 0 || size > b.remaining() + 8) return null
-            if (id == "fmt ") {
-                val start = b.position()
-                b.short                       // format
-                channels = b.short.toInt().coerceAtLeast(1)
-                sr = b.int
-                b.int; b.short
-                bits = b.short.toInt()
-                b.position(start + size)
-            } else if (id == "data") {
-                val len = minOf(size, b.remaining())
-                val bytes = bits / 8
-                if (bytes != 1 && bytes != 2) return null
-                val frames = len / (bytes * channels)
-                val out = DoubleArray(frames)
-                for (i in 0 until frames) {
-                    var sum = 0.0
-                    for (c in 0 until channels) {
-                        sum += if (bytes == 2) b.short / 32768.0 else ((b.get().toInt() and 0xFF) - 128) / 128.0
-                    }
-                    out[i] = sum / channels
-                }
-                return out to sr
-            } else {
-                b.position(b.position() + size + (size and 1))
-            }
-        }
-        return null
+        // Table fouls: your recorded voice if you've made one in the menu, otherwise two coughs.
+        val mine = voiceFile(context)
+        heckleId = if (mine.exists()) try { pool.load(mine.path, 1) } catch (_: Throwable) { 0 }
+            else loadPcm(dir, "coughs_v2", Cough.coughs(rate))
     }
 
     private fun load(dir: File, name: String, ms: Int, f: (Double) -> Double): Int {
@@ -260,8 +158,22 @@ class Sfx(context: Context, var enabled: Boolean) {
     fun aww() = play(5, crowd, 1f, 2500)
     fun heckle() = play(6, heckleId, 1f, 2500)
 
-    fun release() {
-        stopVoice()
-        try { pool.release() } catch (_: Throwable) { }
+    fun release() { try { pool.release() } catch (_: Throwable) { } }
+
+    companion object {
+        /** Where the menu's recorder keeps your foul voice. */
+        fun voiceFile(ctx: Context) = File(ctx.filesDir, "foul_voice.wav")
+
+        /** Writes mono samples (-1..1) as a 16-bit WAV file. */
+        fun writeWav(file: File, data: DoubleArray, rate: Int) {
+            val n = data.size
+            val buf = ByteBuffer.allocate(44 + n * 2).order(ByteOrder.LITTLE_ENDIAN)
+            buf.put("RIFF".toByteArray()); buf.putInt(36 + n * 2); buf.put("WAVE".toByteArray())
+            buf.put("fmt ".toByteArray()); buf.putInt(16); buf.putShort(1); buf.putShort(1)
+            buf.putInt(rate); buf.putInt(rate * 2); buf.putShort(2); buf.putShort(16)
+            buf.put("data".toByteArray()); buf.putInt(n * 2)
+            for (v in data) buf.putShort((v.coerceIn(-1.0, 1.0) * 32000).toInt().toShort())
+            FileOutputStream(file).use { it.write(buf.array()) }
+        }
     }
 }

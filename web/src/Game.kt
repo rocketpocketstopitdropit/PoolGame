@@ -602,9 +602,7 @@ class Game(
 
         val bg = offscreen((w * dpr).toInt(), (h * dpr).toInt())
         val bc = ctxOf(bg)
-        bc.setTransform(dpr, 0.0, 0.0, dpr, 0.0, 0.0)
-        drawBackground(bc, w, h, rail)
-        background = bg
+        rebuildBackground()
 
         powerGrad = bc.createLinearGradient(0.0, powerRect.t, 0.0, powerRect.b).also {
             it.addColorStop(0.0, "#3CCB7F"); it.addColorStop(0.5, "#F2C94C"); it.addColorStop(1.0, "#EB5757")
@@ -624,6 +622,19 @@ class Game(
             it.addColorStop(0.0, col(stickColors[i * 2 + 1])); it.addColorStop(0.5, col(stickColors[i * 2])); it.addColorStop(1.0, col(stickColors[i * 2 + 1]))
         }
         predKey[0] = Double.NaN
+    }
+
+    private var bgVersion = -1
+
+    /** The table is drawn once into an offscreen canvas, and again when its layout changes (a level with a hole). */
+    private fun rebuildBackground() {
+        if (width <= 0) return
+        val bg = offscreen((width * dpr).toInt(), (height * dpr).toInt())
+        val bc = ctxOf(bg)
+        bc.setTransform(dpr, 0.0, 0.0, dpr, 0.0, 0.0)
+        drawBackground(bc, width, height, 0.115)
+        background = bg
+        bgVersion = Table.version
     }
 
     private fun drawBackground(c: Ctx2D, w: Double, h: Double, rail: Double) {
@@ -695,6 +706,15 @@ class Game(
         }
         for (pk in Table.pockets) {
             val pr = pk.capR * scale
+            if (pk.hole) {
+                // A cup cut into the cloth, like a golf hole.
+                val cup = c.createRadialGradient(sx(pk.cx) - pr * 0.2, sy(pk.cy) - pr * 0.25, 0.0, sx(pk.cx), sy(pk.cy), pr)
+                cup.addColorStop(0.0, "#050505"); cup.addColorStop(0.7, "#101010"); cup.addColorStop(1.0, "#2A2A2A")
+                c.fillStyle = cup; c.circle(sx(pk.cx), sy(pk.cy), pr); c.fill()
+                c.strokeStyle = "#F2E3B3"; c.lineWidth = 2.0; c.circle(sx(pk.cx), sy(pk.cy), pr); c.stroke()
+                c.strokeStyle = "rgba(0,0,0,0.35)"; c.lineWidth = 3.0; c.circle(sx(pk.cx), sy(pk.cy), pr + 3); c.stroke()
+                continue
+            }
             val hole = c.createRadialGradient(sx(pk.cx), sy(pk.cy), 0.0, sx(pk.cx), sy(pk.cy), pr)
             hole.addColorStop(0.0, "#000"); hole.addColorStop(0.8, "#000"); hole.addColorStop(1.0, "#141414")
             c.fillStyle = hole; c.circle(sx(pk.cx), sy(pk.cy), pr); c.fill()
@@ -728,6 +748,7 @@ class Game(
     // ------------------------------------------------------------------ drawing
 
     fun draw(ctx: Ctx2D) {
+        if (bgVersion != Table.version) rebuildBackground()
         ctx.drawImage(background, 0.0, 0.0, width, height)
         val w = match.world
         val humanTurn = phase == Phase.HUMAN
@@ -801,7 +822,9 @@ class Game(
         val a = (bannerT / 0.5).coerceIn(0.0, 1.0)
         val cx = sx(P.L / 2)
         val bw = min(P.L * scale * 0.62, 420.0)
-        val bh = 64.0
+        ctx.font = font(13.0, false)
+        val lines = wrap(ctx, lv.blurb, bw - 24)
+        val bh = 50.0 + 18.0 * lines.size
         val top = sy(P.W * 0.16)
         ctx.save()
         ctx.globalAlpha = a
@@ -815,8 +838,23 @@ class Game(
             else "LEVEL ${t.levelNo + 1} OF ${Trick.LEVELS.size} · ${lv.name.uppercase()}"
         ctx.fillText(ellipsize(ctx, head, bw - 20), cx, top + 27)
         ctx.font = font(13.0, false); ctx.fillStyle = "#CED6DD"
-        ctx.fillText(ellipsize(ctx, lv.blurb, bw - 20), cx, top + 49)
+        lines.forEachIndexed { i, l -> ctx.fillText(l, cx, top + 49 + 18.0 * i) }
         ctx.restore()
+    }
+
+    /** Splits text into at most two lines that fit [maxW] (the second is shortened if it must be). */
+    private fun wrap(ctx: Ctx2D, s: String, maxW: Double): List<String> {
+        if (ctx.measureText(s).width <= maxW) return listOf(s)
+        val words = s.split(" ")
+        var first = ""
+        var k = 0
+        while (k < words.size) {
+            val t = if (first.isEmpty()) words[k] else "$first ${words[k]}"
+            if (ctx.measureText(t).width > maxW && first.isNotEmpty()) break
+            first = t; k++
+        }
+        val rest = words.drop(k).joinToString(" ").trimStart('·', ' ')
+        return if (rest.isEmpty()) listOf(first) else listOf(first.trimEnd('·', ' '), ellipsize(ctx, rest, maxW))
     }
 
     private fun drawPocketCall(ctx: Ctx2D) {
@@ -972,7 +1010,7 @@ class Game(
             val t = match.trick
             ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
             val lvl = if (t.suddenDeath) "Sudden death" else "Level ${t.levelNo + 1} of ${Trick.LEVELS.size}"
-            ctx.fillText(ellipsize(ctx, "$lvl · ${Trick.LEVELS[t.level].name} · round ${t.round}", midR - midL), (midL + midR) / 2, subY)
+            ctx.fillText(ellipsize(ctx, "$lvl · ${Trick.LEVELS[t.level].name} · fewest shots wins", midR - midL), (midL + midR) / 2, subY)
         } else if (mode == GameMode.NINE_BALL) {
             val r = min(hudH * 0.13, 9.0)
             var x = (midL + midR) / 2 - 9 * r * 2.4 / 2 + r
@@ -1036,6 +1074,8 @@ class Game(
             if (t.tries[player] > 0) {
                 sb.append("   ")
                 for (i in 1..t.tries[player]) sb.append(if (t.made[player] == i) "✓" else "✗")
+                if (t.made[player] > 0 && t.bonus[player] > 0) sb.append(" +${t.bonus[player]}")
+                if (t.made[player] > 0) sb.append(" = ${t.score(player)}")
             }
             ctx.fillText(sb.toString(), r.l + 12, iy + iconR * 0.4)
         } else if (mode == GameMode.EIGHT_BALL) {

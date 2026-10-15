@@ -83,6 +83,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
     private fun trickShot(m: Match): Plan {
         val w = World()
         val base = m.world
+        val lv = Trick.LEVELS[m.trick.level]
         fun run(s: DoubleArray): Boolean {
             if (s[0] > Table.GAP_X0 || !base.isFree(s[0], s[1], 0)) return false
             w.copyFrom(base)
@@ -91,8 +92,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             w.strike(s[2], s[3].coerceIn(0.2, P.MAX_CUE_SPEED), s[4], s[5], s[6])
             w.simulate()
             simulations++
-            val l = w.log
-            return Trick.TARGET in l.pocketed && 0 !in l.pocketed && 0 !in l.jumpedOff
+            return Trick.judge(lv, w.log).made
         }
         val samples = if (level >= 6) 10 else 6
         fun score(s: DoubleArray): Double {

@@ -10,10 +10,9 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * Someone in the crowd fake-coughing a "you suck" after a bad foul. The coughs are synthesized
- * (an explosive burst, then breathy noise and a rough voiced "huh" through the formants of an
- * open vowel). The words themselves come from the device's speech engine and are tucked between
- * the coughs, muffled as if said into a fist. Shared by the Android app and the web version.
+ * A synthesized cough (an explosive burst, then breathy noise and a rough voiced "huh" through the
+ * formants of an open vowel). Plays on a table foul until you record your own voice for it.
+ * Shared by the Android app and the web version.
  */
 object Cough {
     /** One cough. [f0] is the pitch of the voiced part, [len] its length in seconds. */
@@ -62,79 +61,16 @@ object Cough {
         return out
     }
 
-    /**
-     * The whole heckle: a cough, the muffled words, and a second cough landing on the end of them.
-     * [voice] is the speech engine's "you suck" at [voiceRate] samples per second (mono, -1..1),
-     * or null for just the coughs.
-     */
-    fun heckle(rate: Int, voice: DoubleArray?, voiceRate: Int): DoubleArray {
+    /** Two coughs, a beat apart: what plays on a table foul until a voice has been recorded. */
+    fun coughs(rate: Int): DoubleArray {
         val c1 = cough(rate, 3, 138.0, 0.30)
         val c2 = cough(rate, 9, 126.0, 0.36)
-        val words = voice?.let { muffle(trim(resample(it, voiceRate, rate), rate), rate) }
-        val wStart = (rate * 0.16).toInt()
-        val c2Start = if (words != null) wStart + (words.size * 0.78).toInt() else (rate * 0.24).toInt()
-        val n = max(c2Start + c2.size, wStart + (words?.size ?: 0)) + rate / 20
-        val out = DoubleArray(n)
+        val start2 = (rate * 0.24).toInt()
+        val out = DoubleArray(start2 + c2.size)
         for (i in c1.indices) out[i] += c1[i] * 0.85
-        if (words != null) for (i in words.indices) out[wStart + i] += words[i] * 0.95
-        for (i in c2.indices) out[c2Start + i] += c2[i] * 0.9
+        for (i in c2.indices) out[start2 + i] += c2[i] * 0.9
         normalize(out, 0.9)
         return out
-    }
-
-    // ------------------------------------------------------------------ voice processing
-
-    /** Linear resampling to the output rate. */
-    fun resample(x: DoubleArray, from: Int, to: Int): DoubleArray {
-        if (from == to || x.isEmpty()) return x
-        val n = (x.size.toLong() * to / from).toInt()
-        val y = DoubleArray(n)
-        val step = from.toDouble() / to
-        for (i in 0 until n) {
-            val p = i * step
-            val k = p.toInt()
-            val f = p - k
-            val a = x[min(k, x.size - 1)]; val b = x[min(k + 1, x.size - 1)]
-            y[i] = a + (b - a) * f
-        }
-        return y
-    }
-
-    /** Cut the silence before and after the words. */
-    private fun trim(x: DoubleArray, rate: Int): DoubleArray {
-        var peak = 1e-9
-        for (v in x) if (abs(v) > peak) peak = abs(v)
-        val th = peak * 0.04
-        var a = 0
-        while (a < x.size && abs(x[a]) < th) a++
-        var b = x.size - 1
-        while (b > a && abs(x[b]) < th) b--
-        a = max(0, a - rate / 100); b = min(x.size - 1, b + rate / 50)
-        return if (b > a) x.copyOfRange(a, b + 1) else x
-    }
-
-    /** Said into a fist: darker, with breath rushing through it, and a quick rough edge. */
-    private fun muffle(x: DoubleArray, rate: Int): DoubleArray {
-        val rnd = Random(5)
-        val n = x.size
-        val y = DoubleArray(n)
-        val k = 1 - exp(-2 * PI * 1700.0 / rate)
-        var lp1 = 0.0; var lp2 = 0.0
-        var env = 0.0
-        val att = 1 - exp(-1.0 / (rate * 0.004)); val rel = 1 - exp(-1.0 / (rate * 0.05))
-        val br = Res(); br.set(1100.0, 900.0, rate)
-        for (i in 0 until n) {
-            lp1 += (x[i] - lp1) * k
-            lp2 += (lp1 - lp2) * k
-            val a = abs(x[i])
-            env += (a - env) * (if (a > env) att else rel)
-            val breath = br.step(rnd.nextDouble() * 2 - 1) * env * 0.9
-            y[i] = lp2 * 1.4 + breath
-        }
-        normalize(y, 1.0)
-        // Soft clip so the words stay up against the coughs.
-        for (i in 0 until n) y[i] = 1.25 * y[i] / (1 + 0.25 * abs(y[i] * 1.25))
-        return y
     }
 
     // ------------------------------------------------------------------ helpers

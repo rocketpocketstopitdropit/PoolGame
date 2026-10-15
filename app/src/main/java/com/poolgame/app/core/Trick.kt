@@ -1,20 +1,48 @@
 package com.poolgame.app.core
 
+/** What a level asks of the shot, on top of sinking the 1. */
+enum class TrickRule {
+    /** Just sink the 1. Extra balls in pockets are bonuses. */
+    PLAIN,
+    /** The cue ball must hit a cushion before the 1. Each extra cushion before it is a bonus. */
+    CUSHION,
+    /** The cue ball can't touch the fence until it has come down on the far section. */
+    FENCE,
+    /** The cue ball may touch only the 1. */
+    ONLY_THE_1,
+    /** Cut the 1 (no straight-on hit) and thread it through: the cue ball must hit the 1 first and the 1 may touch nothing else. */
+    THREAD
+}
+
 /**
  * Trick shots on the gap table. Every level is a fixed layout: the cue ball starts in the break
  * area on the near section and has to jump the gap to sink the 1-ball (yellow) on the far section.
- * Other balls are obstacles; knocking them in doesn't matter.
  */
 class TrickLevel(
     val name: String,
     val blurb: String,
+    val rule: TrickRule,
     /** Object balls as (id, x, y). The 1-ball is always the target. */
     val balls: List<Triple<Int, Double, Double>>,
+    /** Holes cut into the cloth (x, y). */
+    val holes: List<DoubleArray> = emptyList(),
     val cueX: Double = 0.32,
     val cueY: Double = P.W / 2
 ) {
     val ids: List<Int> = balls.map { it.first }
+    private val others = ids.filter { it != Trick.TARGET }
+    /** Bit mask of the balls other than the 1. */
+    val otherMask: Int = others.fold(0) { m, id -> m or (1 shl id) }
+    /** The most bonus a make here could realistically bring (used to decide when a player is out of it). */
+    val maxBonus: Int = when (rule) {
+        TrickRule.THREAD -> 0
+        TrickRule.CUSHION -> 2
+        else -> minOf(2, others.size)
+    }
 }
+
+/** How one attempt went. [bonus] is how many attempts it takes off (extra balls or cushions). */
+class TrickJudgement(val made: Boolean, val why: String, val bonus: Int, val bonusText: String)
 
 /** Where a trick-shot match stands. */
 class TrickState {
@@ -22,7 +50,6 @@ class TrickState {
     var levelNo = 0
     /** Index into Trick.LEVELS of the level being played. */
     var level = 0
-    var round = 1
     /** Who shoots first on this level (it alternates level to level). */
     var starter = 0
     var suddenDeath = false
@@ -30,62 +57,140 @@ class TrickState {
     val tries = intArrayOf(0, 0)
     /** The attempt each player made it on (0 = not yet). */
     val made = intArrayOf(0, 0)
+    /** Attempts taken off by the making shot (extra balls, extra cushions). */
+    val bonus = intArrayOf(0, 0)
+    /** A player is done with the level: made it, ran out of attempts, or can't catch up any more. */
+    val done = booleanArrayOf(false, false)
     val levelWins = intArrayOf(0, 0)
     /** Finished levels: the winner (0/1) or -1 for a tie. */
     val results = ArrayList<Int>()
     /** The balls go back to the level's layout before the next attempt. */
     var resetPending = false
 
+    /** Attempts minus bonuses, or a large number if the player never made it. */
+    fun score(p: Int): Int = if (made[p] > 0) made[p] - bonus[p] else 1000
+
+    fun clearLevel() {
+        tries.fill(0); made.fill(0); bonus.fill(0); done.fill(false)
+    }
+
     fun reset() {
-        levelNo = 0; level = 0; round = 1; starter = 0; suddenDeath = false
-        tries.fill(0); made.fill(0); levelWins.fill(0); results.clear(); resetPending = false
+        levelNo = 0; level = 0; starter = 0; suddenDeath = false
+        clearLevel(); levelWins.fill(0); results.clear(); resetPending = false
     }
 
     fun copyFrom(o: TrickState) {
-        levelNo = o.levelNo; level = o.level; round = o.round; starter = o.starter; suddenDeath = o.suddenDeath
-        o.tries.copyInto(tries); o.made.copyInto(made); o.levelWins.copyInto(levelWins)
+        levelNo = o.levelNo; level = o.level; starter = o.starter; suddenDeath = o.suddenDeath
+        o.tries.copyInto(tries); o.made.copyInto(made); o.bonus.copyInto(bonus); o.done.copyInto(done)
+        o.levelWins.copyInto(levelWins)
         results.clear(); results.addAll(o.results); resetPending = o.resetPending
     }
 }
 
 object Trick {
     const val TARGET = 1
-    /** Rounds per level before it's called a tie (sudden death has no limit). */
-    const val ROUNDS = 5
+    /** Attempts each player gets per level. */
+    const val MAX_TRIES = 8
+    /** Traffic jam: the 1 has to be cut at least this much. */
+    const val MIN_CUT_DEG = 12.0
 
-    private const val W = P.W
     private const val MID = P.W / 2
 
     val LEVELS: List<TrickLevel> = listOf(
         TrickLevel(
-            "Leap of faith",
-            "Jump the gap and sink the 1",
-            listOf(Triple(1, 2.0, MID))
+            "Leap of faith", "Jump the gap and sink the 1 in a far corner",
+            TrickRule.PLAIN,
+            listOf(Triple(1, 2.10, 0.21))
         ),
         TrickLevel(
-            "Picket fence",
-            "Get over the gap and the fence, then sink the 1",
-            listOf(Triple(1, 2.22, MID)) + (0 until 7).map { Triple(2 + it, 1.335, MID - 0.27 + it * 0.09) }
+            "Off the rail", "The cue ball has to hit a cushion before the 1 · extra cushions take a shot off",
+            TrickRule.CUSHION,
+            listOf(Triple(1, 2.0, 0.20))
         ),
         TrickLevel(
-            "Bullseye",
-            "Sink the 1 out of the middle of the ring",
-            listOf(Triple(1, 1.95, MID)) + (1..5).map {
-                val a = toRad(60.0 * it)
-                Triple(1 + it, 1.95 + 0.12 * kotlin.math.cos(a), MID + 0.12 * kotlin.math.sin(a))
+            "Picket fence", "Clear the fence: the cue ball can't touch it until it lands",
+            TrickRule.FENCE,
+            listOf(Triple(1, 2.25, 0.30)) + (0 until 7).map { Triple(2 + it, 1.335, MID - 0.27 + it * 0.09) }
+        ),
+        TrickLevel(
+            "Bullseye", "The cue ball may touch only the 1 — not the ring",
+            TrickRule.ONLY_THE_1,
+            listOf(Triple(1, 1.95, MID)) + listOf(0.0, 90.0, 135.0, 180.0, 225.0, 270.0).mapIndexed { k, deg ->
+                Triple(2 + k, 1.95 + 0.26 * kotlin.math.cos(toRad(deg)), MID + 0.26 * kotlin.math.sin(toRad(deg)))
             }
         ),
         TrickLevel(
-            "Traffic jam",
-            "Find a lane through the traffic and sink the 1",
-            listOf(Triple(1, 2.32, 1.07), Triple(2, 2.0, 0.78), Triple(3, 2.1, 1.16), Triple(4, 2.42, 0.86))
+            "Traffic jam", "Cut the 1 and thread it through the traffic without touching any",
+            TrickRule.THREAD,
+            trafficLayout()
         ),
         TrickLevel(
-            "Bank job",
-            "The 1 is guarded. Find a way to sink it",
-            listOf(Triple(1, 1.42, 0.22)) + (0 until 4).map { Triple(2 + it, 1.55, 0.08 + it * 0.09) }
+            "Bank job", "The 1 is guarded · knock it into the hole in the table",
+            TrickRule.PLAIN,
+            listOf(Triple(1, 1.835, 0.36)) + (0 until 4).map { Triple(2 + it, 1.70 + it * 0.09, 0.25) },
+            holes = listOf(doubleArrayOf(1.835, 0.80))
         )
     )
+
+    /**
+     * Traffic jam: the 1 sits off the line to the bottom-right corner, with four balls staggered
+     * either side of its path, each leaving only a couple of centimetres to spare, plus a few strays.
+     */
+    private fun trafficLayout(): List<Triple<Int, Double, Double>> {
+        val ox = 1.85; val oy = 0.95
+        val ax = 2.506; val ay = 1.236                 // the bottom-right pocket's mouth
+        val len = kotlin.math.hypot(ax - ox, ay - oy)
+        val ux = (ax - ox) / len; val uy = (ay - oy) / len
+        val off = 2 * P.R + 0.02
+        val out = ArrayList<Triple<Int, Double, Double>>()
+        out += Triple(1, ox, oy)
+        listOf(0.20 to off, 0.38 to -off, 0.56 to off, 0.74 to -off).forEachIndexed { k, (t, o) ->
+            out += Triple(2 + k, ox + ux * len * t - uy * o, oy + uy * len * t + ux * o)
+        }
+        out += Triple(6, 1.62, 1.10); out += Triple(7, 2.15, 0.55); out += Triple(8, 2.40, 0.85)
+        return out
+    }
+
+    /** Was this attempt a make under the level's rules, and how many attempts does it take off? */
+    fun judge(lv: TrickLevel, log: ShotLog): TrickJudgement {
+        val cueLost = 0 in log.pocketed || 0 in log.jumpedOff
+        fun miss(why: String) = TrickJudgement(false, why, 0, "")
+        when {
+            0 in log.fell -> return miss("the cue ball fell into the gap")
+            0 in log.jumpedOff -> return miss("the cue ball flew off the table")
+            0 in log.pocketed -> return miss("scratch")
+            TARGET in log.fell -> return miss("the 1 fell into the gap")
+            TARGET in log.jumpedOff -> return miss("the 1 flew off the table")
+            log.firstHit < 0 -> return miss("didn't hit a ball")
+        }
+        when (lv.rule) {
+            TrickRule.CUSHION -> if (log.firstHit != TARGET || log.cueCushionsBeforeHit < 1)
+                return miss("the cue ball has to hit a cushion before the 1")
+            TrickRule.FENCE -> if (log.cueAirTouched and lv.otherMask != 0)
+                return miss("the cue ball touched the fence before it landed")
+            TrickRule.ONLY_THE_1 -> if (log.touched[0] and lv.otherMask != 0)
+                return miss("the cue ball touched the ring")
+            TrickRule.THREAD -> {
+                if (log.firstHit != TARGET) return miss("the cue ball touched the traffic first")
+                if (log.touched[TARGET] and lv.otherMask != 0) return miss("the 1 touched the traffic")
+                if (log.firstHit == TARGET && !(log.cutDeg >= MIN_CUT_DEG)) return miss("hit straight on — the 1 has to be cut")
+            }
+            TrickRule.PLAIN -> {}
+        }
+        if (TARGET !in log.pocketed || cueLost) return miss("the 1 stayed up")
+        return when (lv.rule) {
+            TrickRule.CUSHION -> {
+                val extra = log.cueCushionsBeforeHit - 1
+                TrickJudgement(true, "", extra, if (extra > 0) "+$extra for ${if (extra == 1) "an extra cushion" else "$extra extra cushions"}" else "")
+            }
+            TrickRule.THREAD -> TrickJudgement(true, "", 0, "")
+            else -> {
+                val extra = log.pocketed.filter { it != 0 && it != TARGET }
+                TrickJudgement(true, "", extra.size,
+                    if (extra.isEmpty()) "" else "+${extra.size} for the ${extra.joinToString(" and ")}")
+            }
+        }
+    }
 
     /**
      * Shots known to work for each level, found offline by searching with the physics engine:
@@ -94,48 +199,57 @@ object Trick {
     val HINTS: List<List<DoubleArray>> = listOf(
         // Leap of faith
         listOf(
-            doubleArrayOf(0.58631, 0.43742, 0.14513, 5.69305, 0.00000, 0.00000, 0.96655),
-            doubleArrayOf(0.57182, 0.73711, -0.07282, 8.50000, 0.00000, 0.00000, 0.31805),
-            doubleArrayOf(0.55905, 0.70491, -0.05019, 7.10677, 0.00000, 0.00000, 0.41521),
-            doubleArrayOf(0.50545, 0.96197, -0.22552, 7.12045, -0.10363, 0.00000, 0.29686),
-            doubleArrayOf(0.55613, 0.32681, 0.21763, 7.89249, 0.00000, 0.00000, 0.27441),
-            doubleArrayOf(0.57521, 0.15726, 0.33628, 7.59632, 0.00000, 0.00000, 0.26561),
+            doubleArrayOf(0.58631, 0.43742, -0.13635, 5.60433, 0.00000, 0.00000, 0.98342),
+            doubleArrayOf(0.52856, 0.71727, -0.30807, 6.52189, -0.14718, 0.30429, 0.57419),
+            doubleArrayOf(0.46671, 0.58529, -0.22043, 6.88049, -0.09565, 0.42779, 0.47336),
+            doubleArrayOf(0.56139, 1.11036, -0.53272, 7.12228, 0.00000, 0.00000, 0.47699),
+            doubleArrayOf(0.59957, 0.95596, -0.46517, 6.93766, 0.00000, 0.00000, 1.01528),
+            doubleArrayOf(0.46636, 0.47616, -0.15247, 6.09461, 0.00000, 0.20468, 0.89665),
+        ),
+        // Off the rail
+        listOf(
+            doubleArrayOf(0.56132, 0.39192, -0.39017, 5.69869, 0.18290, -0.18862, 0.96925),
+            doubleArrayOf(0.09889, 0.08536, -0.14925, 8.16382, 0.00000, 0.00000, 0.33145),
+            doubleArrayOf(0.57783, 0.54326, -0.48898, 6.09448, 0.00000, -0.22211, 0.54590),
+            doubleArrayOf(0.51796, 0.56703, -0.48341, 5.81278, 0.00000, 0.00000, 0.65925),
+            doubleArrayOf(0.60430, 0.45078, -0.44114, 6.40729, 0.00000, 0.00000, 0.49954),
+            doubleArrayOf(0.13475, 0.55805, -0.38631, 7.29467, 0.00000, 0.00000, 0.93081),
         ),
         // Picket fence
         listOf(
-            doubleArrayOf(0.53771, 0.73138, -0.05858, 6.16512, 0.09012, 0.07256, 0.90961),
-            doubleArrayOf(0.51649, 0.74456, -0.06676, 6.63561, 0.00000, 0.00000, 0.97876),
-            doubleArrayOf(0.51481, 0.30463, 0.19646, 8.25804, 0.00000, -0.10324, 0.42300),
-            doubleArrayOf(0.58204, 0.41758, 0.13631, 6.34392, 0.00000, 0.00000, 0.61537),
-            doubleArrayOf(0.55571, 0.06973, 0.33743, 6.11900, 0.00000, -0.14202, 0.78598),
-            doubleArrayOf(0.50115, 0.62164, 0.00657, 7.50723, 0.36858, 0.00000, 0.59302),
+            doubleArrayOf(0.59274, 0.84286, -0.30017, 6.43405, 0.00000, 0.17207, 0.99144),
+            doubleArrayOf(0.58539, 0.94969, -0.35688, 6.14672, 0.37426, 0.00000, 0.89534),
+            doubleArrayOf(0.37315, 1.11449, -0.39790, 7.44172, 0.00000, 0.28294, 1.00103),
+            doubleArrayOf(0.43331, 1.13981, -0.42357, 6.86621, 0.00000, 0.00000, 0.87238),
+            doubleArrayOf(0.53103, 1.20970, 0.56154, 7.62561, 0.00000, 0.00000, 0.57482),
+            doubleArrayOf(0.51489, 0.65161, -0.17912, 6.48584, 0.13184, 0.40236, 0.77960),
         ),
         // Bullseye
         listOf(
-            doubleArrayOf(0.42731, 0.61134, 0.01756, 7.39652, 0.00000, 0.00000, 0.34149),
-            doubleArrayOf(0.53187, 0.72028, -0.06954, 6.35270, -0.30235, 0.00000, 0.50372),
-            doubleArrayOf(0.47415, 0.79190, -0.11993, 5.75373, 0.00000, 0.00000, 0.91063),
-            doubleArrayOf(0.58822, 0.16418, 0.37703, 6.30241, 0.00000, 0.00000, 0.42225),
-            doubleArrayOf(0.46350, 0.47411, 0.12122, 6.21981, -0.23795, 0.00000, 0.41147),
-            doubleArrayOf(0.44481, 0.51305, 0.09105, 6.08276, 0.00000, 0.00000, 0.88786),
+            doubleArrayOf(0.56149, 0.85983, -0.13455, 5.41269, 0.21195, -0.21969, 0.88506),
+            doubleArrayOf(0.49835, 1.16886, 0.54114, 6.41279, -0.38930, 0.00000, 0.39123),
+            doubleArrayOf(0.53957, 1.18567, -0.38247, 6.71780, -0.12819, 0.00000, 0.78174),
+            doubleArrayOf(0.42851, 0.09159, 0.32672, 6.15472, 0.15441, 0.00000, 0.63935),
+            doubleArrayOf(0.49939, 0.08802, 0.34545, 6.30899, 0.00000, 0.19395, 0.83098),
+            doubleArrayOf(0.59581, 0.90279, -0.19945, 7.28073, 0.00000, 0.43308, 0.97982),
         ),
         // Traffic jam
         listOf(
-            doubleArrayOf(0.59191, 0.46406, 0.32355, 5.90120, 0.00000, 0.04494, 0.78119),
-            doubleArrayOf(0.55491, 0.19090, 0.45316, 6.96486, 0.23117, -0.06111, 1.03351),
-            doubleArrayOf(0.57280, 0.28486, 0.41246, 5.80900, 0.24715, 0.00000, 0.96944),
-            doubleArrayOf(0.58508, 0.17308, 0.46962, 7.89852, 0.00000, 0.00000, 0.22152),
-            doubleArrayOf(0.33015, 0.27904, 0.36865, 6.55191, 0.00000, 0.00000, 0.87916),
-            doubleArrayOf(0.46983, 0.37170, 0.35210, 7.13959, 0.00000, 0.00000, 1.02047),
+            doubleArrayOf(0.60140, 0.91124, 0.01238, 5.28886, 0.00000, 0.22297, 0.91142),
+            doubleArrayOf(0.49875, 0.80589, 0.09141, 6.25632, 0.00000, -0.15932, 0.45636),
+            doubleArrayOf(0.58720, 0.75868, 0.13743, 5.60229, 0.00000, 0.00000, 0.80712),
+            doubleArrayOf(0.59997, 0.86974, 0.04916, 5.93227, 0.00000, -0.12357, 0.74977),
+            doubleArrayOf(0.57141, 1.00248, -0.06284, 6.07656, 0.00000, 0.00000, 0.46993),
+            doubleArrayOf(0.55929, 0.85434, 0.05814, 5.29741, 0.00000, 0.00000, 0.77072),
         ),
         // Bank job
         listOf(
-            doubleArrayOf(0.17741, 0.36746, 0.45285, 7.85404, -0.14203, 0.34462, 0.70376),
-            doubleArrayOf(0.45433, 0.50923, -0.08235, 7.70457, 0.00000, 0.00000, 0.31772),
-            doubleArrayOf(0.48068, 0.78252, -0.17360, 7.72326, 0.00000, 0.00000, 0.55645),
-            doubleArrayOf(0.53845, 0.49895, -0.08104, 7.93505, 0.00000, 0.00000, 0.42720),
-            doubleArrayOf(0.56469, 1.03018, -0.41305, 6.40839, 0.00000, 0.00000, 0.41675),
-            doubleArrayOf(0.47342, 0.75952, -0.31790, 8.01466, 0.00000, 0.20215, 0.72902),
+            doubleArrayOf(0.45282, 0.39209, -0.09968, 7.52122, 0.00000, 0.00000, 0.29122),
+            doubleArrayOf(0.55065, 0.39966, -0.11336, 6.68467, 0.00000, 0.00000, 0.45144),
+            doubleArrayOf(0.53386, 0.96357, -0.55008, 6.39492, 0.00000, 0.00000, 0.48618),
+            doubleArrayOf(0.44365, 0.39192, -0.09496, 6.96499, 0.00000, -0.03117, 0.35595),
+            doubleArrayOf(0.50074, 1.09239, -0.61958, 8.50000, 0.33476, 0.00000, 0.28859),
+            doubleArrayOf(0.24412, 0.84352, -0.38248, 7.24975, 0.00000, 0.00000, 0.59328),
         )
     )
 }

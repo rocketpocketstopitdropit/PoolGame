@@ -47,7 +47,8 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     init {
         // The trick-shot game uses the gap table; everything else the regulation table.
-        if (mode == GameMode.TRICK) Table.useGap() else Table.useStandard()
+        // (A trick match keeps whatever holes the current level has: the CPU's copies are made mid-game.)
+        if (mode == GameMode.TRICK) { if (!Table.gap) Table.useGap() } else Table.useStandard()
     }
 
     private var preTargets = IntArray(0)
@@ -216,7 +217,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     /** The shot clock ran out: a foul, opponent gets ball in hand. */
     fun timeFoul(): ShotOutcome {
-        if (mode == GameMode.TRICK) return trickAttempt(false, "the shot clock ran out", false)
+        if (mode == GameMode.TRICK) return trickAttempt(false, "the shot clock ran out")
         val shooter = current
         val opp = 1 - shooter
         isBreak = false
@@ -367,9 +368,13 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         message = "Level 1 · ${Trick.LEVELS[trick.level].name} · ${names[starter]} to shoot first"
     }
 
+    /** The table for the current level (some levels have a hole cut in the cloth). */
+    fun applyTrickLayout() { Table.useGap(Trick.LEVELS[trick.level].holes) }
+
     /** Puts the balls where the current level has them, with the cue ball in hand in the break area. */
     fun setupTrickLevel() {
         val lv = Trick.LEVELS[trick.level]
+        applyTrickLayout()
         for (b in world.balls) { b.onTable = false; b.stop() }
         for ((id, x, y) in lv.balls) {
             val b = world.balls[id]
@@ -390,54 +395,50 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     private fun resolveTrick(): ShotOutcome {
         val log = world.log
+        val j = Trick.judge(Trick.LEVELS[trick.level], log)
         val cueLost = 0 in log.pocketed || 0 in log.jumpedOff
-        val made = Trick.TARGET in log.pocketed && !cueLost
-        val why = when {
-            made -> ""
-            0 in log.fell -> "the cue ball fell into the gap"
-            0 in log.jumpedOff -> "the cue ball flew off the table"
-            0 in log.pocketed -> "scratch"
-            Trick.TARGET in log.fell -> "the 1 fell into the gap"
-            Trick.TARGET in log.jumpedOff -> "the 1 flew off the table"
-            log.firstHit < 0 -> "didn't hit a ball"
-            else -> "the 1 stayed up"
-        }
-        return trickAttempt(made, why, !made && !cueLost && log.firstHit < 0)
+        return trickAttempt(j.made, j.why, j.bonus, j.bonusText, !j.made && !cueLost && log.firstHit < 0)
     }
 
     /**
-     * One attempt at the level. Players alternate attempts; whoever makes it in fewer attempts wins
-     * the level (same number = a tie). Most levels won takes the match; a tie goes to sudden death.
+     * One attempt at the level. Players take turns until each has made it (or used up their
+     * attempts, or can't catch up any more). Score = attempts minus bonuses; the lower score wins
+     * the level, and a tied score goes to whoever earned more bonus. Most levels won takes the
+     * match; a tie goes to sudden death.
      */
-    private fun trickAttempt(made: Boolean, why: String, heckle: Boolean): ShotOutcome {
+    private fun trickAttempt(made: Boolean, why: String, bonus: Int = 0, bonusText: String = "", heckle: Boolean = false): ShotOutcome {
         val t = trick
+        val lv = Trick.LEVELS[t.level]
         val p = current
-        val second = 1 - t.starter
+        val q = 1 - p
         t.tries[p]++
-        if (made && t.made[p] == 0) t.made[p] = t.tries[p]
+        if (made && t.made[p] == 0) { t.made[p] = t.tries[p]; t.bonus[p] = bonus }
         t.resetPending = true
         val notes = ArrayList<String>()
-        notes += if (made) (if (you(p)) "You made it!" else "${names[p]} made it!") else "Missed: $why"
-        var levelResult = -2   // -2: level goes on, -1: tie, 0/1: winner
-        if (p == t.starter) {
-            current = second
-        } else {
-            val a = t.made[t.starter] > 0
-            val b = t.made[second] > 0
-            levelResult = when {
-                a && b -> -1
-                a -> t.starter
-                b -> second
-                !t.suddenDeath && t.round >= Trick.ROUNDS -> -1
-                else -> -2
-            }
-            if (levelResult == -2) { t.round++; current = t.starter }
+        notes += when {
+            !made -> "Missed: $why"
+            bonusText.isNotEmpty() -> (if (you(p)) "You made it! " else "${names[p]} made it! ") + bonusText
+            else -> if (you(p)) "You made it!" else "${names[p]} made it!"
+        }
+        // Who is finished with this level?
+        for (k in 0..1) {
+            val o = 1 - k
+            t.done[k] = t.made[k] > 0 || t.tries[k] >= Trick.MAX_TRIES ||
+                (t.made[o] > 0 && t.tries[k] + 1 - lv.maxBonus > t.score(o))
         }
         var win = -1
-        if (levelResult != -2) {
+        if (t.done[0] && t.done[1]) {
+            val a = t.score(0); val b = t.score(1)
+            val levelResult = when {
+                t.made[0] == 0 && t.made[1] == 0 -> -1
+                a != b -> if (a < b) 0 else 1
+                t.bonus[0] != t.bonus[1] -> if (t.bonus[0] > t.bonus[1]) 0 else 1   // tie goes to the runner
+                else -> -1
+            }
             t.results += levelResult
             if (levelResult >= 0) t.levelWins[levelResult]++
             notes += when {
+                levelResult >= 0 && a == b -> (if (you(levelResult)) "You win the level" else "${names[levelResult]} wins the level") + " on the bonus"
                 levelResult >= 0 -> if (you(levelResult)) "You win the level" else "${names[levelResult]} wins the level"
                 t.made[0] > 0 -> "Level tied"
                 else -> "Nobody made it · level tied"
@@ -451,16 +452,14 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             }
             if (win < 0) {
                 t.level = t.levelNo % Trick.LEVELS.size
-                t.round = 1
-                t.tries[0] = 0; t.tries[1] = 0; t.made[0] = 0; t.made[1] = 0
+                t.clearLevel()
                 t.starter = 1 - t.starter
                 current = t.starter
                 notes += "Level ${t.levelNo + 1} · ${Trick.LEVELS[t.level].name} · ${names[current]} first"
             }
-        } else if (p == t.starter) {
-            notes += if (you(second)) "Your turn" else "${names[second]}'s turn"
         } else {
-            notes += "Round ${t.round} · " + if (you(current)) "your turn" else "${names[current]}'s turn"
+            current = if (!t.done[q]) q else p
+            notes += if (you(current)) "your turn" else "${names[current]}'s turn"
         }
         winner = win
         ballInHand = true; kitchenOnly = true

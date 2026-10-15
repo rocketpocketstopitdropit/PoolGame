@@ -42,6 +42,11 @@
     font: bold 20px "Arial Narrow", Arial, sans-serif; letter-spacing: 0.15em; }
   .resume { width: 100%; height: 50px; margin-top: 18px; border: 0; border-radius: 14px; background: #2F8F5B; color: #fff;
     font: bold 17px "Arial Narrow", Arial, sans-serif; display: none; }
+  .vrow { display: flex; gap: 8px; margin: 8px 0 6px; }
+  .vrow button { flex: 1; height: 44px; border: 0; border-radius: 12px; background: #39434C; color: #fff;
+    font: bold 15px "Arial Narrow", Arial, sans-serif; }
+  .vrow button.vrec { background: #B23A3A; }
+  .vrow button:disabled { opacity: 0.35; }
   .help { color: #8A97A1; font-size: 12.5px; line-height: 1.45; margin: 14px 0 0; }
   #iosHint { color: #F2C94C; }
   #pause { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); justify-content: center; align-items: center; z-index: 5; }
@@ -97,6 +102,11 @@
     <label class="row"><input type="checkbox" id="prediction"> Show shot prediction (where the balls will go)</label>
 
     <label class="row"><input type="checkbox" id="sound"> Sound effects</label>
+    <div class="sec">FOUL VOICE</div>
+    <p class="help" style="margin-top:0">Plays when someone hits nothing, hits the wrong ball first, or gets no rail with
+      nothing potted. Tap Record and say it (up to 3 seconds).</p>
+    <div class="vrow"><button id="voiceRec" class="vrec">&#9679; Record</button><button id="voicePlay">&#9654; Play</button><button id="voiceDel">Delete</button></div>
+    <div class="rec" id="voiceStatus"></div>
     <button class="resume" id="resumeBtn">RESUME</button>
     <button class="play" id="play">PLAY</button>
 

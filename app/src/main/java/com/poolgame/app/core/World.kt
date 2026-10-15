@@ -39,11 +39,20 @@ class ShotLog {
     val jumpedOff = ArrayList<Int>()   // balls that flew off the table (or fell into the gap)
     val fell = ArrayList<Int>()        // of those, the ones that fell into the gap (trick-shot table)
     val pocketIn = IntArray(16) { -1 } // which pocket (index into Table.pockets) each ball dropped in
+    /** For each ball, a bit mask of the balls it touched this shot (bit n = ball n). */
+    val touched = IntArray(16)
+    /** The cue ball has come down on the far section's cloth (trick shots). */
+    var cueLanded = false
+    /** Balls the cue ball touched before it first came down on the far section. */
+    var cueAirTouched = 0
+    /** Cut angle of the cue ball's first contact, in degrees (0 = straight on), or NaN. */
+    var cutDeg = Double.NaN
 
     fun reset() {
         firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0; jumpedOff.clear()
         fell.clear()
         pocketIn.fill(-1)
+        touched.fill(0); cueLanded = false; cueAirTouched = 0; cutDeg = Double.NaN
     }
 
     fun copyFrom(o: ShotLog) {
@@ -53,6 +62,7 @@ class ShotLog {
         jumpedOff.clear(); jumpedOff.addAll(o.jumpedOff)
         fell.clear(); fell.addAll(o.fell)
         o.pocketIn.copyInto(pocketIn)
+        o.touched.copyInto(touched); cueLanded = o.cueLanded; cueAirTouched = o.cueAirTouched; cutDeg = o.cutDeg
     }
 }
 
@@ -162,6 +172,7 @@ class World {
 
     private fun cloth(b: Ball, dt: Double) {
         val r = P.R
+        if (b.id == 0 && !log.cueLanded && Table.gap && b.x > Table.GAP_X1) log.cueLanded = true
         val ux = b.vx + r * b.wy
         val uy = b.vy - r * b.wx
         val us = hypot(ux, uy)
@@ -192,6 +203,7 @@ class World {
         b.z += b.vz * dt
         b.vz -= P.G * dt
         if (b.z <= 0.0 && b.vz < 0.0 && !Table.overGap(b.x)) {
+            if (b.id == 0 && Table.gap && b.x > Table.GAP_X1) log.cueLanded = true
             b.z = 0.0
             val impact = -b.vz
             b.vz = if (impact > 0.25) impact * 0.45 else 0.0
@@ -261,6 +273,7 @@ class World {
                     b.x += b.vx * s; b.y += b.vy * s; b.z += b.vz * s
                     continue
                 }
+                noteContact(i, j, a, b)
                 if (nz != 0.0) {
                     // Airborne contact (jump shot clipping a ball): frictionless 3D impulse.
                     val ji = (1 + P.E_BALL) * 0.5 * vn
@@ -308,6 +321,25 @@ class World {
                 b.x += b.vx * s; b.y += b.vy * s
                 a.moving = true; b.moving = true
                 listener?.onBallHit(vn)
+            }
+        }
+    }
+
+    /** Who touched whom, and (for the cue ball's first contact) how thin the cut was. Called before the impulse. */
+    private fun noteContact(i: Int, j: Int, a: Ball, b: Ball) {
+        log.touched[i] = log.touched[i] or (1 shl j)
+        log.touched[j] = log.touched[j] or (1 shl i)
+        if (i != 0 && j != 0) return
+        val other = if (i == 0) j else i
+        if (!log.cueLanded) log.cueAirTouched = log.cueAirTouched or (1 shl other)
+        if (log.firstHit < 0 && log.cutDeg.isNaN()) {
+            val c = if (i == 0) a else b
+            val o = if (i == 0) b else a
+            val nx = o.x - c.x; val ny = o.y - c.y
+            val v = hypot(c.vx, c.vy); val n = hypot(nx, ny)
+            if (v > 1e-9 && n > 1e-9) {
+                val cosA = ((c.vx * nx + c.vy * ny) / (v * n)).coerceIn(-1.0, 1.0)
+                log.cutDeg = kotlin.math.acos(cosA) * 180.0 / kotlin.math.PI
             }
         }
     }
@@ -385,7 +417,7 @@ class World {
             if (!b.onTable || !b.moving) continue
             // Trick-shot table: a ball whose centre is over the gap and isn't flying falls to the floor.
             val inGap = b.z <= 0.0 && Table.overGap(b.x)
-            if (!inGap && b.x > 0.1 && b.x < P.L - 0.1 && b.y > 0.1 && b.y < P.W - 0.1) continue
+            if (!inGap && !Table.hasHoles && b.x > 0.1 && b.x < P.L - 0.1 && b.y > 0.1 && b.y < P.W - 0.1) continue
             var drop = b.x < -r || b.x > P.L + r || b.y < -r || b.y > P.W + r
             if (!drop && b.z < P.R * 0.6) for (p in Table.pockets) {
                 val dx = b.x - p.cx; val dy = b.y - p.cy

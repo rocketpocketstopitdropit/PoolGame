@@ -1,8 +1,11 @@
 package com.poolgame.app.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -34,6 +37,14 @@ class MenuActivity : Activity() {
     private var clockSec = 30
     private val stats by lazy { Stats(this) }
     private var recordText: TextView? = null
+
+    // Your own voice for table fouls
+    private var recorder: VoiceRecorder? = null
+    private var player: MediaPlayer? = null
+    private var voiceStatus: TextView? = null
+    private var recordBtn: TextView? = null
+    private var playBtn: TextView? = null
+    private var deleteBtn: TextView? = null
 
     private val levelNames = arrayOf(
         "Beginner", "Novice", "Casual", "Bar Player", "Club Player",
@@ -273,6 +284,27 @@ class MenuActivity : Activity() {
         }
         card.addView(soundSwitch, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(12f) })
 
+        // Your voice for table fouls
+        card.addView(section("FOUL VOICE"))
+        card.addView(label("Plays when someone hits nothing, hits the wrong ball first, or gets no rail with nothing potted. " +
+            "Tap Record and say it (up to 3 seconds).", 12.5f, 0xFF8A97A1.toInt()).apply { setLineSpacing(0f, 1.15f) })
+        val voiceRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dpi(8f), 0, 0) }
+        fun pill(t: String, color: Int, onClick: () -> Unit) = label(t, 15f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER
+            background = rounded(color, dp(12f))
+            setOnClickListener { onClick() }
+        }
+        recordBtn = pill("● Record", 0xFFB23A3A.toInt()) { onRecordTapped() }
+        playBtn = pill("▶ Play", 0xFF39434C.toInt()) { playVoice() }
+        deleteBtn = pill("Delete", 0xFF39434C.toInt()) { Sfx.voiceFile(this).delete(); refreshVoice(null) }
+        for ((i, b) in listOf(recordBtn!!, playBtn!!, deleteBtn!!).withIndex()) {
+            voiceRow.addView(b, LinearLayout.LayoutParams(0, dpi(44f), 1f).apply { if (i > 0) leftMargin = dpi(8f) })
+        }
+        card.addView(voiceRow)
+        voiceStatus = label("", 13f, 0xFFDDE3E8.toInt()).apply { setPadding(0, dpi(6f), 0, 0) }
+        card.addView(voiceStatus)
+        refreshVoice(null)
+
         // Resume a paused game
         resumeBtn = label("RESUME", 17f, Color.WHITE, true).apply {
             gravity = Gravity.CENTER
@@ -305,6 +337,72 @@ class MenuActivity : Activity() {
         ).apply { setPadding(0, dpi(14f), 0, 0); setLineSpacing(0f, 1.15f) })
 
         setContentView(root)
+    }
+
+    // ------------------------------------------------------------------ foul voice
+
+    private fun refreshVoice(note: String?) {
+        val f = Sfx.voiceFile(this)
+        val has = f.exists()
+        playBtn?.alpha = if (has) 1f else 0.35f
+        deleteBtn?.alpha = if (has) 1f else 0.35f
+        val secs = if (has) (f.length() - 44) / 2.0 / 44100 else 0.0
+        voiceStatus?.text = note ?: if (has) "Your voice is set (${"%.1f".format(secs)} s)" else "Not recorded yet — a cough plays instead"
+    }
+
+    private fun onRecordTapped() {
+        val r = recorder
+        if (r != null && r.isRecording) { r.stop(); return }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startRecording()
+        else requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_MIC) return
+        if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) startRecording()
+        else refreshVoice("Recording needs the microphone permission")
+    }
+
+    private fun startRecording() {
+        stopPlayback()
+        val r = VoiceRecorder(this)
+        recorder = r
+        recordBtn?.text = "■ Stop"
+        refreshVoice("Recording… say it now")
+        r.start { secs ->
+            runOnUiThread {
+                recordBtn?.text = "● Record"
+                refreshVoice(when {
+                    secs > 0 -> "Got it (${"%.1f".format(secs)} s) · it plays on the next foul"
+                    secs == 0.0 -> "Didn't hear anything — try again a bit closer to the mic"
+                    else -> "Couldn't record on this phone"
+                })
+            }
+        }
+    }
+
+    private fun playVoice() {
+        val f = Sfx.voiceFile(this)
+        if (!f.exists()) return
+        stopPlayback()
+        player = try {
+            MediaPlayer().apply {
+                setDataSource(f.path); prepare(); start()
+                setOnCompletionListener { stopPlayback() }
+            }
+        } catch (_: Throwable) { null }
+    }
+
+    private fun stopPlayback() {
+        try { player?.release() } catch (_: Throwable) { }
+        player = null
+    }
+
+    override fun onPause() {
+        recorder?.stop()
+        stopPlayback()
+        super.onPause()
     }
 
     private fun section(t: String) = label(t, 11.5f, 0xFF7F8C96.toInt(), true).apply {
@@ -347,5 +445,9 @@ class MenuActivity : Activity() {
             putExtra(GameActivity.EXTRA_CLOCK, if (clockOn && !practice) clockSec else 0)
             putExtra(GameActivity.EXTRA_PRACTICE, practice)
         })
+    }
+
+    private companion object {
+        const val REQ_MIC = 7
     }
 }

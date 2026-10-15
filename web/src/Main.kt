@@ -20,6 +20,7 @@ class App : GameHost {
     private var vw = 0.0; private var vh = 0.0; private var dpr = 1.0
     private var lastTs = -1.0
     private val slots = HashMap<Int, Int>()
+    private var mediaRec: dynamic = null
 
     // Menu state (same keys and meaning as the Android app)
     private var modeIdx = Store.getInt("modeIdx", 0)      // 0 = 8-ball, 1 = 9-ball, 2 = practice, 3 = trick shots
@@ -131,6 +132,9 @@ class App : GameHost {
         el("resetRec").addEventListener("click", {
             if (window.confirm("Reset your record? This clears all wins and losses, and your rock, paper, scissors stats.") as Boolean) { Store.resetRecord(); refreshMenu() }
         })
+        el("voiceRec").addEventListener("click", { onVoiceRecord() })
+        el("voicePlay").addEventListener("click", { sounds.unlock(); sounds.previewVoice() })
+        el("voiceDel").addEventListener("click", { VoiceStore.clear(); refreshVoice(null) })
         el("aimSens").addEventListener("input", { aimSens = (el("aimSens").value as String).toInt(); save(); refreshMenu() })
         el("prediction").addEventListener("change", { prediction = el("prediction").checked as Boolean; save() })
         el("play").addEventListener("click", { sounds.unlock(); startGame(false) })
@@ -155,6 +159,54 @@ class App : GameHost {
             (window.matchMedia("(display-mode: standalone)").matches == true) ||
             (window.matchMedia("(display-mode: fullscreen)").matches == true)
         el("iosHint").style.display = if (ios && !standalone) "block" else "none"
+    }
+
+    // ------------------------------------------------------------------ foul voice
+
+    private fun refreshVoice(note: String?) {
+        val secs = VoiceStore.seconds()
+        el("voicePlay").disabled = secs <= 0.0
+        el("voiceDel").disabled = secs <= 0.0
+        el("voiceStatus").textContent = note ?: if (secs > 0) "Your voice is set (${fmt1(secs)} s)" else "Not recorded yet — a cough plays instead"
+    }
+
+    private fun fmt1(v: Double): String { val t = kotlin.math.round(v * 10).toInt(); return "${t / 10}.${t % 10}" }
+
+    /** Record from the microphone (up to 3 s, or tap again to stop), clean it up and keep it. */
+    private fun onVoiceRecord() {
+        val current = mediaRec
+        if (current != null) { try { current.stop() } catch (_: dynamic) { }; return }
+        sounds.unlock()
+        val md = navigator.mediaDevices
+        val ctor = window.MediaRecorder
+        if (md == null || ctor == null) { refreshVoice("Recording isn't supported in this browser"); return }
+        md.getUserMedia(js("({ audio: true })")).then({ stream: dynamic ->
+            val chunks: dynamic = js("[]")
+            val rec: dynamic = js("new ctor(stream)")
+            mediaRec = rec
+            rec.ondataavailable = { e: dynamic -> if ((e.data.size as Number).toInt() > 0) chunks.push(e.data) }
+            rec.onstop = {
+                try { stream.getTracks().forEach { t: dynamic -> t.stop() } } catch (_: dynamic) { }
+                mediaRec = null
+                el("voiceRec").innerHTML = "&#9679; Record"
+                val type = rec.mimeType
+                val blob: dynamic = js("new Blob(chunks, { type: type })")
+                blob.arrayBuffer().then({ ab: dynamic ->
+                    sounds.context().decodeAudioData(ab, { buf: dynamic ->
+                        val ch = buf.getChannelData(0)
+                        val n = (ch.length as Number).toInt()
+                        val samples = DoubleArray(n) { (ch[it] as Number).toDouble() }
+                        val secs = VoiceStore.save(samples, (buf.sampleRate as Number).toInt())
+                        refreshVoice(if (secs > 0) "Got it (${fmt1(secs)} s) · it plays on the next foul"
+                            else "Didn't hear anything — try again a bit closer to the mic")
+                    }, { _: dynamic -> refreshVoice("Couldn't read the recording") })
+                })
+            }
+            rec.start()
+            el("voiceRec").innerHTML = "&#9632; Stop"
+            refreshVoice("Recording… say it now")
+            window.setTimeout({ if (mediaRec === rec) try { rec.stop() } catch (_: dynamic) { } }, 3000)
+        }, { _: dynamic -> refreshVoice("Recording needs microphone access") })
     }
 
     private fun segment(id: String, onPick: (Int) -> Unit) {
@@ -192,6 +244,7 @@ class App : GameHost {
         el("sensLabel").textContent = "Fine-aim wheel speed: $aimSens" +
             if (aimSens == 5) " (default)" else if (aimSens < 5) " (finer)" else " (faster)"
         el("prediction").checked = prediction
+        if (mediaRec == null) refreshVoice(null)
         val saved = savedSummary()
         el("resumeBtn").style.display = if (saved != null) "block" else "none"
         el("resumeBtn").textContent = "RESUME · ${saved ?: ""}"

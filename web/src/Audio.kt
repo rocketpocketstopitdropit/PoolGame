@@ -2,6 +2,7 @@ package com.poolgame.web
 
 import com.poolgame.app.core.Cough
 import com.poolgame.app.core.Crowd
+import com.poolgame.app.core.Voice
 
 import kotlin.math.PI
 import kotlin.math.abs
@@ -23,9 +24,9 @@ class Sounds {
     private var cue: dynamic = null
     private var tick: dynamic = null
     private var crowd: dynamic = null
-    private var cough1: dynamic = null
-    private var cough2: dynamic = null
-    private var speechReady = false
+    private var coughs: dynamic = null
+    private var voice: dynamic = null
+    private var voiceKey = ""
 
     /** Browsers only allow audio after a user gesture, so this is called on the first touch. */
     fun unlock() {
@@ -53,22 +54,13 @@ class Sounds {
             })
             // The crowd "awww" takes a moment to synthesize, so it's made just after the first touch.
             window.setTimeout({ if (crowd == null) crowd = buffer(Crowd.aww(rate)) }, 400)
-            window.setTimeout({
-                if (cough1 == null) { cough1 = buffer(Cough.cough(rate, 3, 138.0, 0.30)); cough2 = buffer(Cough.cough(rate, 9, 126.0, 0.36)) }
-            }, 700)
+            window.setTimeout({ if (coughs == null) coughs = buffer(Cough.coughs(rate)) }, 700)
         }
         try { if (ac.state == "suspended") ac.resume() } catch (_: dynamic) { }
-        // iPhones only allow speech that starts from a tap, so say nothing once now to unlock it.
-        if (!speechReady) try {
-            val ss = window.speechSynthesis
-            if (ss != null) {
-                val u: dynamic = js("new SpeechSynthesisUtterance(' ')")
-                u.volume = 0
-                ss.speak(u)
-                speechReady = true
-            }
-        } catch (_: dynamic) { }
     }
+
+    /** The audio context (after [unlock]), for decoding a recording. */
+    fun context(): dynamic = ac
 
     private fun gen(ms: Int, f: (Double) -> Double): DoubleArray {
         val n = rate * ms / 1000
@@ -146,32 +138,31 @@ class Sounds {
     fun beep() = play(4, tick, 0.7, 200.0)
     fun aww() = play(5, crowd, 1.0, 2500.0)
 
-    /**
-     * Someone fake-coughs a "you suck": a synthesized cough, the browser's speech voice saying the
-     * words, and a second cough landing on the end of them.
-     */
+    /** A table foul: your recorded voice (from the menu) if there is one, otherwise a couple of coughs. */
     fun heckle() {
-        if (!enabled || ac == null || cough1 == null) return
-        val t = now()
-        if (t - last[6] < 2500) return
-        last[6] = t
-        play(6, cough1, 0.8, 0.0)
-        window.setTimeout({ say("you suck") }, 140)
-        window.setTimeout({ playNow(cough2, 0.9) }, 640)
+        if (!enabled || ac == null) return
+        val v = voiceBuffer()
+        play(6, v ?: coughs, 1.0, 2500.0)
     }
 
-    private fun say(words: String) {
-        try {
-            val ss = window.speechSynthesis ?: return
-            val u: dynamic = js("new SpeechSynthesisUtterance('')")
-            u.text = words
-            u.lang = "en-US"
-            u.rate = 1.2
-            u.pitch = 0.8
-            u.volume = 0.8
-            ss.cancel()
-            ss.speak(u)
-        } catch (_: dynamic) { }
+    /** Plays your recorded voice now (the menu's Play button). */
+    fun previewVoice() { val v = voiceBuffer(); if (v != null) playNow(v, 1.0) }
+
+    private fun voiceBuffer(): dynamic {
+        val data = Store.get("foulVoice", "")
+        if (data.isEmpty()) return null
+        if (data != voiceKey || voice == null) {
+            voiceKey = data
+            voice = try {
+                val pcm = VoiceStore.decode(data)
+                val r = Store.getInt("foulVoiceRate", 22050)
+                val b = ac.createBuffer(1, pcm.size, r)
+                val ch = b.getChannelData(0)
+                for (i in pcm.indices) ch[i] = pcm[i]
+                b
+            } catch (_: dynamic) { null }
+        }
+        return voice
     }
 
     private fun playNow(buf: dynamic, vol: Double) {
@@ -234,4 +225,47 @@ object Store {
             for (k in keys) localStorage.removeItem(k)
         } catch (_: dynamic) { }
     }
+}
+
+/** Your foul voice is kept in local storage as base64 16-bit PCM. */
+object VoiceStore {
+    const val RATE = 22050
+
+    fun encode(x: DoubleArray): String {
+        val sb = StringBuilder()
+        for (v in x) {
+            val s = (v.coerceIn(-1.0, 1.0) * 32000).toInt() and 0xFFFF
+            sb.append((s and 0xFF).toChar()); sb.append((s shr 8).toChar())
+        }
+        val bin = sb.toString()
+        return js("btoa")(bin) as String
+    }
+
+    fun decode(b64: String): DoubleArray {
+        val bin = js("atob")(b64) as String
+        val n = bin.length / 2
+        return DoubleArray(n) {
+            val lo = bin[it * 2].code; val hi = bin[it * 2 + 1].code
+            var s = lo or (hi shl 8)
+            if (s >= 32768) s -= 65536
+            s / 32768.0
+        }
+    }
+
+    /** Clean up a recording and store it. Returns its length in seconds (0 = nothing heard). */
+    fun save(samples: DoubleArray, rate: Int): Double {
+        val clip = Voice.clean(samples, rate)
+        if (clip.isEmpty()) return 0.0
+        val small = Voice.resample(clip, rate, RATE)
+        Store.set("foulVoice", encode(small))
+        Store.set("foulVoiceRate", RATE.toString())
+        return small.size.toDouble() / RATE
+    }
+
+    fun seconds(): Double {
+        val d = Store.get("foulVoice", "")
+        return if (d.isEmpty()) 0.0 else d.length * 3.0 / 4 / 2 / Store.getInt("foulVoiceRate", RATE)
+    }
+
+    fun clear() { Store.set("foulVoice", ""); Store.set("foulVoiceRate", "") }
 }

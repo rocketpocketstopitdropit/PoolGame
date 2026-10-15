@@ -729,9 +729,18 @@ class GameView(
             intArrayOf(stickColors[i * 2 + 1], stickColors[i * 2], stickColors[i * 2 + 1]), null, Shader.TileMode.CLAMP)
         dash = DashPathEffect(floatArrayOf(6 * dp, 5 * dp), 0f)
 
-        background?.recycle()
-        background = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { drawBackground(Canvas(it), w, h, rail) }
+        rebuildBackground()
         predKey[0] = Double.NaN
+    }
+
+    private var bgVersion = -1
+
+    /** The table is drawn once into a bitmap, and again when its layout changes (a level with a hole). */
+    private fun rebuildBackground() {
+        if (width <= 0 || height <= 0) return
+        background?.recycle()
+        background = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { drawBackground(Canvas(it), width, height, 0.115) }
+        bgVersion = Table.version
     }
 
     private fun drawBackground(c: Canvas, w: Int, h: Int, rail: Double) {
@@ -810,6 +819,17 @@ class GameView(
         if (Table.gap) c.clipOutRect(gapRect)
         for (pk in Table.pockets) {
             val r = (pk.capR * scale).toFloat()
+            if (pk.hole) {
+                // A cup cut into the cloth, like a golf hole.
+                p.shader = RadialGradient(sx(pk.cx) - r * 0.2f, sy(pk.cy) - r * 0.25f, r,
+                    intArrayOf(0xFF050505.toInt(), 0xFF101010.toInt(), 0xFF2A2A2A.toInt()), floatArrayOf(0f, 0.7f, 1f), Shader.TileMode.CLAMP)
+                c.drawCircle(sx(pk.cx), sy(pk.cy), r, p)
+                p.shader = null
+                c.drawCircle(sx(pk.cx), sy(pk.cy), r, ring)
+                val shade = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3f * dp; color = 0x59000000 }
+                c.drawCircle(sx(pk.cx), sy(pk.cy), r + 3 * dp, shade)
+                continue
+            }
             p.shader = RadialGradient(sx(pk.cx), sy(pk.cy), r, intArrayOf(0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF141414.toInt()),
                 floatArrayOf(0f, 0.8f, 1f), Shader.TileMode.CLAMP)
             c.drawCircle(sx(pk.cx), sy(pk.cy), r, p)
@@ -850,6 +870,7 @@ class GameView(
     // ------------------------------------------------------------------ drawing
 
     override fun onDraw(canvas: Canvas) {
+        if (bgVersion != Table.version) rebuildBackground()
         background?.let { canvas.drawBitmap(it, 0f, 0f, null) }
         val w = match.world
         val humanTurn = phase == Phase.HUMAN
@@ -937,7 +958,9 @@ class GameView(
         val a = (bannerT / 0.5).coerceIn(0.0, 1.0).toFloat()
         val cx = sx(P.L / 2)
         val bw = min((P.L * scale).toFloat() * 0.62f, 420 * dp)
-        val bh = 64 * dp
+        text.typeface = regular; text.textSize = 13 * dp
+        val lines = wrap(lv.blurb, bw - 24 * dp)
+        val bh = (50 + 18 * lines.size) * dp
         val top = sy(P.W * 0.16)
         val r = RectF(cx - bw / 2, top, cx + bw / 2, top + bh)
         paint.style = Paint.Style.FILL; paint.shader = null
@@ -954,7 +977,22 @@ class GameView(
         canvas.drawText(ellipsize(head, bw - 20 * dp), cx, top + 27 * dp, text)
         text.typeface = regular; text.textSize = 13 * dp
         text.color = Color.argb((255 * a).toInt(), 206, 214, 221)
-        canvas.drawText(ellipsize(lv.blurb, bw - 20 * dp), cx, top + 49 * dp, text)
+        for ((i, l) in lines.withIndex()) canvas.drawText(l, cx, top + (49 + 18 * i) * dp, text)
+    }
+
+    /** Splits text into at most two lines that fit [maxW] (the second is shortened if it must be). */
+    private fun wrap(s: String, maxW: Float): List<String> {
+        if (text.measureText(s) <= maxW) return listOf(s)
+        val words = s.split(" ")
+        var first = ""
+        var k = 0
+        while (k < words.size) {
+            val t = if (first.isEmpty()) words[k] else "$first ${words[k]}"
+            if (text.measureText(t) > maxW && first.isNotEmpty()) break
+            first = t; k++
+        }
+        val rest = words.drop(k).joinToString(" ").trimStart('·', ' ')
+        return if (rest.isEmpty()) listOf(first) else listOf(first.trimEnd('·', ' '), ellipsize(rest, maxW))
     }
 
     private fun drawPocketCall(canvas: Canvas) {
@@ -1141,7 +1179,7 @@ class GameView(
             val t = match.trick
             text.textSize = min(12 * dp, hudH * 0.2f); text.color = 0xFFF2C94C.toInt()
             val lvl = if (t.suddenDeath) "Sudden death" else "Level ${t.levelNo + 1} of ${Trick.LEVELS.size}"
-            canvas.drawText(ellipsize("$lvl · ${Trick.LEVELS[t.level].name} · round ${t.round}", midR - midL), (midL + midR) / 2, subY, text)
+            canvas.drawText(ellipsize("$lvl · ${Trick.LEVELS[t.level].name} · fewest shots wins", midR - midL), (midL + midR) / 2, subY, text)
         } else if (mode == GameMode.NINE_BALL) {
             val r = min(hudH * 0.13f, 9 * dp)
             val total = 9 * r * 2.4f
@@ -1234,6 +1272,8 @@ class GameView(
             if (t.tries[player] > 0) {
                 sb.append("   ")
                 for (i in 1..t.tries[player]) sb.append(if (t.made[player] == i) "✓" else "✗")
+                if (t.made[player] > 0 && t.bonus[player] > 0) sb.append(" +${t.bonus[player]}")
+                if (t.made[player] > 0) sb.append(" = ${t.score(player)}")
             }
             canvas.drawText(sb.toString(), r.left + 12 * dp, iy + iconR * 0.4f, text)
         } else if (mode == GameMode.EIGHT_BALL) {

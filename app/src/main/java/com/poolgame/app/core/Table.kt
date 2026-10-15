@@ -47,7 +47,8 @@ class Pocket(
     val aimX: Double, val aimY: Double,  // where an object ball should be sent (mouth centre)
     val side: Boolean,
     val tips: DoubleArray,               // the two jaw tip points (x1,y1,x2,y2)
-    val tolerance: Double                // rough lateral error allowance at the mouth (for AI)
+    val tolerance: Double,               // rough lateral error allowance at the mouth (for AI)
+    val hole: Boolean = false            // a cup cut into the cloth (trick shots), not a pocket in the rail
 )
 
 object Table {
@@ -66,9 +67,16 @@ object Table {
     /** True while the gap table is in use (balls over the gap fall to the floor). */
     var gap = false
         private set
-    /** Index of the pocket in the middle of the far short rail (gap table only), or -1. */
-    var backPocket = -1
+    /** Bumped whenever the layout changes, so screens know to redraw the table. */
+    var version = 0
         private set
+    private var holeKey = ""
+    /** True when the cloth has holes cut in it (balls anywhere on the table may drop). */
+    var hasHoles = false
+        private set
+
+    /** Radius of a hole cut into the cloth: a ball whose centre gets inside it drops. */
+    const val HOLE_R = 0.058
 
     init { useStandard() }
 
@@ -102,38 +110,41 @@ object Table {
         segs = s.toTypedArray()
         pockets = p.toTypedArray()
         gap = false
-        backPocket = -1
+        holeKey = ""
+        hasHoles = false
+        version++
     }
 
     /**
      * The trick-shot table: the second quarter (from the head string to the side pockets) is gone.
-     * The near section has its two corner pockets; the far section has a corner pocket at each of
-     * its four corners (the old side pockets became the near ones) plus one in the middle of the
-     * far short rail. The edges facing the gap have no cushion: a ball that rolls off falls.
+     * The near section keeps its two corner pockets; the far section has just its two corner pockets
+     * at the far end. The edges facing the gap have no cushion: a ball that rolls off falls.
+     * [holes] are cups cut into the far section's cloth (x, y), for levels that have one.
      */
-    fun useGap() {
-        if (gap) return
+    fun useGap(holes: List<DoubleArray> = emptyList()) {
+        val key = holes.joinToString(";") { "${it[0]},${it[1]}" }
+        if (gap && key == holeKey) return
         val L = P.L; val W = P.W
         val s = ArrayList<Seg>()
         val p = ArrayList<Pocket>()
         for (y in doubleArrayOf(0.0, W)) {
             s += Seg(CORNER, y, GAP_X0, y)
-            s += Seg(GAP_X1 + CORNER, y, L - CORNER, y)
+            s += Seg(GAP_X1, y, L - CORNER, y)
         }
         s += Seg(0.0, CORNER, 0.0, W - CORNER)
-        s += Seg(L, CORNER, L, W / 2 - SIDE)
-        s += Seg(L, W / 2 + SIDE, L, W - CORNER)
-        // Corner pockets: near section 0..1, far section 2..5 (near the gap, then the far end).
-        for ((cx0, cy0) in listOf(0.0 to 0.0, 0.0 to W, GAP_X1 to 0.0, GAP_X1 to W, L to 0.0, L to W)) corner(s, p, cx0, cy0)
-        // The pocket in the middle of the far short rail.
-        val y1 = W / 2 - SIDE; val y2 = W / 2 + SIDE
-        s += Seg(L, y1, L + 0.06, y1 + 0.012)
-        s += Seg(L, y2, L + 0.06, y2 - 0.012)
-        p += Pocket(L + 0.03, W / 2, 0.062, L + 0.012, W / 2, true, doubleArrayOf(L, y1, L, y2), 0.022)
+        s += Seg(L, CORNER, L, W - CORNER)
+        // Corner pockets: near section 0..1, far end 2..3; then any holes.
+        for ((cx0, cy0) in listOf(0.0 to 0.0, 0.0 to W, L to 0.0, L to W)) corner(s, p, cx0, cy0)
+        for (h in holes) {
+            val r = HOLE_R
+            p += Pocket(h[0], h[1], r, h[0], h[1], false, doubleArrayOf(h[0] - r, h[1], h[0] + r, h[1]), r - P.R, hole = true)
+        }
         segs = s.toTypedArray()
         pockets = p.toTypedArray()
         gap = true
-        backPocket = p.size - 1
+        holeKey = key
+        hasHoles = holes.isNotEmpty()
+        version++
     }
 
     private fun corner(s: ArrayList<Seg>, p: ArrayList<Pocket>, cx0: Double, cy0: Double) {
@@ -142,8 +153,7 @@ object Table {
         val hTipX = cx0 + dx * CORNER; val hTipY = cy0
         val vTipX = cx0; val vTipY = cy0 + dy * CORNER
         s += Seg(hTipX, hTipY, cx0 + dx * (CORNER - 0.03), cy0 - dy * 0.055)
-        // A corner on the edge of the gap has no short rail, so no jaw on that side.
-        if (cx0 != GAP_X1) s += Seg(vTipX, vTipY, cx0 - dx * 0.055, cy0 + dy * (CORNER - 0.03))
+        s += Seg(vTipX, vTipY, cx0 - dx * 0.055, cy0 + dy * (CORNER - 0.03))
         p += Pocket(
             cx0 - dx * 0.02, cy0 - dy * 0.02, 0.068,
             cx0 + dx * CORNER * 0.42, cy0 + dy * CORNER * 0.42,
