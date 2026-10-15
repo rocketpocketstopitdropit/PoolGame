@@ -1,7 +1,7 @@
-# Pool — 8-Ball & 9-Ball for Android
+# Pool — 8-Ball, 9-Ball & Trick Shots for Android
 
-A landscape pool game with real cue-ball spin, 8-ball and 9-ball rules, a computer opponent
-with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
+A landscape pool game with real cue-ball spin, 8-ball and 9-ball rules, a trick-shot mode on a
+table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
 no image or sound assets (balls are rendered per-pixel and sounds are synthesized).
 
 ## Build & run
@@ -52,9 +52,14 @@ drop zone with a bright ring: once a ball's centre crosses the ring it falls.
 
 **Who breaks**: every new game, rematch and restart starts with rock, paper, scissors (fist, flat hand,
 sideways peace sign). Against the CPU you pick and it picks at random; in pass & play each player taps their own
-side (the pick stays hidden until both are in). Ties go again; the winner breaks.
+side (the pick stays hidden until both are in). Ties go again; the winner breaks. The two hands point at each
+other: the left one is the mirror image of the right one. Your rock, paper, scissors wins and losses, the longest
+game (most throws, ties included) and the average number of throws to a winner are kept with your record.
 
 **Crowd**: scratching the cue ball or knocking any ball off the table gets a synthesized crowd "awww".
+A table foul — hitting nothing, hitting the wrong ball first, or no rail and nothing potted — gets someone
+fake-coughing a "you suck": synthesized coughs with the phone's speech engine saying the words between them,
+muffled as if into a fist (Android renders it once and caches it; the web version uses the browser's voice).
 
 **Pause & resume**: ☰ → *Main menu* keeps the game; the menu shows *Resume*. The game is also saved if you switch
 apps or close it. A shot that was still rolling is replayed from the start of that turn.
@@ -83,7 +88,21 @@ the menu and after each game.
 - **Fouls** (scratch, no ball hit, wrong ball first, no rail after contact, a ball jumped off the
   table) give the opponent ball in hand anywhere. Jumped object balls are respotted; jumping the 8
   off in 8-ball loses (except on the break).
-- Not modelled: called pockets, push-outs, jumped balls, break rail-count requirement.
+- Not modelled: push-outs, break rail-count requirement.
+
+## Trick shots (menu → Game → Trick)
+
+The table's second quarter — from the head string to the side pockets — is cut away. The cue ball starts in
+the break area (the near section; drag it anywhere there) and has to be jumped across the 25″ gap to sink the
+1-ball on the far section. A ball that rolls off either edge falls to the floor. The far section has a corner
+pocket at each corner (the old side pockets became its near corners) plus a pocket in the middle of the back rail.
+
+Five levels: *Leap of faith* (just the 1), *Picket fence* (a row of balls along the far edge), *Bullseye* (the 1
+inside a ring), *Traffic jam* and *Bank job* (the 1 guarded next to a gap-side pocket). Play the computer or pass &
+play: players alternate attempts, and whoever makes it in fewer attempts wins the level (same attempt = tie; five
+rounds without a make = tie). Most levels won takes the match; a tie goes to sudden death. The balls reset after
+every attempt. Every level was checked with the physics engine (`core/Trick.kt` holds known working shots, and a
+unit test makes sure each level still has one).
 
 ## Physics
 
@@ -110,6 +129,10 @@ candidates are run through the real physics engine (several speeds and spins at 
 scored on whether they pot and how good the next shot is. With nothing makeable it plays a safety
 (level 5+) or sweeps the rails for a kick. Ball in hand is placed for the easiest shot.
 
+Trick shots: it starts from the known working shots for the level, searches for more with the physics engine,
+and picks the one that still goes in most often with its own aim and speed error. Headless, a level-1 CPU made
+about 5% of attempts, level 5 about 40%, and level 10 nearly every level except the bank job (~35%).
+
 | Level | Aim error (σ) | Plays position | Spin | Safeties |
 |---|---|---|---|---|
 | 1 | 1.8° | – | – | – |
@@ -126,6 +149,8 @@ app/src/main/java/com/poolgame/app/
   core/   Table.kt (constants, rails, pockets)  World.kt (physics)
           Match.kt (racks + rules)              Ai.kt (computer player)
           Crowd.kt (synthesized crowd "aww", shared with the web version)
+          Trick.kt (trick-shot levels, match state, known shots)
+          Cough.kt (synthesized coughs for the "you suck" heckle)
   ui/     MenuActivity  GameActivity  GameView (render + input + turn flow)
           BallRenderer (3D ball shading)        Sfx (synthesized sounds)
 app/src/test/  EngineTest.kt

@@ -22,7 +22,7 @@ class App : GameHost {
     private val slots = HashMap<Int, Int>()
 
     // Menu state (same keys and meaning as the Android app)
-    private var modeIdx = Store.getInt("modeIdx", 0)      // 0 = 8-ball, 1 = 9-ball, 2 = practice
+    private var modeIdx = Store.getInt("modeIdx", 0)      // 0 = 8-ball, 1 = 9-ball, 2 = practice, 3 = trick shots
     private var vsCpu = Store.getBool("vsCpu", true)
     private var level = Store.getInt("level", 5).coerceIn(1, 10)
     private var clockOn = Store.getBool("clockOn", false)
@@ -120,7 +120,8 @@ class App : GameHost {
     // ------------------------------------------------------------------ menu
 
     private fun wireMenu() {
-        segment("seg-mode") { modeIdx = it; save(); refreshMenu() }
+        // Buttons in order: 8-Ball, 9-Ball, Trick, Practice (practice keeps its old stored number, 2).
+        segment("seg-mode") { modeIdx = when (it) { 2 -> 3; 3 -> 2; else -> it }; save(); refreshMenu() }
         segment("seg-opp") { vsCpu = it == 0; save(); refreshMenu() }
         segment("seg-call") { callIdx = it; save(); refreshMenu() }
         el("skill").addEventListener("input", { level = (el("skill").value as String).toInt(); save(); refreshMenu() })
@@ -128,7 +129,7 @@ class App : GameHost {
         el("clockSec").addEventListener("input", { clockSec = (el("clockSec").value as String).toInt(); save(); refreshMenu() })
         el("sound").addEventListener("change", { sound = el("sound").checked as Boolean; save() })
         el("resetRec").addEventListener("click", {
-            if (window.confirm("Reset your record? This clears all wins and losses.") as Boolean) { Store.resetRecord(); refreshMenu() }
+            if (window.confirm("Reset your record? This clears all wins and losses, and your rock, paper, scissors stats.") as Boolean) { Store.resetRecord(); refreshMenu() }
         })
         el("aimSens").addEventListener("input", { aimSens = (el("aimSens").value as String).toInt(); save(); refreshMenu() })
         el("prediction").addEventListener("change", { prediction = el("prediction").checked as Boolean; save() })
@@ -168,13 +169,17 @@ class App : GameHost {
         for (i in 0 until n) buttons[i].className = if (i == sel) "on" else ""
     }
 
-    private fun modeName() = if (modeIdx == 1) GameMode.NINE_BALL.name else GameMode.EIGHT_BALL.name
+    private fun menuMode() = when (modeIdx) { 1 -> GameMode.NINE_BALL; 3 -> GameMode.TRICK; else -> GameMode.EIGHT_BALL }
+    private fun modeName() = menuMode().name
+    private fun nameOf(m: GameMode) = when (m) { GameMode.EIGHT_BALL -> "8-Ball"; GameMode.NINE_BALL -> "9-Ball"; GameMode.TRICK -> "Trick shots" }
 
     private fun refreshMenu() {
-        setSegment("seg-mode", modeIdx)
+        setSegment("seg-mode", when (modeIdx) { 2 -> 3; 3 -> 2; else -> modeIdx })
         setSegment("seg-opp", if (vsCpu) 0 else 1)
         setSegment("seg-call", callIdx)
         el("matchOpts").style.display = if (modeIdx == 2) "none" else "block"
+        el("callBlock").style.display = if (modeIdx == 3) "none" else "block"
+        el("trickHelp").style.display = if (modeIdx == 3) "block" else "none"
         el("skillBlock").style.display = if (vsCpu) "block" else "none"
         el("skill").value = level.toString()
         el("skillLabel").textContent = "Level $level · ${levelNames[level - 1]}"
@@ -191,11 +196,12 @@ class App : GameHost {
         el("resumeBtn").style.display = if (saved != null) "block" else "none"
         el("resumeBtn").textContent = "RESUME · ${saved ?: ""}"
         val m = modeName()
-        val name = if (modeIdx == 1) "9-Ball" else "8-Ball"
-        el("record").innerHTML = if (vsCpu)
+        val name = nameOf(menuMode())
+        el("record").innerHTML = (if (vsCpu)
             "$name vs level $level: <b>${Store.wins(m, true, level)} W – ${Store.losses(m, true, level)} L</b><br>" +
                 "$name vs all levels: ${Store.totalWins(m)} W – ${Store.totalLosses(m)} L"
-        else "$name pass &amp; play: Player 1 <b>${Store.wins(m, false, 0)} – ${Store.losses(m, false, 0)}</b> Player 2"
+        else "$name pass &amp; play: Player 1 <b>${Store.wins(m, false, 0)} – ${Store.losses(m, false, 0)}</b> Player 2") +
+            "<br><br>" + Store.rpsSummary(vsCpu)
     }
 
     private fun save() {
@@ -207,7 +213,7 @@ class App : GameHost {
 
     private fun savedSummary(): String? {
         val s = GameSave.readSettings(Store.get("savedGame", "")) ?: return null
-        val name = if (s.mode == GameMode.NINE_BALL) "9-Ball" else "8-Ball"
+        val name = nameOf(s.mode)
         return when {
             s.practice -> "Practice"
             s.vsCpu -> "$name vs CPU level ${s.level}"
@@ -222,7 +228,7 @@ class App : GameHost {
 
     private fun startGame(resume: Boolean) {
         var practice = modeIdx == 2
-        var mode = if (modeIdx == 1) GameMode.NINE_BALL else GameMode.EIGHT_BALL
+        var mode = menuMode()
         var cpu = vsCpu && !practice
         var lvl = level
         var clock = if (clockOn && !practice) clockSec else 0
@@ -237,9 +243,11 @@ class App : GameHost {
                 call = s.callMode
             }
         } else Store.set("savedGame", "")
+        if (mode == GameMode.TRICK) call = CallMode.OFF
         sounds.enabled = sound
         playingCpu = cpu; playingLevel = lvl; playingMode = mode; playingPractice = practice
         el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
+        el("restart").textContent = if (mode == GameMode.TRICK) "Restart match" else "Restart rack"
         game = Game(mode, cpu, lvl, clock, practice, aimSens, prediction, text, call, sounds, this)
         el("menu").style.display = "none"
         canvas.style.display = "block"
@@ -266,6 +274,8 @@ class App : GameHost {
 
     override fun onExitToMenu() = showMenu()
 
+    override fun onRpsFinished(winner: Int, rounds: Int) = Store.recordRps(playingCpu, winner, rounds)
+
     override fun onGameFinished(winner: Int): String {
         Store.set("savedGame", "")
         if (game == null || playingPractice) return ""
@@ -273,7 +283,7 @@ class App : GameHost {
         val cpu = playingCpu
         val lvl = if (cpu) playingLevel else 0
         Store.record(m, cpu, lvl, winner)
-        val name = if (playingMode == GameMode.NINE_BALL) "9-Ball" else "8-Ball"
+        val name = nameOf(playingMode)
         return if (cpu) "Your $name record vs level $lvl: ${Store.wins(m, true, lvl)}–${Store.losses(m, true, lvl)}"
         else "$name pass & play: Player 1 ${Store.wins(m, false, 0)} – Player 2 ${Store.losses(m, false, 0)}"
     }

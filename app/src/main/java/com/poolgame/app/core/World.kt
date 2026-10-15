@@ -36,11 +36,13 @@ class ShotLog {
     var railAfterHit = false          // any ball touched a cushion after first contact
     var cueCushionsBeforeHit = 0
     var hitX = 0.0; var hitY = 0.0     // cue-ball centre at first contact
-    val jumpedOff = ArrayList<Int>()   // balls that flew off the table
+    val jumpedOff = ArrayList<Int>()   // balls that flew off the table (or fell into the gap)
+    val fell = ArrayList<Int>()        // of those, the ones that fell into the gap (trick-shot table)
     val pocketIn = IntArray(16) { -1 } // which pocket (index into Table.pockets) each ball dropped in
 
     fun reset() {
         firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0; jumpedOff.clear()
+        fell.clear()
         pocketIn.fill(-1)
     }
 
@@ -49,6 +51,7 @@ class ShotLog {
         railAfterHit = o.railAfterHit; cueCushionsBeforeHit = o.cueCushionsBeforeHit
         hitX = o.hitX; hitY = o.hitY
         jumpedOff.clear(); jumpedOff.addAll(o.jumpedOff)
+        fell.clear(); fell.addAll(o.fell)
         o.pocketIn.copyInto(pocketIn)
     }
 }
@@ -184,11 +187,11 @@ class World {
         if (abs(b.vx) + abs(b.vy) < 0.004 && r * (abs(b.wx) + abs(b.wy)) < 0.004) b.stop()
     }
 
-    /** Ballistic flight after a jump; bounces on the slate until it settles. */
+    /** Ballistic flight after a jump; bounces on the slate until it settles (over the gap there is no slate). */
     private fun flight(b: Ball, dt: Double) {
         b.z += b.vz * dt
         b.vz -= P.G * dt
-        if (b.z <= 0.0 && b.vz < 0.0) {
+        if (b.z <= 0.0 && b.vz < 0.0 && !Table.overGap(b.x)) {
             b.z = 0.0
             val impact = -b.vz
             b.vz = if (impact > 0.25) impact * 0.45 else 0.0
@@ -380,11 +383,21 @@ class World {
         val r = P.R
         for (b in balls) {
             if (!b.onTable || !b.moving) continue
-            if (b.x > 0.1 && b.x < P.L - 0.1 && b.y > 0.1 && b.y < P.W - 0.1) continue
+            // Trick-shot table: a ball whose centre is over the gap and isn't flying falls to the floor.
+            val inGap = b.z <= 0.0 && Table.overGap(b.x)
+            if (!inGap && b.x > 0.1 && b.x < P.L - 0.1 && b.y > 0.1 && b.y < P.W - 0.1) continue
             var drop = b.x < -r || b.x > P.L + r || b.y < -r || b.y > P.W + r
             if (!drop && b.z < P.R * 0.6) for (p in Table.pockets) {
                 val dx = b.x - p.cx; val dy = b.y - p.cy
                 if (dx * dx + dy * dy < p.capR * p.capR) { drop = true; break }
+            }
+            if (!drop && inGap) {
+                b.onTable = false
+                log.jumpedOff += b.id
+                log.fell += b.id
+                listener?.onOffTable(b.id)
+                b.stop()
+                continue
             }
             if (drop) {
                 val offTable = b.z > 0.0 && (b.x < -r || b.x > P.L + r || b.y < -r || b.y > P.W + r)
@@ -416,6 +429,7 @@ class World {
     fun isFree(x: Double, y: Double, ignore: Int = 0): Boolean {
         val r = P.R
         if (x < r || x > P.L - r || y < r || y > P.W - r) return false
+        if (Table.gap && x > Table.GAP_X0 - 0.6 * r && x < Table.GAP_X1 + 0.6 * r) return false
         val m = (2 * r + 0.0005)
         for (b in balls) {
             if (!b.onTable || b.id == ignore) continue

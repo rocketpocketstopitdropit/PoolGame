@@ -12,6 +12,7 @@ import com.poolgame.app.core.Plan
 import com.poolgame.app.core.Prediction
 import com.poolgame.app.core.Predictor
 import com.poolgame.app.core.Table
+import com.poolgame.app.core.Trick
 import com.poolgame.app.core.World
 import com.poolgame.app.core.WorldListener
 import com.poolgame.app.core.toRad
@@ -31,6 +32,8 @@ interface GameHost {
     fun onMenuRequested()
     fun onExitToMenu()
     fun onGameFinished(winner: Int): String
+    /** Rock, paper, scissors decided who breaks: [rounds] throws, ties included. */
+    fun onRpsFinished(winner: Int, rounds: Int)
 }
 
 /** The game screen, drawn on a canvas. A port of the Android GameView. */
@@ -97,6 +100,7 @@ class Game(
     private var rpsT = 0.0
     private var rpsBeat = 0
     private var rpsTie = false
+    private var rpsRounds = 0                     // throws this game, ties included (for the stats)
     private val rpsBtn = Array(2) { Array(3) { Rect() } }
     private val rpsPanel = Rect()
 
@@ -105,6 +109,11 @@ class Game(
     private val hit = DoubleArray(4)
 
     private var callFlashUntil = 0.0
+
+    // Trick shots: a banner announcing each level as it starts.
+    private val trick = mode == GameMode.TRICK
+    private var bannerLevel = -1
+    private var bannerT = 0.0
     private var clockStarted = false
     private var clockLeft = 0.0
     private var lastBeep = 0
@@ -202,6 +211,8 @@ class Game(
         potN = 0
         spinX = 0.0; spinY = 0.0; power = 0.0; elevDeg = 0.0
         gameOverTitle = ""; recordLine = ""
+        bannerLevel = -1; bannerT = 0.0
+        rpsRounds = 0
         message = match.message
         if (practice) startTurn() else startRps(false)
     }
@@ -215,7 +226,7 @@ class Game(
         rpsT = 0.0; rpsBeat = 0
         rpsTie = tie
         clearTouches()
-        message = if (tie) "Tie — go again!" else "Rock, paper, scissors — the winner breaks"
+        message = if (tie) "Tie — go again!" else "Rock, paper, scissors — the winner ${if (trick) "goes first" else "breaks"}"
     }
 
     private fun rpsChoose(player: Int, choice: Int) {
@@ -235,9 +246,9 @@ class Game(
     private fun rpsDone() {
         val w = rpsWinner()
         if (w < 0) { startRps(true); return }
+        host.onRpsFinished(w, rpsRounds)
         breaker = w
-        match.current = w
-        match.message = "${names[w]} to break"
+        match.setBreaker(w)
         message = match.message
         startTurn()
     }
@@ -262,6 +273,7 @@ class Game(
         spinX = 0.0; spinY = 0.0; power = 0.0; elevDeg = 0.0
         gameOverTitle = ""; recordLine = ""
         message = if (practice) "Practice · hold any ball to move it" else "Game resumed · " + match.message
+        bannerLevel = -1
         startTurn()
         return true
     }
@@ -276,6 +288,11 @@ class Game(
     }
 
     private fun startTurn() {
+        match.prepareTurn()
+        if (trick && match.winner < 0 && match.trick.levelNo != bannerLevel) {
+            bannerLevel = match.trick.levelNo
+            bannerT = 3.2
+        }
         if (match.winner >= 0) {
             phase = Phase.OVER
             val w = match.winner
@@ -317,6 +334,10 @@ class Game(
 
     private fun aimAtNearestTarget() {
         val c = match.world.balls[0]
+        if (trick) {
+            val b = match.world.balls[Trick.TARGET]
+            if (b.onTable) { aimAngle = atan2(b.y - c.y, b.x - c.x); return }
+        }
         val t = match.legalTargets().filter { match.world.balls[it].onTable }
             .minByOrNull { hypot(match.world.balls[it].x - c.x, match.world.balls[it].y - c.y) } ?: return
         val b = match.world.balls[t]
@@ -451,6 +472,7 @@ class Game(
     }
 
     fun update(dt: Double) {
+        if (bannerT > 0) bannerT -= dt
         if (sinks.isNotEmpty()) {
             for (s in sinks) s.age += dt
             sinks.removeAll { it.age > 0.35 }
@@ -462,7 +484,7 @@ class Game(
                     rpsT += dt
                     val beat = (rpsT / RPS_BEAT).toInt()
                     if (beat > rpsBeat) { rpsBeat = beat; if (beat < 3) sfx.rail(2.2) }
-                    if (rpsT >= 3 * RPS_BEAT) { rps = Rps.REVEAL; rpsT = 0.0; sfx.ball(3.0) }
+                    if (rpsT >= 3 * RPS_BEAT) { rps = Rps.REVEAL; rpsT = 0.0; rpsRounds++; sfx.ball(3.0) }
                 }
                 Rps.REVEAL -> { rpsT += dt; if (rpsT >= 2.4) rpsDone() }
                 else -> {}
@@ -490,7 +512,8 @@ class Game(
                         val out = match.resolve()
                         message = out.message
                         phase = Phase.PAUSE
-                        pauseT = if (out.foul || out.winner >= 0) 0.9 else 0.45
+                        pauseT = if (trick) (if (out.made) 1.6 else 1.3) else if (out.foul || out.winner >= 0) 0.9 else 0.45
+                        if (out.heckle) window.setTimeout({ sfx.heckle() }, 260)
                     }
                 }
             }
@@ -549,7 +572,7 @@ class Game(
 
         val pw = min(leftW * 0.45, 30.0)
         powerRect.set(leftW / 2 - pw / 2, hudH + 34, leftW / 2 + pw / 2, h - 18)
-        val nBalls = match.ballIds().count()
+        val nBalls = if (trick) 8 else match.ballIds().count()
         potR = min((trayRect.h - 6) / (nBalls * 2.06), trayW / 2 - 3)
         for (i in 0 until potN) { potY[i] = traySlotY(i); potV[i] = 0.0 }
 
@@ -640,7 +663,36 @@ class Game(
         sh2.addColorStop(0.0, "rgba(0,0,0,0.27)"); sh2.addColorStop(1.0, "rgba(0,0,0,0)")
         c.fillStyle = sh2; c.fillRect(sx(0.0), sy(0.0), 0.025 * scale, P.W * scale)
 
+        // Trick-shot table: the second quarter is cut out. The floor shows through the gap, the
+        // cut edges of the slate and rails face each other across it, and each side throws a shadow.
+        val gl = sx(Table.GAP_X0); val gr2 = sx(Table.GAP_X1)
+        if (Table.gap) {
+            c.fillStyle = g0
+            c.fillRect(gl, t - 12, gr2 - gl, b - t + 24)
+            val s1 = c.createLinearGradient(gl, 0.0, gl + 34, 0.0)
+            s1.addColorStop(0.0, "rgba(0,0,0,0.67)"); s1.addColorStop(1.0, "rgba(0,0,0,0)")
+            c.fillStyle = s1; c.fillRect(gl, t + 6, 34.0, b - t + 2)
+            val s2 = c.createLinearGradient(gr2, 0.0, gr2 - 18, 0.0)
+            s2.addColorStop(0.0, "rgba(0,0,0,0.47)"); s2.addColorStop(1.0, "rgba(0,0,0,0)")
+            c.fillStyle = s2; c.fillRect(gr2 - 18, t + 6, 18.0, b - t + 2)
+            val edge = 5.0
+            for (side in 0..1) {
+                val x0 = if (side == 0) gl else gr2 - edge
+                c.fillStyle = "#3C1E0C"; c.fillRect(x0, t, edge, b - t)
+                c.fillStyle = "#2C3034"; c.fillRect(x0, sy(-0.045), edge, (P.W + 0.09) * scale)
+                c.fillStyle = "#145F38"
+                c.fillRect(if (side == 0) x0 else x0 + edge - 1.5, sy(-0.045), 1.5, (P.W + 0.09) * scale)
+            }
+            c.strokeStyle = "rgba(255,255,255,0.19)"; c.lineWidth = 1.0
+            c.line(gl - 1.5, sy(0.0), gl - 1.5, sy(P.W))
+        }
+
         // Pockets: the hole is exactly the drop zone, outlined in a bright ring.
+        c.save()
+        if (Table.gap) {
+            // Keep the pocket holes off the floor in the gap.
+            c.beginPath(); c.rect(0.0, 0.0, gl, h); c.rect(gr2, 0.0, w - gr2, h); c.clip()
+        }
         for (pk in Table.pockets) {
             val pr = pk.capR * scale
             val hole = c.createRadialGradient(sx(pk.cx), sy(pk.cy), 0.0, sx(pk.cx), sy(pk.cy), pr)
@@ -649,6 +701,7 @@ class Game(
             c.strokeStyle = "#F2E3B3"; c.lineWidth = 2.0
             c.circle(sx(pk.cx), sy(pk.cy), pr); c.stroke()
         }
+        c.restore()
         c.strokeStyle = "#0E4A2D"; c.lineWidth = 2.0; c.lineCap = "round"
         for (sg in Table.segs) c.line(sx(sg.ax), sy(sg.ay), sx(sg.bx), sy(sg.by))
 
@@ -658,8 +711,13 @@ class Game(
         fun diamond(x: Double, y: Double) {
             c.beginPath(); c.moveTo(x, y - dr); c.lineTo(x + dr * 0.6, y); c.lineTo(x, y + dr); c.lineTo(x - dr * 0.6, y); c.closePath(); c.fill()
         }
-        for (i in 1..7) if (i != 4) { val x = P.L * i / 8; diamond(sx(x), sy(-dOff)); diamond(sx(x), sy(P.W + dOff)) }
-        for (i in 1..3) { val y = P.W * i / 4; diamond(sx(-dOff), sy(y)); diamond(sx(P.L + dOff), sy(y)) }
+        for (i in 1..7) if (i != 4 && !(Table.gap && i in 2..3)) { val x = P.L * i / 8; diamond(sx(x), sy(-dOff)); diamond(sx(x), sy(P.W + dOff)) }
+        for (i in 1..3) {
+            val y = P.W * i / 4
+            diamond(sx(-dOff), sy(y))
+            if (!(Table.gap && i == 2)) diamond(sx(P.L + dOff), sy(y))
+        }
+        if (Table.gap) return
         c.strokeStyle = "rgba(255,255,255,0.19)"; c.lineWidth = 1.0
         c.setLineDash(arrayOf(4.0, 6.0)); c.line(sx(P.HEAD_X), sy(0.0), sx(P.HEAD_X), sy(P.W)); c.setLineDash(noDash)
         c.fillStyle = "rgba(255,255,255,0.33)"
@@ -725,6 +783,7 @@ class Game(
             (phase == Phase.CPU_ANIM && (plan == null || !plan.hasPlacement || animT >= 0.45))
         if (showCue && cue.onTable) drawCueStick(ctx, sx(cueX), sy(cueY))
 
+        if (bannerT > 0 && trick) drawBanner(ctx)
         drawHud(ctx)
         drawPowerBar(ctx)
         drawTray(ctx)
@@ -733,6 +792,31 @@ class Game(
         drawWheel(ctx)
         if (phase == Phase.RPS) drawRps(ctx)
         if (phase == Phase.OVER) drawGameOver(ctx)
+    }
+
+    /** Trick shots: the level's name and goal over the table as it starts, fading out. */
+    private fun drawBanner(ctx: Ctx2D) {
+        val t = match.trick
+        val lv = Trick.LEVELS[t.level]
+        val a = (bannerT / 0.5).coerceIn(0.0, 1.0)
+        val cx = sx(P.L / 2)
+        val bw = min(P.L * scale * 0.62, 420.0)
+        val bh = 64.0
+        val top = sy(P.W * 0.16)
+        ctx.save()
+        ctx.globalAlpha = a
+        ctx.fillStyle = "rgba(20,26,31,0.88)"
+        ctx.roundRect(cx - bw / 2, top, bw, bh, 14.0); ctx.fill()
+        ctx.strokeStyle = "#F2C94C"; ctx.lineWidth = 2.0; ctx.setLineDash(noDash)
+        ctx.roundRect(cx - bw / 2, top, bw, bh, 14.0); ctx.stroke()
+        ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"
+        ctx.font = font(19.0, true); ctx.fillStyle = "#FFF"
+        val head = if (t.suddenDeath) "SUDDEN DEATH · ${lv.name.uppercase()}"
+            else "LEVEL ${t.levelNo + 1} OF ${Trick.LEVELS.size} · ${lv.name.uppercase()}"
+        ctx.fillText(ellipsize(ctx, head, bw - 20), cx, top + 27)
+        ctx.font = font(13.0, false); ctx.fillStyle = "#CED6DD"
+        ctx.fillText(ellipsize(ctx, lv.blurb, bw - 20), cx, top + 49)
+        ctx.restore()
     }
 
     private fun drawPocketCall(ctx: Ctx2D) {
@@ -869,6 +953,7 @@ class Game(
         val msg = when (phase) {
             Phase.CPU_THINK, Phase.CPU_ANIM -> if (message.isNotEmpty()) message else "CPU is thinking…"
             Phase.HUMAN -> when {
+                trick && match.ballInHand -> "${names[match.current]}: jump the gap and sink the 1 · drag the cue ball to move it"
                 match.ballInHand && match.isBreak -> "${names[match.current]}: place the cue ball behind the line, then break"
                 match.ballInHand -> "${names[match.current]}: ball in hand — drag the cue ball" +
                     if (shotClock > 0 && !clockStarted) " · clock starts when you aim" else ""
@@ -883,6 +968,11 @@ class Game(
         if (phase == Phase.CPU_THINK) {
             ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
             ctx.fillText("CPU (level $cpuLevel) is thinking…", (midL + midR) / 2, subY)
+        } else if (trick) {
+            val t = match.trick
+            ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
+            val lvl = if (t.suddenDeath) "Sudden death" else "Level ${t.levelNo + 1} of ${Trick.LEVELS.size}"
+            ctx.fillText(ellipsize(ctx, "$lvl · ${Trick.LEVELS[t.level].name} · round ${t.round}", midR - midL), (midL + midR) / 2, subY)
         } else if (mode == GameMode.NINE_BALL) {
             val r = min(hudH * 0.13, 9.0)
             var x = (midL + midR) / 2 - 9 * r * 2.4 / 2 + r
@@ -939,7 +1029,16 @@ class Game(
         ctx.font = font(min(11.0, r.h * 0.22), false); ctx.fillStyle = "#9AA7B1"
         val iconR = min(r.h * 0.16, 9.0)
         val iy = r.t + r.h * 0.70
-        if (mode == GameMode.EIGHT_BALL) {
+        if (trick) {
+            // Levels won, then this level's attempts: a tick for the one that went in.
+            val t = match.trick
+            val sb = StringBuilder("Levels won: ${t.levelWins[player]}")
+            if (t.tries[player] > 0) {
+                sb.append("   ")
+                for (i in 1..t.tries[player]) sb.append(if (t.made[player] == i) "✓" else "✗")
+            }
+            ctx.fillText(sb.toString(), r.l + 12, iy + iconR * 0.4)
+        } else if (mode == GameMode.EIGHT_BALL) {
             val g = match.groups[player]
             if (g == Group.OPEN) {
                 if (!match.isBreak) ctx.fillText("Open table", r.l + 12, iy + iconR * 0.4)
@@ -1070,10 +1169,15 @@ class Game(
     // ------------------------------------------------------------------ rock, paper, scissors (drawing)
 
     /** Draws a hand gesture centred at (cx, cy), rotated so it points across at the other player. */
-    private fun drawGesture(ctx: Ctx2D, g: Int, cx: Double, cy: Double, size: Double, rotDeg: Double, alpha: Double = 1.0) {
+    /**
+     * Draws a hand gesture centred at (cx, cy), rotated so it points across at the other player.
+     * [mirror] flips it left to right first, so the left player's hand is the mirror image of the right's.
+     */
+    private fun drawGesture(ctx: Ctx2D, g: Int, cx: Double, cy: Double, size: Double, rotDeg: Double, alpha: Double = 1.0, mirror: Boolean = false) {
         ctx.save()
         ctx.globalAlpha = alpha
         ctx.translate(cx, cy)
+        if (mirror) ctx.scale(-1.0, 1.0)
         ctx.rotate(rotDeg * PI / 180)
         ctx.font = "${size.toInt().coerceAtLeast(8)}px 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif"
         ctx.textAlign = "center"; ctx.textBaseline = "middle"
@@ -1098,16 +1202,16 @@ class Game(
         val win = rpsWinner()
         val sub = when (rps) {
             Rps.PICK -> when {
-                rpsTie -> "Tie! Go again"
-                vsCpu -> "Pick your hand · the winner breaks"
-                else -> "Both pick on your own side · the winner breaks"
+                rpsTie -> "Tie! Go again · round ${rpsRounds + 1}"
+                vsCpu -> if (trick) "Pick your hand · the winner shoots first" else "Pick your hand · the winner breaks"
+                else -> if (trick) "Both pick on your own side · the winner shoots first" else "Both pick on your own side · the winner breaks"
             }
             Rps.SHAKE -> SHAKE_WORDS[(rpsT / RPS_BEAT).toInt().coerceIn(0, 2)]
             Rps.REVEAL -> when {
                 win < 0 -> "Shoot! · Tie — go again"
-                vsCpu && win == 0 -> "Shoot! · You win — you break!"
-                vsCpu -> "Shoot! · CPU wins — CPU breaks"
-                else -> "Shoot! · ${names[win]} wins — ${names[win]} breaks!"
+                vsCpu && win == 0 -> if (trick) "Shoot! · You win — you go first!" else "Shoot! · You win — you break!"
+                vsCpu -> if (trick) "Shoot! · CPU wins — CPU goes first" else "Shoot! · CPU wins — CPU breaks"
+                else -> "Shoot! · ${names[win]} wins — ${names[win]} ${if (trick) "goes first" else "breaks"}!"
             }
         }
         val picking = rps == Rps.PICK
@@ -1123,19 +1227,22 @@ class Game(
         val bob = if (rps == Rps.SHAKE) abs(sin(PI * rpsT / RPS_BEAT)) * hand * 0.35 else 0.0
         for (pl in 0..1) {
             val cx = sideX[pl]
-            val rot = if (pl == 0) 90.0 else -90.0
+            // Both hands point across at each other: the right hand is turned to face left, and the
+            // left hand is its mirror image (flipped across the vertical), not the same hand upside down.
+            val rot = -90.0
+            val mirror = pl == 0
             ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"
             ctx.font = font(13.0, true); ctx.fillStyle = "#FFF"
             ctx.fillText(if (isCpu(pl)) "CPU" else names[pl].uppercase(), cx, p.t + ph * 0.3)
             when (rps) {
-                Rps.PICK, Rps.SHAKE -> drawGesture(ctx, 0, cx, handY - bob, hand, rot)
+                Rps.PICK, Rps.SHAKE -> drawGesture(ctx, 0, cx, handY - bob, hand, rot, 1.0, mirror)
                 Rps.REVEAL -> {
                     val pop = 1 + 0.18 * (1 - (rpsT / 0.15).coerceIn(0.0, 1.0))
                     if (win == pl && rpsT > 0.2) {
                         ctx.strokeStyle = "#F2C94C"; ctx.lineWidth = 3.0
                         ctx.circle(cx, handY, hand * 0.56); ctx.stroke()
                     }
-                    drawGesture(ctx, rpsPick[pl], cx, handY, hand * pop, rot, if (win >= 0 && win != pl && rpsT > 0.2) 0.47 else 1.0)
+                    drawGesture(ctx, rpsPick[pl], cx, handY, hand * pop, rot, if (win >= 0 && win != pl && rpsT > 0.2) 0.47 else 1.0, mirror)
                 }
             }
             val bs = min(pw * 0.5 / 3.5, ph * 0.26)
@@ -1306,10 +1413,12 @@ class Game(
             }
             Touch.MOVE_CUE -> {
                 dragX = x; dragY = y
-                dragInvalid = !match.placeCue(
-                    tx(x).coerceIn(P.R, if (match.kitchenOnly) P.HEAD_X else P.L - P.R),
-                    ty(y).coerceIn(P.R, P.W - P.R)
-                )
+                val maxX = when {
+                    !match.kitchenOnly -> P.L - P.R
+                    Table.gap -> Table.GAP_X0 - 0.61 * P.R     // stay on the near section
+                    else -> P.HEAD_X
+                }
+                dragInvalid = !match.placeCue(tx(x).coerceIn(P.R, maxX), ty(y).coerceIn(P.R, P.W - P.R))
             }
             Touch.AIM -> aimAt(x, y)
             Touch.PENDING -> if (hypot(x - ptrDownX[id], y - ptrDownY[id]) > 10) { ptrMode[id] = Touch.AIM; aimAt(x, y) }

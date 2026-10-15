@@ -1,5 +1,6 @@
 package com.poolgame.web
 
+import com.poolgame.app.core.Cough
 import com.poolgame.app.core.Crowd
 
 import kotlin.math.PI
@@ -15,13 +16,16 @@ class Sounds {
     private var ac: dynamic = null
     private val rate = 44100
     private val rnd = Random(7)
-    private val last = DoubleArray(6)
+    private val last = DoubleArray(7)
     private var click: dynamic = null
     private var cushion: dynamic = null
     private var pocket: dynamic = null
     private var cue: dynamic = null
     private var tick: dynamic = null
     private var crowd: dynamic = null
+    private var cough1: dynamic = null
+    private var cough2: dynamic = null
+    private var speechReady = false
 
     /** Browsers only allow audio after a user gesture, so this is called on the first touch. */
     fun unlock() {
@@ -49,8 +53,21 @@ class Sounds {
             })
             // The crowd "awww" takes a moment to synthesize, so it's made just after the first touch.
             window.setTimeout({ if (crowd == null) crowd = buffer(Crowd.aww(rate)) }, 400)
+            window.setTimeout({
+                if (cough1 == null) { cough1 = buffer(Cough.cough(rate, 3, 138.0, 0.30)); cough2 = buffer(Cough.cough(rate, 9, 126.0, 0.36)) }
+            }, 700)
         }
         try { if (ac.state == "suspended") ac.resume() } catch (_: dynamic) { }
+        // iPhones only allow speech that starts from a tap, so say nothing once now to unlock it.
+        if (!speechReady) try {
+            val ss = window.speechSynthesis
+            if (ss != null) {
+                val u: dynamic = js("new SpeechSynthesisUtterance(' ')")
+                u.volume = 0
+                ss.speak(u)
+                speechReady = true
+            }
+        } catch (_: dynamic) { }
     }
 
     private fun gen(ms: Int, f: (Double) -> Double): DoubleArray {
@@ -128,6 +145,46 @@ class Sounds {
     fun strike(speed: Double) = play(3, cue, 0.25 + speed / 7.0)
     fun beep() = play(4, tick, 0.7, 200.0)
     fun aww() = play(5, crowd, 1.0, 2500.0)
+
+    /**
+     * Someone fake-coughs a "you suck": a synthesized cough, the browser's speech voice saying the
+     * words, and a second cough landing on the end of them.
+     */
+    fun heckle() {
+        if (!enabled || ac == null || cough1 == null) return
+        val t = now()
+        if (t - last[6] < 2500) return
+        last[6] = t
+        play(6, cough1, 0.8, 0.0)
+        window.setTimeout({ say("you suck") }, 140)
+        window.setTimeout({ playNow(cough2, 0.9) }, 640)
+    }
+
+    private fun say(words: String) {
+        try {
+            val ss = window.speechSynthesis ?: return
+            val u: dynamic = js("new SpeechSynthesisUtterance('')")
+            u.text = words
+            u.lang = "en-US"
+            u.rate = 1.2
+            u.pitch = 0.8
+            u.volume = 0.8
+            ss.cancel()
+            ss.speak(u)
+        } catch (_: dynamic) { }
+    }
+
+    private fun playNow(buf: dynamic, vol: Double) {
+        if (!enabled || ac == null || buf == null) return
+        try {
+            val src = ac.createBufferSource()
+            src.buffer = buf
+            val g = ac.createGain()
+            g.gain.value = vol
+            src.connect(g); g.connect(ac.destination)
+            src.start()
+        } catch (_: dynamic) { }
+    }
 }
 
 /** Settings and win/loss record, kept in the browser's local storage. */
@@ -148,6 +205,25 @@ object Store {
     }
     fun wins(mode: String, vsCpu: Boolean, level: Int) = getInt(key(mode, vsCpu, level, "w"), 0)
     fun losses(mode: String, vsCpu: Boolean, level: Int) = getInt(key(mode, vsCpu, level, "l"), 0)
+    /** One finished rock-paper-scissors game: [winner] 0 = you / player 1; [rounds] counts ties too. */
+    fun recordRps(vsCpu: Boolean, winner: Int, rounds: Int) {
+        val k = if (vsCpu) (if (winner == 0) "rec_rps_cpu_w" else "rec_rps_cpu_l") else (if (winner == 0) "rec_rps_pp_1" else "rec_rps_pp_2")
+        set(k, (getInt(k, 0) + 1).toString())
+        set("rec_rps_games", (getInt("rec_rps_games", 0) + 1).toString())
+        set("rec_rps_rounds", (getInt("rec_rps_rounds", 0) + rounds).toString())
+        set("rec_rps_max", maxOf(getInt("rec_rps_max", 0), rounds).toString())
+    }
+
+    fun rpsSummary(vsCpu: Boolean): String {
+        val games = getInt("rec_rps_games", 0)
+        if (games == 0) return "Rock, paper, scissors: no games yet"
+        val rec = if (vsCpu) "Rock, paper, scissors vs CPU: <b>${getInt("rec_rps_cpu_w", 0)} W – ${getInt("rec_rps_cpu_l", 0)} L</b>"
+        else "Rock, paper, scissors: Player 1 <b>${getInt("rec_rps_pp_1", 0)} – ${getInt("rec_rps_pp_2", 0)}</b> Player 2"
+        val t = kotlin.math.round(getInt("rec_rps_rounds", 0).toDouble() / games * 10).toInt()
+        val max = getInt("rec_rps_max", 0)
+        return "$rec<br>Longest: $max ${if (max == 1) "round" else "rounds"} · average ${t / 10}.${t % 10} rounds to a winner"
+    }
+
     fun totalWins(mode: String) = (1..10).sumOf { wins(mode, true, it) }
     fun totalLosses(mode: String) = (1..10).sumOf { losses(mode, true, it) }
     fun resetRecord() {

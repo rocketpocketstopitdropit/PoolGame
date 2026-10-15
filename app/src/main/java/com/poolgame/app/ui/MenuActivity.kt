@@ -45,7 +45,7 @@ class MenuActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        mode = if (prefs.getString("mode", "") == GameMode.NINE_BALL.name) GameMode.NINE_BALL else GameMode.EIGHT_BALL
+        mode = GameMode.values().firstOrNull { it.name == prefs.getString("mode", "") } ?: GameMode.EIGHT_BALL
         vsCpu = prefs.getBoolean("vsCpu", true)
         level = prefs.getInt("level", 5).coerceIn(1, 10)
         sound = prefs.getBoolean("sound", true)
@@ -70,13 +70,13 @@ class MenuActivity : Activity() {
 
     private fun refreshRecord() {
         val t = recordText ?: return
-        val name = if (mode == GameMode.EIGHT_BALL) "8-Ball" else "9-Ball"
-        t.text = if (vsCpu) {
+        val name = Stats.modeName(mode)
+        t.text = (if (vsCpu) {
             "$name vs level $level:  ${stats.wins(mode, true, level)} W – ${stats.losses(mode, true, level)} L\n" +
                 "$name vs all levels:  ${stats.totalWinsVsCpu(mode)} W – ${stats.totalLossesVsCpu(mode)} L"
         } else {
             "$name pass & play:  Player 1  ${stats.wins(mode, false, 0)} – ${stats.losses(mode, false, 0)}  Player 2"
-        }
+        }) + "\n\n" + stats.rpsSummary(vsCpu)
     }
 
     private fun save() {
@@ -123,18 +123,30 @@ class MenuActivity : Activity() {
         col.addView(card, LinearLayout.LayoutParams(minOf(dpi(560f), resources.displayMetrics.widthPixels - dpi(48f)), ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL })
 
         card.addView(label("POOL", 38f, Color.WHITE, true).apply { letterSpacing = 0.25f; gravity = Gravity.CENTER })
-        card.addView(label("8-Ball · 9-Ball · practice · real spin", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
+        card.addView(label("8-Ball · 9-Ball · trick shots · practice", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
 
         // Game type
         card.addView(section("GAME"))
         var matchBlockRef: View? = null
-        val modeRow = segmented(listOf("8-Ball", "9-Ball", "Practice"), if (practice) 2 else if (mode == GameMode.EIGHT_BALL) 0 else 1) {
-            practice = it == 2
-            if (it < 2) mode = if (it == 0) GameMode.EIGHT_BALL else GameMode.NINE_BALL
+        var callBlockRef: View? = null
+        val trickHelp = label("Trick shots: half the table's missing between the break area and the far end. " +
+            "Jump the cue ball across the gap and sink the 1. Five levels, taking turns with the computer " +
+            "or a friend: whoever makes it in fewer shots wins the level, and most levels wins the match.",
+            12.5f, 0xFF8A97A1.toInt()).apply { setPadding(0, dpi(8f), 0, 0); setLineSpacing(0f, 1.15f) }
+        fun refreshMode() {
             matchBlockRef?.visibility = if (practice) View.GONE else View.VISIBLE
+            callBlockRef?.visibility = if (mode == GameMode.TRICK) View.GONE else View.VISIBLE
+            trickHelp.visibility = if (mode == GameMode.TRICK && !practice) View.VISIBLE else View.GONE
+        }
+        val modeSel = when { practice -> 3; mode == GameMode.TRICK -> 2; mode == GameMode.NINE_BALL -> 1; else -> 0 }
+        val modeRow = segmented(listOf("8-Ball", "9-Ball", "Trick", "Practice"), modeSel) {
+            practice = it == 3
+            if (it < 3) mode = when (it) { 0 -> GameMode.EIGHT_BALL; 1 -> GameMode.NINE_BALL; else -> GameMode.TRICK }
+            refreshMode()
             save()
         }
         card.addView(modeRow)
+        card.addView(trickHelp)
 
         // Everything below only applies to real games, not practice.
         val matchBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -166,12 +178,15 @@ class MenuActivity : Activity() {
         skillBlock.visibility = if (vsCpu) View.VISIBLE else View.GONE
         matchBlock.addView(skillBlock)
 
-        // Called pocket
-        matchBlock.addView(section("CALL POCKET"))
-        matchBlock.addView(segmented(listOf("Off", "8 & 9 only", "Every shot"), callMode) { callMode = it; save() })
-        matchBlock.addView(label("Tap a pocket to call it. A ball in the wrong pocket is slop: your turn ends " +
+        // Called pocket (not used for trick shots)
+        val callBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        callBlock.addView(section("CALL POCKET"))
+        callBlock.addView(segmented(listOf("Off", "8 & 9 only", "Every shot"), callMode) { callMode = it; save() })
+        callBlock.addView(label("Tap a pocket to call it. A ball in the wrong pocket is slop: your turn ends " +
             "(the 8 in the wrong pocket loses; a 9 in the wrong pocket is respotted).", 12f, 0xFF8A97A1.toInt())
             .apply { setPadding(0, dpi(6f), 0, 0) })
+        matchBlock.addView(callBlock)
+        callBlockRef = callBlock
 
         // Shot clock
         matchBlock.addView(section("SHOT CLOCK"))
@@ -211,16 +226,16 @@ class MenuActivity : Activity() {
             setOnClickListener {
                 android.app.AlertDialog.Builder(this@MenuActivity, android.R.style.Theme_Material_Dialog_Alert)
                     .setTitle("Reset your record?")
-                    .setMessage("This clears all wins and losses for every game type and level.")
+                    .setMessage("This clears all wins and losses for every game type and level, and your rock, paper, scissors stats.")
                     .setPositiveButton("Reset") { _, _ -> stats.reset(); refreshRecord() }
                     .setNegativeButton("Cancel", null)
                     .show()
             }
         })
         refreshRecord()
-        matchBlock.visibility = if (practice) View.GONE else View.VISIBLE
         card.addView(matchBlock)
         matchBlockRef = matchBlock
+        refreshMode()
 
         // Controls (apply to every game type)
         card.addView(section("CONTROLS"))

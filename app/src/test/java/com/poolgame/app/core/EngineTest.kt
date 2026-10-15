@@ -1,6 +1,8 @@
 package com.poolgame.app.core
 
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.PI
@@ -13,6 +15,9 @@ class EngineTest {
         val b = balls[id]; b.x = x; b.y = y; b.onTable = true; b.stop()
     }
     private fun World.clearAll() { for (b in balls) { b.onTable = false; b.stop() } }
+
+    /** Trick-shot tests switch to the gap table; put the regulation table back for the others. */
+    @After fun regulationTable() = Table.useStandard()
 
     @Test fun centreHitReachesNaturalRoll() {
         val w = World(); w.clearAll(); w.put(0, 0.3, 0.6)
@@ -156,7 +161,7 @@ class EngineTest {
     }
 
     @Test fun cpuFinishesGames() {
-        for (mode in GameMode.values()) for (seed in 0 until 3) {
+        for (mode in listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL)) for (seed in 0 until 3) {
             val m = Match(mode); m.rack(Random(seed), 0)
             val ai = arrayOf(Ai(8, seed.toLong()), Ai(3, seed + 99L))
             var shots = 0
@@ -167,5 +172,161 @@ class EngineTest {
             }
             assertTrue("$mode seed $seed unfinished", m.winner >= 0)
         }
+    }
+
+    // ------------------------------------------------------------------ heckle
+
+    @Test fun missingEverythingIsHeckled() {
+        val m = Match(GameMode.NINE_BALL); m.rack(Random(2), 0)
+        m.isBreak = false; m.ballInHand = false
+        m.world.put(0, 0.3, 0.635)
+        m.shoot(PI, 1.5, 0.0, 0.0); m.world.simulate()            // straight back into the head rail
+        val out = m.resolve()
+        assertTrue(out.foul); assertTrue(out.heckle)
+    }
+
+    @Test fun scratchIsNotHeckled() {
+        val m = Match(GameMode.NINE_BALL); m.rack(Random(1), 0)
+        for (b in m.world.balls) if (b.id != 0 && b.id != 1) { b.onTable = false }
+        m.world.put(1, 1.0, 0.6); m.isBreak = false; m.ballInHand = false
+        m.world.put(0, 0.4, 0.4)
+        val pk = Table.pockets[0]
+        m.shoot(atan2(pk.aimY - 0.4, pk.aimX - 0.4), 2.0, 0.0, 0.0); m.world.simulate()
+        val out = m.resolve()
+        assertTrue(out.foul); assertFalse(out.heckle)
+    }
+
+    @Test fun coughSoundsAreClean() {
+        val c = Cough.cough(44100, 3)
+        assertTrue(c.size > 10000)
+        assertTrue(c.all { !it.isNaN() && kotlin.math.abs(it) <= 1.0 })
+        val voice = DoubleArray(12000) { kotlin.math.sin(it * 0.05) * (if (it in 2000..10000) 0.5 else 0.0) }
+        val h = Cough.heckle(44100, voice, 22050)
+        assertTrue(h.size > c.size)
+        assertTrue(h.all { !it.isNaN() && kotlin.math.abs(it) <= 1.0 })
+        assertTrue(Cough.heckle(44100, null, 44100).isNotEmpty())
+    }
+
+    // ------------------------------------------------------------------ trick shots (gap table)
+
+    @Test fun gapTableSwitchesBack() {
+        Match(GameMode.TRICK)
+        assertTrue(Table.gap); assertEquals(7, Table.pockets.size)
+        Match(GameMode.EIGHT_BALL)
+        assertFalse(Table.gap); assertEquals(6, Table.pockets.size)
+    }
+
+    @Test fun ballRollingOffTheEdgeFallsIntoTheGap() {
+        Table.useGap()
+        val w = World(); w.clearAll(); w.put(0, 0.3, 0.6)
+        w.strike(0.0, 2.0, 0.0, 0.0); w.simulate()
+        assertFalse(w.balls[0].onTable)
+        assertTrue(0 in w.log.fell)
+        assertFalse(w.isFree(Table.GAP_X0 + 0.1, 0.6))
+    }
+
+    @Test fun jumpShotCrossesTheGap() {
+        Table.useGap()
+        val w = World(); w.clearAll(); w.put(0, 0.3, 0.635)
+        w.strike(0.0, 6.5, 0.0, 0.0, Math.toRadians(40.0)); w.simulate()
+        // It lands on the far section (and here rolls on into the back pocket), never into the gap.
+        assertTrue(0 !in w.log.fell && 0 !in w.log.jumpedOff)
+        assertTrue(!w.balls[0].onTable || w.balls[0].x > Table.GAP_X1)
+        // The same stroke with a level cue drops into the gap.
+        val v = World(); v.clearAll(); v.put(0, 0.3, 0.635)
+        v.strike(0.0, 6.5, 0.0, 0.0); v.simulate()
+        assertTrue(0 in v.log.fell)
+    }
+
+    @Test fun everyLevelHasAWorkingShot() {
+        val m = Match(GameMode.TRICK); m.rack(Random(1), 0)
+        for (li in Trick.LEVELS.indices) {
+            m.trick.level = li; m.setupTrickLevel()
+            val ok = Trick.HINTS[li].count { h ->
+                val w = World(); w.copyFrom(m.world)
+                w.balls[0].x = h[0]; w.balls[0].y = h[1]
+                w.strike(h[2], h[3], h[4], h[5], h[6]); w.simulate()
+                Trick.TARGET in w.log.pocketed && 0 !in w.log.pocketed && 0 !in w.log.jumpedOff
+            }
+            assertTrue("level $li ${Trick.LEVELS[li].name}: no hint works", ok > 0)
+        }
+    }
+
+    /** Takes one trick attempt: a known good shot when [make], otherwise a soft roll into the gap. */
+    private fun attempt(m: Match, make: Boolean): ShotOutcome {
+        m.prepareTurn()
+        if (make) {
+            val h = Trick.HINTS[m.trick.level].first { h ->
+                val w = World(); w.copyFrom(m.world); w.balls[0].x = h[0]; w.balls[0].y = h[1]
+                w.strike(h[2], h[3], h[4], h[5], h[6]); w.simulate()
+                Trick.TARGET in w.log.pocketed && 0 !in w.log.pocketed && 0 !in w.log.jumpedOff
+            }
+            assertTrue(m.placeCue(h[0], h[1]))
+            m.shoot(h[2], h[3], h[4], h[5], h[6])
+        } else m.shoot(0.0, 1.5, 0.0, 0.0)
+        m.world.simulate()
+        return m.resolve()
+    }
+
+    @Test fun trickLevelGoesToWhoeverMakesItFirst() {
+        val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.rack(Random(1), 0)
+        assertEquals(0, m.current); assertTrue(m.ballInHand)
+        // Round 1: both miss.
+        assertFalse(attempt(m, false).made); assertEquals(1, m.current)
+        assertTrue(0 in m.world.log.fell)
+        attempt(m, false); assertEquals(0, m.current); assertEquals(2, m.trick.round)
+        // Round 2: you miss, the CPU makes it: the CPU wins level 1 and level 2 starts with the CPU.
+        attempt(m, false)
+        val out = attempt(m, true)
+        assertTrue(out.made)
+        assertEquals(listOf(1), m.trick.results)
+        assertEquals(1, m.trick.levelWins[1]); assertEquals(1, m.trick.level); assertEquals(1, m.current)
+        // The table goes back to the next level's layout before the next shot.
+        m.prepareTurn()
+        assertTrue(m.world.balls[2].onTable)          // the picket fence
+        assertTrue(m.ballInHand)
+    }
+
+    @Test fun trickMatchIsWonOnLevels() {
+        val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.rack(Random(1), 0)
+        // Five levels: you make every one, the CPU misses every one.
+        var guard = 0
+        while (m.winner < 0 && guard++ < 40) attempt(m, m.current == 0)
+        assertEquals(0, m.winner)
+        assertEquals(5, m.trick.levelWins[0])
+    }
+
+    @Test fun tiedTrickMatchGoesToSuddenDeath() {
+        val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.rack(Random(1), 0)
+        repeat(5) { // both make it in round 1 of every level: five ties
+            attempt(m, true); attempt(m, true)
+        }
+        assertTrue(m.trick.suddenDeath); assertEquals(-1, m.winner)
+        attempt(m, m.current == 1); attempt(m, m.current == 1)
+        assertEquals(1, m.winner)
+    }
+
+    @Test fun trickProgressSurvivesSaving() {
+        val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.rack(Random(1), 1)
+        attempt(m, false); attempt(m, true)
+        m.prepareTurn()
+        val text = GameSave.write(m, GameSettings(GameMode.TRICK, true, 5, 0, false, 1))
+        val r = Match(GameMode.TRICK, arrayOf("You", "CPU"))
+        assertTrue(GameSave.restore(text, r))
+        assertEquals(m.trick.level, r.trick.level); assertEquals(m.trick.levelWins.toList(), r.trick.levelWins.toList())
+        assertEquals(m.trick.results, r.trick.results); assertEquals(m.current, r.current)
+    }
+
+    @Test fun cpuPlaysTrickShots() {
+        val m = Match(GameMode.TRICK); m.rack(Random(4), 0)
+        var made = 0
+        repeat(6) {
+            m.prepareTurn()
+            val p = Ai(10, it.toLong()).plan(m, 400)
+            if (p.hasPlacement) assertTrue(m.placeCue(p.placeX, p.placeY))
+            m.shoot(p.angle, p.speed, p.side, p.vert, p.elevation); m.world.simulate()
+            if (m.resolve().made) made++
+        }
+        assertTrue("level-10 CPU made only $made of 6", made >= 3)
     }
 }

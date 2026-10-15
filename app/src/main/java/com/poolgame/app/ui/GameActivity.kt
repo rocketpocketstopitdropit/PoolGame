@@ -31,7 +31,7 @@ class GameActivity : Activity(), GameView.Host {
         fun savedSummary(ctx: Context): String? {
             val text = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_SAVED, null) ?: return null
             val s = GameSave.readSettings(text) ?: return null
-            val name = if (s.mode == GameMode.NINE_BALL) "9-Ball" else "8-Ball"
+            val name = Stats.modeName(s.mode)
             return when {
                 s.practice -> "Practice"
                 s.vsCpu -> "$name vs CPU level ${s.level}"
@@ -51,7 +51,7 @@ class GameActivity : Activity(), GameView.Host {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        mode = if (intent.getStringExtra(EXTRA_MODE) == GameMode.NINE_BALL.name) GameMode.NINE_BALL else GameMode.EIGHT_BALL
+        mode = GameMode.values().firstOrNull { it.name == intent.getStringExtra(EXTRA_MODE) } ?: GameMode.EIGHT_BALL
         vsCpu = intent.getBooleanExtra(EXTRA_VS_CPU, true)
         level = intent.getIntExtra(EXTRA_LEVEL, 5).coerceIn(1, 10)
         var practice = intent.getBooleanExtra(EXTRA_PRACTICE, false)
@@ -72,6 +72,7 @@ class GameActivity : Activity(), GameView.Host {
             prefs.edit().remove(KEY_SAVED).apply()   // starting fresh replaces any paused game
         }
         if (practice) { mode = GameMode.EIGHT_BALL; vsCpu = false; clock = 0 }
+        if (mode == GameMode.TRICK) call = CallMode.OFF
 
         game = GameView(
             this, mode, vsCpu, level,
@@ -132,12 +133,14 @@ class GameActivity : Activity(), GameView.Host {
         return stats.summary(mode, vsCpu, lvl)
     }
 
+    override fun onRpsFinished(winner: Int, rounds: Int) = stats.recordRps(vsCpu, winner, rounds)
+
     override fun onMenuRequested() {
         game.menuOpen = true
         val prediction = if (game.showPrediction) "Shot prediction: ON (tap to turn off)" else "Shot prediction: OFF (tap to turn on)"
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle("Paused")
-            .setItems(arrayOf("Resume", prediction, "Restart rack", "Main menu (your game is saved)")) { _, which ->
+            .setItems(arrayOf("Resume", prediction, if (mode == GameMode.TRICK) "Restart match" else "Restart rack", "Main menu (your game is saved)")) { _, which ->
                 when (which) {
                     1 -> {
                         game.showPrediction = !game.showPrediction

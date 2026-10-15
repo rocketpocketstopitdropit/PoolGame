@@ -24,11 +24,51 @@ class Stats(context: Context) {
 
     /** Short line for the end-of-game panel. */
     fun summary(mode: GameMode, vsCpu: Boolean, level: Int): String {
-        val name = if (mode == GameMode.EIGHT_BALL) "8-Ball" else "9-Ball"
+        val name = modeName(mode)
         val w = wins(mode, vsCpu, level); val l = losses(mode, vsCpu, level)
         return if (vsCpu) "Your $name record vs level $level: $w–$l"
         else "$name pass & play: Player 1 $w – Player 2 $l"
     }
 
+    // ------------------------------------------------------------------ rock, paper, scissors
+
+    /**
+     * One finished rock-paper-scissors game (deciding who breaks). [winner] is 0 for you / player 1,
+     * 1 for the CPU / player 2; [rounds] counts every throw, ties included.
+     */
+    fun recordRps(vsCpu: Boolean, winner: Int, rounds: Int) {
+        val k = if (vsCpu) (if (winner == 0) "rps_cpu_w" else "rps_cpu_l") else (if (winner == 0) "rps_pp_1" else "rps_pp_2")
+        prefs.edit()
+            .putInt(k, prefs.getInt(k, 0) + 1)
+            .putInt("rps_games", prefs.getInt("rps_games", 0) + 1)
+            .putInt("rps_rounds", prefs.getInt("rps_rounds", 0) + rounds)
+            .putInt("rps_max", maxOf(prefs.getInt("rps_max", 0), rounds))
+            .apply()
+    }
+
+    /** Two lines for the menu: your rock-paper-scissors record, and how long games take. */
+    fun rpsSummary(vsCpu: Boolean): String {
+        val games = prefs.getInt("rps_games", 0)
+        if (games == 0) return "Rock, paper, scissors: no games yet"
+        val rec = if (vsCpu) "Rock, paper, scissors vs CPU:  ${prefs.getInt("rps_cpu_w", 0)} W – ${prefs.getInt("rps_cpu_l", 0)} L"
+        else "Rock, paper, scissors:  Player 1  ${prefs.getInt("rps_pp_1", 0)} – ${prefs.getInt("rps_pp_2", 0)}  Player 2"
+        val avg = prefs.getInt("rps_rounds", 0).toDouble() / games
+        val max = prefs.getInt("rps_max", 0)
+        return "$rec\nLongest: $max ${if (max == 1) "round" else "rounds"} · average ${fmt1(avg)} rounds to a winner"
+    }
+
+    private fun fmt1(v: Double): String {
+        val t = Math.round(v * 10)
+        return "${t / 10}.${t % 10}"
+    }
+
     fun reset() = prefs.edit().clear().apply()
+
+    companion object {
+        fun modeName(mode: GameMode) = when (mode) {
+            GameMode.EIGHT_BALL -> "8-Ball"
+            GameMode.NINE_BALL -> "9-Ball"
+            GameMode.TRICK -> "Trick shots"
+        }
+    }
 }

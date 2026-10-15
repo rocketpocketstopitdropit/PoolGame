@@ -56,10 +56,13 @@
 <div id="menu">
   <div class="card">
     <h1>POOL</h1>
-    <p class="sub">8-Ball · 9-Ball · practice · real spin</p>
+    <p class="sub">8-Ball · 9-Ball · trick shots · practice</p>
 
     <div class="sec">GAME</div>
-    <div class="seg" id="seg-mode"><button>8-Ball</button><button>9-Ball</button><button>Practice</button></div>
+    <div class="seg" id="seg-mode"><button>8-Ball</button><button>9-Ball</button><button>Trick</button><button>Practice</button></div>
+    <p class="help" id="trickHelp" style="display:none">Trick shots: half the table's missing between the break area and the
+      far end. Jump the cue ball across the gap and sink the 1. Five levels, taking turns with the computer or a friend:
+      whoever makes it in fewer shots wins the level, and most levels wins the match.</p>
 
     <div id="matchOpts">
       <div class="sec">OPPONENT</div>
@@ -71,10 +74,12 @@
         <input type="range" id="skill" min="1" max="10" step="1">
       </div>
 
+      <div id="callBlock">
       <div class="sec">CALL POCKET</div>
       <div class="seg" id="seg-call"><button>Off</button><button>8 &amp; 9 only</button><button>Every shot</button></div>
       <p class="help" style="margin-top:6px">Tap a pocket to call it. A ball in the wrong pocket is slop: your turn ends
         (the 8 in the wrong pocket loses; a 9 in the wrong pocket is respotted).</p>
+      </div>
 
       <div class="sec">SHOT CLOCK</div>
       <label class="row"><input type="checkbox" id="clockOn"> Time limit for each shot</label>

@@ -57,7 +57,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         started = TimeSource.Monotonic.markNow()
         budget = budgetMs
         simulations = 0
-        val ideal = choose(m)
+        val ideal = if (m.mode == GameMode.TRICK) trickShot(m) else choose(m)
         return Plan(
             ideal.angle + gauss() * aimSigma,
             (ideal.speed * (1 + gauss() * speedSigma)).coerceIn(0.2, P.MAX_CUE_SPEED),
@@ -71,6 +71,82 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
     private fun gauss(): Double {
         val u1 = rng.nextDouble(1e-12, 1.0); val u2 = rng.nextDouble()
         return sqrt(-2 * kotlin.math.ln(u1)) * cos(2 * PI * u2)
+    }
+
+    // ------------------------------------------------------------------ trick shots
+
+    /**
+     * Trick shots: start from shots known to work on this level, then search for more with the
+     * physics engine. Each candidate is scored by how often it still goes in with this level's
+     * own aim and speed error, so stronger CPUs pick (and find) the more forgiving shots.
+     */
+    private fun trickShot(m: Match): Plan {
+        val w = World()
+        val base = m.world
+        fun run(s: DoubleArray): Boolean {
+            if (s[0] > Table.GAP_X0 || !base.isFree(s[0], s[1], 0)) return false
+            w.copyFrom(base)
+            val c = w.balls[0]
+            c.x = s[0]; c.y = s[1]; c.onTable = true; c.stop()
+            w.strike(s[2], s[3].coerceIn(0.2, P.MAX_CUE_SPEED), s[4], s[5], s[6])
+            w.simulate()
+            simulations++
+            val l = w.log
+            return Trick.TARGET in l.pocketed && 0 !in l.pocketed && 0 !in l.jumpedOff
+        }
+        val samples = if (level >= 6) 10 else 6
+        fun score(s: DoubleArray): Double {
+            var ok = 0
+            repeat(samples) {
+                val t = s.copyOf()
+                t[2] += gauss() * aimSigma
+                t[3] *= 1 + gauss() * speedSigma
+                t[4] += gauss() * spinSigma; t[5] += gauss() * spinSigma
+                if (run(t)) ok++
+            }
+            return ok.toDouble() / samples
+        }
+        var best: DoubleArray? = null
+        var bestScore = -1.0
+        fun consider(s: DoubleArray) {
+            if (!run(s)) return
+            val sc = score(s)
+            if (sc > bestScore) { best = s; bestScore = sc }
+        }
+        val hints = Trick.HINTS.getOrNull(m.trick.level) ?: emptyList()
+        // Weaker players don't know every trick: they try a couple of the known shots at random.
+        for (h in if (level <= 3) hints.shuffled(rng).take(2) else hints) consider(h)
+        val tb = base.balls[Trick.TARGET]
+        val searchUntil = if (level <= 3) 0.25 else 1.0
+        while (started.elapsedNow().inWholeMilliseconds < budget * searchUntil) {
+            val b0 = best
+            val s = if (b0 != null && rng.nextDouble() < 0.5) {
+                val t = b0.copyOf()
+                t[0] = (t[0] + 0.01 * gauss()).coerceIn(P.R, Table.GAP_X0 - P.R)
+                t[1] = (t[1] + 0.01 * gauss()).coerceIn(P.R, P.W - P.R)
+                t[2] += toRad(0.3) * gauss()
+                t[3] = (t[3] * (1 + 0.02 * gauss())).coerceIn(1.0, P.MAX_CUE_SPEED)
+                t[6] = (t[6] + toRad(1.5) * gauss()).coerceIn(0.0, toRad(P.MAX_ELEVATION))
+                t
+            } else {
+                val cx = rng.nextDouble(0.06, Table.GAP_X0 - 0.03)
+                val cy = rng.nextDouble(0.06, P.W - 0.06)
+                doubleArrayOf(
+                    cx, cy,
+                    atan2(tb.y - cy, tb.x - cx) + toRad(rng.nextDouble(-35.0, 35.0)),
+                    rng.nextDouble(2.0, P.MAX_CUE_SPEED),
+                    if (rng.nextDouble() < 0.7) 0.0 else rng.nextDouble(-0.4, 0.4),
+                    if (rng.nextBoolean()) 0.0 else rng.nextDouble(-0.45, 0.45),
+                    toRad(rng.nextDouble(15.0, 60.0))
+                )
+            }
+            consider(s)
+        }
+        val s = best
+        if (s != null) return Plan(s[2], s[3], s[4], s[5], "trick", s[0], s[1], s[6])
+        // Nothing found: a hopeful jump straight at the 1.
+        val c = base.balls[0]
+        return Plan(atan2(tb.y - c.y, tb.x - c.x), 6.5, 0.0, 0.0, "trick", elevation = toRad(40.0))
     }
 
     // ------------------------------------------------------------------ top level

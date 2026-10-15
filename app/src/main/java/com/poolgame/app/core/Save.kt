@@ -28,6 +28,12 @@ object GameSave {
         kv("bih", m.ballInHand); kv("kitchen", m.kitchenOnly); kv("brk", m.isBreak)
         kv("f0", m.consecutiveFouls[0]); kv("f1", m.consecutiveFouls[1])
         kv("msg", m.message.replace('\n', ' '))
+        val t = m.trick
+        if (m.mode == GameMode.TRICK) {
+            kv("tl", "${t.levelNo},${t.level},${t.round},${t.starter},${if (t.suddenDeath) 1 else 0}," +
+                "${t.tries[0]},${t.tries[1]},${t.made[0]},${t.made[1]},${t.levelWins[0]},${t.levelWins[1]},${if (t.resetPending) 1 else 0}")
+            kv("tr", t.results.joinToString(";"))
+        }
         for (b in m.world.balls) {
             kv("b${b.id}", "${b.x},${b.y},${if (b.onTable) 1 else 0},${b.qw},${b.qx},${b.qy},${b.qz}")
         }
@@ -60,6 +66,16 @@ object GameSave {
         m.message = p["msg"] ?: ""
         m.winner = -1
         m.callMode = p["call"]?.let { CallMode.valueOf(it) } ?: CallMode.OFF
+        if (m.mode == GameMode.TRICK) {
+            val f = p.getValue("tl").split(',').map { it.toInt() }
+            val t = m.trick
+            t.levelNo = f[0]; t.level = f[1].coerceIn(0, Trick.LEVELS.size - 1); t.round = f[2]; t.starter = f[3]
+            t.suddenDeath = f[4] == 1
+            t.tries[0] = f[5]; t.tries[1] = f[6]; t.made[0] = f[7]; t.made[1] = f[8]
+            t.levelWins[0] = f[9]; t.levelWins[1] = f[10]; t.resetPending = f[11] == 1
+            t.results.clear()
+            p["tr"]?.split(';')?.filter { it.isNotEmpty() }?.forEach { t.results += it.toInt() }
+        }
         for (b in m.world.balls) {
             val f = p.getValue("b${b.id}").split(',')
             b.stop()
