@@ -380,7 +380,49 @@ class PovScene {
         }
         if (m < 3) return
         for (i in 0 until m) ch3[i] = RAIL_H + 0.0005
-        poly(cx3, cy3, ch3, m, POCKET, 2)
+        // One dark opening from the rail's top down to the hole in the cloth: the outline around both
+        // (on screen), rather than two separate holes with cushion showing between them.
+        var k = 0
+        var ok = true
+        for (i in 0 until m) {
+            if (!cam.project(cx3[i], cy3[i], ch3[i], q)) { ok = false; break }
+            hx[k] = q[0]; hy[k] = q[1]; k++
+        }
+        if (ok) for (i in 0 until 16) {
+            val a = 2 * PI * i / 16
+            if (!cam.project(pk.cx + pk.capR * cos(a), pk.cy + pk.capR * sin(a), 0.0, q)) { ok = false; break }
+            hx[k] = q[0]; hy[k] = q[1]; k++
+        }
+        if (!ok) { poly(cx3, cy3, ch3, m, POCKET, 2); return }
+        val hn = hull(k)
+        if (hn < 3) return
+        if (np + hn > px.size) { px = px.copyOf(px.size * 2); py = py.copyOf(py.size * 2) }
+        val st = np
+        for (i in 0 until hn) { px[np] = ox3[i]; py[np] = oy3[i]; np++ }
+        if (n >= cap) grow()
+        kind[n] = POLY; color[n] = POCKET; start[n] = st; count[n] = hn
+        depth[n] = cam.depth(ccx, ccy, RAIL_H); layer[n] = 2
+        n++
+    }
+
+    private val hx = DoubleArray(64); private val hy = DoubleArray(64)
+
+    /** Convex hull of the screen points hx/hy[0 until k] (monotone chain), written to ox3/oy3. Returns its size. */
+    private fun hull(k: Int): Int {
+        val idx = (0 until k).sortedWith(compareBy({ hx[it] }, { hy[it] }))
+        fun cross(o: Int, a: Int, b: Int) = (hx[a] - hx[o]) * (hy[b] - hy[o]) - (hy[a] - hy[o]) * (hx[b] - hx[o])
+        val h = IntArray(2 * k)
+        var t = 0
+        for (i in idx) { while (t >= 2 && cross(h[t - 2], h[t - 1], i) <= 0) t--; h[t++] = i }
+        val lower = t + 1
+        for (j in idx.indices.reversed()) {
+            val i = idx[j]
+            while (t >= lower && cross(h[t - 2], h[t - 1], i) <= 0) t--
+            h[t++] = i
+        }
+        val cnt = (t - 1).coerceAtMost(62)
+        for (i in 0 until cnt) { ox3[i] = hx[h[i]]; oy3[i] = hy[h[i]] }
+        return cnt
     }
 
     /** A vertical face from (ax, ay) to (bx, by), heights h0..h1, drawn only from the side its normal (nx, ny) faces. */

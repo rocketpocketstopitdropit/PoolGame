@@ -1311,6 +1311,7 @@ class GameView(
         canvas.save()
         canvas.clipRect(a)
         paint.style = Paint.Style.FILL
+        paint.color = Color.BLACK   // opaque: a shader is drawn with the paint's alpha, and the top view must not show through
         paint.shader = LinearGradient(0f, a.top, 0f, a.bottom, 0xFF0B0E11.toInt(), 0xFF20262C.toInt(), Shader.TileMode.CLAMP)
         canvas.drawRect(a, paint)
         paint.shader = null
