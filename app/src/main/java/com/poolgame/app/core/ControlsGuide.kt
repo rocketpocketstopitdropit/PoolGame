@@ -120,7 +120,7 @@ object ControlsGuide {
         )),
         Item(6, "Table", "Centre", listOf(
             "Aim: drag anywhere on the table. The cue points from the cue ball toward your finger.",
-            "3D view: tap a ball to aim straight at it and look at the shot down your cue (see \"The 3D view\" below).",
+            "3D view: tap the 3D view button, or tap a ball to aim straight at it and switch (see \"The 3D view\" below).",
             "Ball in hand: a gold ring pulses around the cue ball. Drag the cue ball to place it (before the break, " +
                 "only in the shaded area). A red circle means it can't go there.",
             "Calling a pocket (when Call pocket is on in the menu): tap the pocket you're shooting at; tap it again " +
@@ -147,18 +147,20 @@ object ControlsGuide {
     class Section(val title: String, val lines: List<String>)
 
     val SECTIONS = listOf(
-        Section("The 3D view (looking down the cue)", listOf(
-            "Tap any ball on the table: the cue lines up straight at it and the view drops down behind your cue.",
-            "Drag sideways to aim. Drag up to raise the back of the cue (up to 60°), down to level it. The fine-aim " +
-                "roller, spin ball and power bar work as usual.",
-            "Tap a ball to line up on it, or a pocket to call it. Tap Top view (top left) to go back; it also goes " +
-                "back by itself once you shoot.",
+        Section("The 3D view", listOf(
+            "Open it with the 3D view button over the top rail (your aim stays as it is), or tap a ball to aim straight " +
+                "at it and switch. Tap Top view (top left) to go back. Play in either view, or swap whenever you like.",
+            "One finger: drag sideways to aim, drag up to raise the back of the cue (up to 60°), down to level it. Tap " +
+                "a ball to line up on it, or a pocket to call it. The fine-aim roller, spin ball and power bar work as usual.",
+            "Two fingers: spread to zoom in, pinch to zoom out, move them up or down together to tilt the camera, and " +
+                "sideways to swing it round the cue ball. ⟲ puts the camera back behind the cue.",
+            "The camera follows the cue ball, and holds still while the balls roll so you can watch the shot.",
+            "Ball in hand: drag the cue ball where you want it. Practice: hold a ball for a moment, then drag it.",
             "Jump shots: there's no jump button. Raise the cue, set where the tip hits and pull the power: an " +
                 "elevated cue drives the ball into the slate and it bounces up. Steeper and harder jumps higher. Any " +
                 "follow, draw or english takes hold when it lands.",
             "Scoops are fouls: a level cue struck low enough (outside the dashed ring) digs under the ball and lifts " +
-                "it. The shot is played, but it's a foul and your opponent gets ball in hand.",
-            "Ball in hand: go back to Top view to move the cue ball."
+                "it. The shot is played, but it's a foul and your opponent gets ball in hand."
         )),
         Section("Reading the lines on the table", listOf(
             "Dashed white line: the path of the cue ball up to the first ball it hits.",

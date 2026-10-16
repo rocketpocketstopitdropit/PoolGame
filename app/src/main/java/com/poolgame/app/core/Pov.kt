@@ -8,14 +8,45 @@ import kotlin.math.sqrt
 import kotlin.math.tan
 
 /**
- * The 3D view down the cue (POV). Plain Kotlin shared by the Android app and the web version:
- * [PovCam] places the camera behind the cue ball, over the cue, and projects table points to the
- * screen; [PovScene] turns the table and balls into a list of flat polygons and ball sprites,
- * already projected and in drawing order, which each screen just paints.
+ * The 3D view (POV). Plain Kotlin shared by the Android app and the web version: [PovCam] is a
+ * camera orbiting the cue ball and projects table points to the screen; [PovScene] turns the table
+ * and balls into a list of flat polygons and ball sprites, already projected and in drawing order,
+ * which each screen just paints; [PovControl] is where the player has put the camera.
  *
  * 3D points here are (x, y, h): x and y on the table as in the rest of the engine, h the height
  * above the cloth in metres (up > 0).
  */
+class PovControl {
+    /** Camera distance from the cue ball (m), its height angle above the table, and how far it's swung round from behind the cue. */
+    var dist = DEFAULT_DIST
+    var pitch = DEFAULT_PITCH
+    var yaw = 0.0
+
+    fun reset() { dist = DEFAULT_DIST; pitch = DEFAULT_PITCH; yaw = 0.0 }
+
+    /** Two fingers spread apart by [ratio] (> 1) or pinched together (< 1): zoom in or out. */
+    fun pinch(ratio: Double) { if (ratio > 0) dist = (dist / ratio).coerceIn(MIN_DIST, MAX_DIST) }
+
+    /** Two fingers moved up (negative) or down (positive) by [dy] screen units of a view [viewH] tall: tilt. Down looks more from above. */
+    fun tilt(dy: Double, viewH: Double) { pitch = (pitch + dy / viewH * 1.6).coerceIn(MIN_PITCH, MAX_PITCH) }
+
+    /** Two fingers moved sideways by [dx] across a view [viewW] wide: swing the camera round the cue ball (the table turns with your fingers). */
+    fun orbit(dx: Double, viewW: Double) {
+        yaw -= dx / viewW * 3.2
+        while (yaw > PI) yaw -= 2 * PI
+        while (yaw < -PI) yaw += 2 * PI
+    }
+
+    companion object {
+        const val DEFAULT_DIST = 1.15
+        val DEFAULT_PITCH = 21.0 * PI / 180
+        const val MIN_DIST = 0.22
+        const val MAX_DIST = 4.0
+        val MIN_PITCH = 3.0 * PI / 180
+        val MAX_PITCH = 86.0 * PI / 180
+    }
+}
+
 class PovCam {
     // Eye position and the camera's axes (forward, right, up), all in (x, y, h).
     var ex = 0.0; var ey = 0.0; var eh = 0.0
@@ -28,33 +59,43 @@ class PovCam {
     var left = 0.0; var top = 0.0; var right = 0.0; var bottom = 0.0
 
     /**
-     * Put the eye over the cue: [BACK] metres back along the cue from the cue ball (so it rises with
-     * the cue on a jump shot) and [ABOVE] above the shaft, looking a little way past the cue ball.
-     * The view fills the screen rectangle (l, t, r, b).
+     * The camera [dist] metres from the cue ball's centre at (pivotX, pivotY), [pitch] above the table,
+     * looking along [heading] (the aim plus however far it's been swung round). It's tilted so the
+     * cue ball sits a little below the middle of the view when the camera is low (and in the middle
+     * from straight above), leaving room to see down the table. The view fills the screen
+     * rectangle (l, t, r, b).
      */
-    fun setup(cueX: Double, cueY: Double, aim: Double, elevation: Double, l: Double, t: Double, r: Double, b: Double) {
+    fun setup(pivotX: Double, pivotY: Double, heading: Double, pitch: Double, dist: Double,
+              l: Double, t: Double, r: Double, b: Double) {
         left = l; top = t; right = r; bottom = b
-        val dx = cos(aim); val dy = sin(aim)
-        val ce = cos(elevation); val se = sin(elevation)
-        // Up along the cue's own "up" (perpendicular to the shaft, in the vertical plane).
-        // (The eye climbs only part of the way up the raised cue, so a jump shot still shows what's ahead.)
-        ex = cueX - dx * (BACK * ce - ABOVE * se)
-        ey = cueY - dy * (BACK * ce - ABOVE * se)
-        eh = P.R + CLIMB * BACK * se + ABOVE * ce
-        // Look along the aim, pitched so the cue ball sits a little below the middle of the view
-        // (CUE_LOW of the way down from the centre), whatever the cue's angle.
-        val hx = cueX - ex; val hy = cueY - ey
-        val down = kotlin.math.atan2(eh - P.R, hx * dx + hy * dy)
-        val low = CUE_LOW + 0.3 * se
-        val pitch = (down - kotlin.math.atan(low * tan(HALF_FOV))).coerceAtLeast(0.0)
-        fx = dx * cos(pitch); fy = dy * cos(pitch); fh = -sin(pitch)
-        // Right: the shooter's right, level with the table.
+        val dx = cos(heading); val dy = sin(heading)
+        val cp = cos(pitch); val sp = sin(pitch)
+        ex = pivotX - dx * dist * cp
+        ey = pivotY - dy * dist * cp
+        eh = P.R + dist * sp
+        val low = CUE_LOW * cp
+        val view = pitch - kotlin.math.atan(low * tan(HALF_FOV))
+        fx = dx * cos(view); fy = dy * cos(view); fh = -sin(view)
         rx = -dy; ry = dx; rh = 0.0
         // Up = right x forward, flipped if needed so it points up.
         ux = ry * fh - rh * fy; uy = rh * fx - rx * fh; uh = rx * fy - ry * fx
         if (uh < 0) { ux = -ux; uy = -uy; uh = -uh }
         cx = (l + r) / 2; cy = (t + b) / 2
         focal = ((b - t) / 2) / tan(HALF_FOV)
+    }
+
+    /**
+     * The point at height [h] on screen at (sx, sy): writes x, y into out[0..1]. False if that ray
+     * doesn't come down to that height in front of the eye.
+     */
+    fun unproject(sx: Double, sy: Double, h: Double, out: DoubleArray): Boolean {
+        val a = (sx - cx) / focal; val c = -(sy - cy) / focal
+        val dx = fx + rx * a + ux * c; val dy = fy + ry * a + uy * c; val dh = fh + rh * a + uh * c
+        if (dh > -1e-6) return false
+        val t = (h - eh) / dh
+        if (t <= 0) return false
+        out[0] = ex + dx * t; out[1] = ey + dy * t
+        return true
     }
 
     /** Distance in front of the eye (along the view direction). */
@@ -103,10 +144,7 @@ class PovCam {
 
     companion object {
         const val NEAR = 0.03
-        const val BACK = 0.42
-        const val ABOVE = 0.12
         const val CUE_LOW = 0.5
-        const val CLIMB = 0.6
         val HALF_FOV = 25.0 * PI / 180
     }
 }

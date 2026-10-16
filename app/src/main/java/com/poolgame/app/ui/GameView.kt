@@ -27,6 +27,7 @@ import com.poolgame.app.core.Match
 import com.poolgame.app.core.P
 import com.poolgame.app.core.Plan
 import com.poolgame.app.core.PovCam
+import com.poolgame.app.core.PovControl
 import com.poolgame.app.core.PovScene
 import com.poolgame.app.core.Prediction
 import com.poolgame.app.core.Predictor
@@ -76,7 +77,7 @@ class GameView(
 
     private enum class Phase { RPS, HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
     private enum class Rps { PICK, SHAKE, REVEAL }
-    private enum class Touch { NONE, AIM, POWER, SPIN, WHEEL, MOVE_CUE, BUTTON, PENDING, MOVE_BALL, TAP_BALL, POV }
+    private enum class Touch { NONE, AIM, POWER, SPIN, WHEEL, MOVE_CUE, BUTTON, PENDING, MOVE_BALL, TAP_BALL, POV, CAM }
 
     /** Free-table practice: no rules, move any ball. (The tutorial runs on the practice table too.) */
     private val practice = practiceMode && mode != GameMode.TRICK
@@ -210,9 +211,21 @@ class GameView(
     private val scratchWorld = World()
     private val predKey = DoubleArray(9) { Double.NaN }
 
-    // The 3D view down the cue: opened by tapping a ball, closed by Top view or by shooting.
+    // The 3D view: opened by tapping a ball or the 3D view button, closed by Top view. It stays on
+    // through shots and turns; the camera orbits the cue ball wherever the player has put it.
     private var pov = false
+    private val povCtl = PovControl()
     private val povCam = PovCam()
+    // While balls roll (and while dragging a ball in 3D) the camera holds still instead of following the cue ball.
+    private var povLocked = false
+    private var povLockX = 0.0; private var povLockY = 0.0
+    private val povXY = DoubleArray(2)
+    private val resetViewBtn = RectF()
+    private val view3dBtn = RectF()
+    private var povHintUntil = 0L
+    // Two-finger camera gesture: the previous spread and midpoint of the two fingers.
+    private var camDist = 0f; private var camMidX = 0f; private var camMidY = 0f
+    private val ptrX = FloatArray(10); private val ptrY = FloatArray(10)
     private val povScene = PovScene()
     private val povBalls = BallRenderer()
     private val povView = DoubleArray(9)
@@ -427,6 +440,7 @@ class GameView(
         }
         power = 0f
         elevDeg = 0f
+        povLocked = false
         turnSave = GameSave.write(match, settings())
         if (isCpu(match.current)) {
             phase = Phase.CPU_THINK
@@ -503,7 +517,7 @@ class GameView(
         match.shoot(angle, speed, side, vert, elev)
         phase = Phase.RUNNING
         clearTouches()
-        if (pov) setPov(false)
+        lockPov()
     }
 
     /** Practice: holding a finger still on a ball for a moment picks it up. Always returns true. */
@@ -513,6 +527,7 @@ class GameView(
         for (i in ptrMode.indices) if (ptrMode[i] == Touch.PENDING && now - ptrDownAt[i] > 280_000_000L) {
             ptrMode[i] = Touch.MOVE_BALL
             movingBall = ptrBall[i]
+            if (pov) lockPov()
             dragInvalid = false
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         }
@@ -521,7 +536,8 @@ class GameView(
 
     private fun moveBall(id: Int, x: Float, y: Float) {
         dragX = x; dragY = y
-        val px = tx(x).coerceIn(P.R, P.L - P.R); val py = ty(y).coerceIn(P.R, P.W - P.R)
+        if (!toTable(x, y)) { dragInvalid = true; return }
+        val px = povXY[0].coerceIn(P.R, P.L - P.R); val py = povXY[1].coerceIn(P.R, P.W - P.R)
         val w = match.world
         if (w.isFree(px, py, id)) {
             val b = w.balls[id]
@@ -626,7 +642,6 @@ class GameView(
     }
 
     private fun update(dt: Double) {
-        if (pov && phase != Phase.HUMAN) setPov(false)
         updateTutorial(dt)
         if (bannerT > 0) bannerT -= dt
         if (sinks.isNotEmpty()) {
@@ -668,6 +683,7 @@ class GameView(
                     } else message = if (match.world.log.scooped) "Scoop shot — in a game that's a foul" else ""
                     phase = Phase.HUMAN
                     power = 0f
+                    povLocked = false
                 } else if (!match.world.anyMoving() && trickPractice) {
                     val out = match.resolveTrickPractice()
                     tpTries++
@@ -1011,6 +1027,9 @@ class GameView(
         spinCy = hudH + 24 * dp + spinR
         wheelRect.set(colL + 8 * dp, spinCy + spinR + 58 * dp, w - 10 * dp, h - 14 * dp)
         topViewBtn.set(tableArea.left + 8 * dp, tableArea.top + 8 * dp, tableArea.left + 118 * dp, tableArea.top + 44 * dp)
+        resetViewBtn.set(topViewBtn.right + 8 * dp, topViewBtn.top, topViewBtn.right + 52 * dp, topViewBtn.bottom)
+        // In the top view the 3D button sits over the top rail, between the corner and side pockets.
+        view3dBtn.set(sx(P.L * 0.11), sy(-0.1) - 15 * dp, sx(P.L * 0.11) + 104 * dp, sy(-0.1) + 15 * dp)
         povBalls.setRadius(30 * dp)
         menuBtn.set(8 * dp, 8 * dp, 8 * dp + 44 * dp, 8 * dp + 36 * dp)
 
@@ -1189,7 +1208,7 @@ class GameView(
         background?.let { canvas.drawBitmap(it, 0f, 0f, null) }
         val w = match.world
         val humanTurn = phase == Phase.HUMAN
-        if (pov && humanTurn) {
+        if (pov) {
             drawPov(canvas)
             drawControls(canvas)
             return
@@ -1276,6 +1295,14 @@ class GameView(
         if (showCue && cue.onTable) drawCueStick(canvas, sx(cueX), sy(cueY))
 
         if (bannerT > 0 && trick) drawBanner(canvas)
+        if (phase != Phase.RPS && phase != Phase.OVER && povAllowed()) {
+            paint.style = Paint.Style.FILL; paint.shader = null; paint.color = 0xE61E252B.toInt()
+            canvas.drawRoundRect(view3dBtn, 10 * dp, 10 * dp, paint)
+            guide.pathEffect = null; guide.strokeWidth = 1.5f * dp; guide.color = 0xFFF2C94C.toInt()
+            canvas.drawRoundRect(view3dBtn, 10 * dp, 10 * dp, guide)
+            text.textAlign = Paint.Align.CENTER; text.typeface = bold; text.textSize = 13 * dp; text.color = Color.WHITE
+            canvas.drawText("3D view ▶", view3dBtn.centerX(), view3dBtn.centerY() + 4.5f * dp, text)
+        }
         drawControls(canvas)
     }
 
@@ -1301,12 +1328,24 @@ class GameView(
         val w = match.world
         val c = w.balls[0]
         val a = tableArea
-        povCam.setup(c.x, c.y, aimAngle, Math.toRadians(elevDeg.toDouble()),
+        // The camera orbits the cue ball (where it's being placed, during the CPU's ball in hand),
+        // or holds still while balls roll and while a ball is being dragged.
+        var cueX = c.x; var cueY = c.y
+        val plan = cpuPlan
+        if (phase == Phase.CPU_ANIM && plan != null && plan.hasPlacement && animT < 0.45) {
+            val k = (animT / 0.45).coerceIn(0.0, 1.0)
+            cueX = animFromX + (plan.placeX - animFromX) * k
+            cueY = animFromY + (plan.placeY - animFromY) * k
+        }
+        val pivX = if (povLocked) povLockX else cueX
+        val pivY = if (povLocked) povLockY else cueY
+        povCam.setup(pivX, pivY, aimAngle + povCtl.yaw, povCtl.pitch, povCtl.dist,
             a.left.toDouble(), a.top.toDouble(), a.right.toDouble(), a.bottom.toDouble())
         val sc = povScene
-        sc.build(povCam, w, c.x, c.y)
+        sc.build(povCam, w, cueX, cueY)
         povCam.viewBasis(povView)
         povBalls.setView(povView)
+        val humanTurn = phase == Phase.HUMAN
 
         canvas.save()
         canvas.clipRect(a)
@@ -1317,9 +1356,10 @@ class GameView(
         paint.shader = null
         val clothShader = RadialGradient(sc.clothCx.toFloat(), sc.clothCy.toFloat(), sc.clothR.toFloat().coerceAtLeast(1f),
             intArrayOf(0xFF24985D.toInt(), 0xFF1C7E4C.toInt(), 0xFF135A35.toInt()), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+        val showGuide = humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0
         povPaint.style = Paint.Style.FILL
         for (o in 0 until sc.n) {
-            if (o == sc.guideAt) drawPovGuide(canvas)
+            if (o == sc.guideAt) { if (showGuide) drawPovGuide(canvas); drawPovMarks(canvas, cueX, cueY) }
             val i = sc.order[o]
             if (sc.kind[i] == PovScene.BALL) {
                 val b = w.balls[sc.color[i]]
@@ -1336,24 +1376,35 @@ class GameView(
             canvas.drawPath(povPoly, povPaint)
         }
         povPaint.shader = null
-        if (sc.guideAt >= sc.n) drawPovGuide(canvas)
-        drawPovCalled(canvas)
-        if (c.onTable) drawPovCue(canvas, c.x, c.y)
+        if (sc.guideAt >= sc.n) { if (showGuide) drawPovGuide(canvas); drawPovMarks(canvas, cueX, cueY) }
+        if (humanTurn || phase == Phase.CPU_ANIM) drawPovCalled(canvas)
+        val showCue = (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) ||
+            (phase == Phase.CPU_ANIM && (plan == null || !plan.hasPlacement || animT >= 0.45))
+        if (showCue && c.onTable) drawPovCue(canvas, cueX, cueY)
         canvas.restore()
 
-        // Top view button, and how to drive this view.
+        // Top view and reset-camera buttons, and (for a few seconds, or when there's a warning) how to drive this view.
         paint.style = Paint.Style.FILL; paint.color = 0xE61E252B.toInt()
         canvas.drawRoundRect(topViewBtn, 10 * dp, 10 * dp, paint)
+        canvas.drawRoundRect(resetViewBtn, 10 * dp, 10 * dp, paint)
         guide.pathEffect = null; guide.strokeWidth = 1.5f * dp; guide.color = 0xFFF2C94C.toInt()
         canvas.drawRoundRect(topViewBtn, 10 * dp, 10 * dp, guide)
+        guide.color = 0x99F2C94C.toInt()
+        canvas.drawRoundRect(resetViewBtn, 10 * dp, 10 * dp, guide)
         text.textAlign = Paint.Align.CENTER; text.typeface = bold; text.textSize = 14 * dp; text.color = Color.WHITE
         canvas.drawText("◀ Top view", topViewBtn.centerX(), topViewBtn.centerY() + 5 * dp, text)
+        text.textSize = 18 * dp
+        canvas.drawText("⟲", resetViewBtn.centerX(), resetViewBtn.centerY() + 6 * dp, text)
+        if (!humanTurn) return
         val st = tipState()
-        val hint = when (st) {
-            2 -> "Scoop! A level cue this low digs under the ball — that's a foul"
-            1 -> "Miscue: the tip will slip off the ball"
-            else -> "Drag ↔ to aim · drag ↕ to raise the cue" + if (elevDeg >= 0.5f) " · cue ${elevDeg.toInt()}°" else " · cue level"
+        val hint = when {
+            st == 2 -> "Scoop! A level cue this low digs under the ball — that's a foul"
+            st == 1 -> "Miscue: the tip will slip off the ball"
+            System.nanoTime() < povHintUntil -> "1 finger: ↔ aim, ↕ cue angle · 2 fingers: pinch to zoom, drag to turn and tilt"
+            elevDeg >= 0.5f -> "cue ${elevDeg.toInt()}°"
+            else -> ""
         }
+        if (hint.isEmpty()) return
         text.typeface = regular; text.textSize = 12.5f * dp
         val tw = text.measureText(hint) + 24 * dp
         val pill = RectF(a.centerX() - tw / 2, a.bottom - 34 * dp, a.centerX() + tw / 2, a.bottom - 8 * dp)
@@ -1361,6 +1412,27 @@ class GameView(
         canvas.drawRoundRect(pill, 13 * dp, 13 * dp, paint)
         text.color = Color.WHITE
         canvas.drawText(hint, pill.centerX(), pill.centerY() + 4.5f * dp, text)
+    }
+
+    /** Ball in hand (a pulsing ring round the cue ball) and a ball being moved, drawn on the cloth. */
+    private fun drawPovMarks(canvas: Canvas, cueX: Double, cueY: Double) {
+        if (phase != Phase.HUMAN) return
+        guide.pathEffect = null
+        if (match.ballInHand) {
+            val pulse = (0.5 + 0.5 * sin(System.nanoTime() / 2.5e8)).toFloat()
+            guide.strokeWidth = 2.5f * dp
+            guide.color = Color.argb((120 + 120 * pulse).toInt(), 255, 214, 64)
+            povRing(canvas, cueX, cueY, P.R * (1.5 + 0.25 * pulse))
+            if (anyTouch(Touch.MOVE_CUE) && dragInvalid && toTable(dragX, dragY)) {
+                guide.color = 0xCCFF4040.toInt(); povRing(canvas, povXY[0], povXY[1], P.R)
+            }
+        }
+        if (movingBall >= 0) {
+            val mb = match.world.balls[movingBall]
+            guide.strokeWidth = 2.5f * dp; guide.color = 0xE0FFD54A.toInt()
+            povRing(canvas, mb.x, mb.y, P.R * 1.5)
+            if (dragInvalid && toTable(dragX, dragY)) { guide.color = 0xCCFF4040.toInt(); povRing(canvas, povXY[0], povXY[1], P.R) }
+        }
     }
 
     private fun povLine(canvas: Canvas, x1: Double, y1: Double, x2: Double, y2: Double, h: Double) {
@@ -2234,6 +2306,30 @@ class GameView(
                 }
             }
         }
+        val inView = tableArea.contains(x, y)
+        if (!pov && inView && view3dBtn.contains(x, y) && povAllowed()) { setPov(true); ptrMode[id] = Touch.BUTTON; return }
+        if (pov && inView) {
+            if (topViewBtn.contains(x, y)) { setPov(false); ptrMode[id] = Touch.BUTTON; return }
+            if (resetViewBtn.contains(x, y)) { povCtl.reset(); ptrMode[id] = Touch.BUTTON; return }
+            ptrX[id] = x; ptrY[id] = y
+            if (anyTouch(Touch.CAM)) { ptrMode[id] = Touch.BUTTON; return }
+            // A second finger on the 3D view: both fingers now move the camera.
+            for (o in ptrMode.indices) if (o != id && (ptrMode[o] == Touch.POV || ptrMode[o] == Touch.PENDING ||
+                    ptrMode[o] == Touch.MOVE_CUE || ptrMode[o] == Touch.MOVE_BALL)) {
+                if (ptrMode[o] == Touch.MOVE_CUE || ptrMode[o] == Touch.MOVE_BALL) {
+                    movingBall = -1; dragInvalid = false
+                    if (phase == Phase.HUMAN) povLocked = false
+                }
+                ptrMode[o] = Touch.CAM; ptrMode[id] = Touch.CAM
+                camDist = hypot(x - ptrX[o], y - ptrY[o]); camMidX = (x + ptrX[o]) / 2; camMidY = (y + ptrY[o]) / 2
+                return
+            }
+            if (phase != Phase.HUMAN) {
+                // Between shots one finger does nothing, but a second one turns it into a camera gesture.
+                ptrMode[id] = Touch.POV; ptrAxis[id] = -1
+                return
+            }
+        }
         if (phase != Phase.HUMAN) return
         val c = match.world.balls[0]
         val spinDist = hypot(x - spinCx, y - spinCy)
@@ -2252,10 +2348,7 @@ class GameView(
             x >= wheelRect.left - 6 * dp && x <= wheelRect.right + 8 * dp && y >= wheelRect.top - 6 * dp && y <= wheelRect.bottom + 8 * dp -> {
                 ptrLastY[id] = y; ptrLastT[id] = t; ptrVel[id] = 0f; Touch.WHEEL
             }
-            pov && inTable -> {
-                ptrLastX[id] = x; ptrLastY[id] = y; ptrLastT[id] = t; ptrVel[id] = 0f; ptrAxis[id] = 0
-                Touch.POV
-            }
+            pov && inTable -> povDown(id, x, y, t)
             match.ballInHand && !anyTouch(Touch.POWER) && !anyTouch(Touch.MOVE_CUE) &&
                 hypot(x - sx(c.x), y - sy(c.y)) < max(rpx * 3f, 28 * dp) -> {
                 dragInvalid = false; Touch.MOVE_CUE
@@ -2317,7 +2410,10 @@ class GameView(
     private fun wheelGain(v: Float): Double = (0.3 + 0.7 * (v / 150.0).pow(1.7)).coerceAtMost(25.0)
 
     private fun onMove(id: Int, x: Float, y: Float, t: Long) {
-        if (phase != Phase.HUMAN || id !in ptrMode.indices) return
+        if (id !in ptrMode.indices) return
+        ptrX[id] = x; ptrY[id] = y
+        if (ptrMode[id] == Touch.CAM) { camMove(); return }
+        if (phase != Phase.HUMAN) return
         when (ptrMode[id]) {
             Touch.POWER -> power = ((y - ptrStartY[id]) / (powerRect.height() * 0.9f)).coerceIn(0f, 1f)
             Touch.SPIN -> setSpin(x, y)
@@ -2338,7 +2434,8 @@ class GameView(
             }
             Touch.MOVE_CUE -> {
                 dragX = x; dragY = y
-                val px = tx(x); val py = ty(y)
+                if (!toTable(x, y)) { dragInvalid = true; return }
+                val px = povXY[0]; val py = povXY[1]
                 if (trick) {
                     // Stay in the break area (or the nearest of the level's start zones).
                     val q = Trick.clampPlacement(Trick.LEVELS[match.trick.level], px, py)
@@ -2353,8 +2450,8 @@ class GameView(
             }
             Touch.AIM -> aimAt(x, y)
             Touch.PENDING -> if (hypot(x - ptrDownX[id], y - ptrDownY[id]) > 10 * dp) {
-                ptrMode[id] = Touch.AIM
-                aimAt(x, y)
+                if (pov) { ptrMode[id] = Touch.POV; povDrag(id, x, y, t) }
+                else { ptrMode[id] = Touch.AIM; aimAt(x, y) }
             }
             Touch.MOVE_BALL -> moveBall(ptrBall[id], x, y)
             else -> {}
@@ -2365,7 +2462,10 @@ class GameView(
         if (id !in ptrMode.indices) return
         val mode = ptrMode[id]
         ptrMode[id] = Touch.NONE
+        // One finger of the camera gesture lifted: the other is ignored until it's lifted too.
+        if (mode == Touch.CAM) { for (o in ptrMode.indices) if (ptrMode[o] == Touch.CAM) ptrMode[o] = Touch.BUTTON; return }
         if (phase != Phase.HUMAN) return
+        if (pov && (mode == Touch.MOVE_CUE || mode == Touch.MOVE_BALL)) povLocked = false
         tut?.onRelease(targetOf(mode), hypot(spinX, spinY).toDouble(), elevDeg.toDouble())
         if (mode == Touch.POWER) {
             if (power > 0.02f && match.callRequired() && match.calledPocket < 0) {
@@ -2383,7 +2483,7 @@ class GameView(
         if (mode == Touch.POV && ptrAxis[id] == 0) povTap(ptrDownX[id], ptrDownY[id])
         if (mode == Touch.PENDING) {
             if (ptrBall[id] > 0 && povAllowed()) { aimAtBall(ptrBall[id]); setPov(true) }
-            else aimAt(ptrDownX[id], ptrDownY[id])
+            else if (!pov) aimAt(ptrDownX[id], ptrDownY[id])
         }
         if (mode == Touch.MOVE_BALL) { movingBall = -1; dragInvalid = false }
     }
@@ -2409,8 +2509,66 @@ class GameView(
     private fun setPov(on: Boolean) {
         if (pov == on) return
         pov = on
-        for (i in ptrMode.indices) if (ptrMode[i] == Touch.POV || ptrMode[i] == Touch.AIM || ptrMode[i] == Touch.TAP_BALL) ptrMode[i] = Touch.NONE
+        for (i in ptrMode.indices) if (ptrMode[i] == Touch.POV || ptrMode[i] == Touch.AIM || ptrMode[i] == Touch.TAP_BALL ||
+            ptrMode[i] == Touch.CAM || ptrMode[i] == Touch.PENDING) ptrMode[i] = Touch.NONE
+        if (on) povHintUntil = System.nanoTime() + 6_000_000_000L
         tut?.onPov(on)
+    }
+
+    /** Hold the camera where it is (it otherwise follows the cue ball). */
+    private fun lockPov() {
+        val c = match.world.balls[0]
+        povLocked = true; povLockX = c.x; povLockY = c.y
+    }
+
+    /** Screen point to table coordinates (on the plane of the balls' centres in 3D) into [povXY]. */
+    private fun toTable(x: Float, y: Float): Boolean {
+        if (!pov) { povXY[0] = tx(x); povXY[1] = ty(y); return true }
+        return povCam.unproject(x.toDouble(), y.toDouble(), P.R, povXY)
+    }
+
+    /** One finger down on the 3D view: the cue ball (ball in hand), a ball to move (practice), or aim / cue angle. */
+    private fun povDown(id: Int, x: Float, y: Float, t: Long): Touch {
+        ptrLastX[id] = x; ptrLastY[id] = y; ptrLastT[id] = t; ptrVel[id] = 0f; ptrAxis[id] = 0
+        val c = match.world.balls[0]
+        if (match.ballInHand && c.onTable && !anyTouch(Touch.MOVE_CUE) && !anyTouch(Touch.POWER) &&
+            povCam.project(c.x, c.y, P.R, povPt)) {
+            val r = povCam.ballRadius(povPt[2])
+            if (hypot(x - povPt[0], y - povPt[1]) < max(r * 1.8, 28.0 * dp)) {
+                lockPov(); dragInvalid = false; dragX = x; dragY = y
+                return Touch.MOVE_CUE
+            }
+        }
+        if (practice && !tutorialMode && !anyTouch(Touch.MOVE_BALL) && !anyTouch(Touch.PENDING)) {
+            val b = povBallUnder(x, y, true)
+            if (b >= 0) { ptrBall[id] = b; ptrDownAt[id] = System.nanoTime(); return Touch.PENDING }
+        }
+        return Touch.POV
+    }
+
+    /** The nearest ball under (x, y) in the 3D view (the cue ball too if [cue]), or -1. */
+    private fun povBallUnder(x: Float, y: Float, cue: Boolean): Int {
+        var best = -1; var bestD = Double.MAX_VALUE
+        for (b in match.world.balls) {
+            if (!b.onTable || (b.id == 0 && !cue)) continue
+            if (!povCam.project(b.x, b.y, P.R + b.z, povPt)) continue
+            val r = povCam.ballRadius(povPt[2])
+            if (hypot(x - povPt[0], y - povPt[1]) < max(r * 1.3, 16.0 * dp) && povPt[2] < bestD) { best = b.id; bestD = povPt[2] }
+        }
+        return best
+    }
+
+    /** Two fingers on the 3D view: spread or pinch to zoom, move together up/down to tilt and sideways to swing round. */
+    private fun camMove() {
+        var a = -1; var b = -1
+        for (i in ptrMode.indices) if (ptrMode[i] == Touch.CAM) { if (a < 0) a = i else if (b < 0) b = i }
+        if (a < 0 || b < 0) return
+        val d = hypot(ptrX[a] - ptrX[b], ptrY[a] - ptrY[b])
+        val mx = (ptrX[a] + ptrX[b]) / 2; val my = (ptrY[a] + ptrY[b]) / 2
+        if (camDist > 10 * dp && d > 10 * dp) povCtl.pinch((d / camDist).toDouble())
+        povCtl.tilt((my - camMidY).toDouble(), tableArea.height().toDouble())
+        povCtl.orbit((mx - camMidX).toDouble(), tableArea.width().toDouble())
+        camDist = d; camMidX = mx; camMidY = my
     }
 
     /** Aim straight at the centre of ball [id]. */
@@ -2430,6 +2588,7 @@ class GameView(
      * quicker you drag, like the fine-aim roller but coarser), up and down raise and lower the cue.
      */
     private fun povDrag(id: Int, x: Float, y: Float, t: Long) {
+        if (ptrAxis[id] < 0) return
         if (ptrAxis[id] == 0) {
             val mx = x - ptrDownX[id]; val my = y - ptrDownY[id]
             if (hypot(mx, my) < 8 * dp) return
@@ -2453,7 +2612,6 @@ class GameView(
 
     /** A tap in the 3D view: Top view, a pocket (to call it) or a ball (to line up on it). */
     private fun povTap(x: Float, y: Float) {
-        if (topViewBtn.contains(x, y)) { setPov(false); return }
         if (match.callAllowed()) {
             for ((i, pk) in Table.pockets.withIndex()) {
                 if (!povCam.project(pk.cx, pk.cy, 0.0, povPt)) continue

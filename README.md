@@ -68,12 +68,17 @@ There is no random error on your shots. **Shot prediction** can be turned off (m
 straight aim line from the cue ball to the cushion is shown. Pocket holes are drawn exactly the size of the
 drop zone with a bright ring: once a ball's centre crosses the ring it falls.
 
-**3D view (POV)**: tap any ball in the top view and the cue lines up straight at it while the view drops down behind
-your cue, rendered in 3D (table, cushions, pockets, lit rolling balls, the aim guide on the cloth and your cue). Drag
-sideways to aim (faster drags turn further), drag up to raise the back of the cue (0–60°) and down to level it. Tap
-another ball to line up on it, tap a pocket to call it, or tap **◀ Top view** to go back; shooting goes back to the top
-view by itself so you can watch the balls. Ball in hand is placed from the top view. The angle you set stays until the
-end of the turn and shows under the spin ball.
+**3D view**: tap **3D view ▶** (over the top rail; your aim stays as it is) or tap a ball (aims straight at it) to see
+the table in 3D — cushions, pockets, lit rolling balls, the aim guide on the cloth and your cue. Play in either view or
+swap whenever you like; **◀ Top view** goes back.
+- One finger: drag sideways to aim (faster drags turn further), drag up to raise the back of the cue (0–60°), down to
+  level it. Tap a ball to line up on it, or a pocket to call it.
+- Two fingers: spread to zoom in, pinch to zoom out, move them up or down together to tilt the camera, sideways to
+  swing it round the cue ball. ⟲ puts it back behind the cue. (In a browser on a computer, the mouse wheel zooms.)
+- The camera follows the cue ball, and holds still while the balls roll so you can watch the shot. CPU turns play out
+  in 3D too.
+- Ball in hand: drag the cue ball where you want it. Practice: hold a ball for a moment, then drag it.
+- The cue angle you set stays until the end of the turn and shows under the spin ball.
 
 **Jump shots** have no button and no slider: raise the cue in the 3D view, pick the tip spot on the spin ball and pull
 the power. The physics decides whether it jumps — an elevated cue drives the ball down into the slate and it bounces
@@ -212,7 +217,7 @@ app/src/main/java/com/poolgame/app/
           Cough.kt (synthesized cough, the foul sound until you record one)
           Voice.kt (cleans up your recorded foul voice)
           Tutorial.kt (tutorial steps, table setup, demo finger)
-          Pov.kt (3D view: camera down the cue, the table and balls as projected, depth-sorted polygons)
+          Pov.kt (3D view: orbit camera and its gestures, the table and balls as projected, depth-sorted polygons)
           ControlsGuide.kt (screen-guide text and the screen map's layout)
   ui/     MenuActivity  GameActivity  GameView (render + input + turn flow, tutorial overlay)
           ControlsActivity (the screen guide and its map)

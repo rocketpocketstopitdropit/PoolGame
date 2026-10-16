@@ -64,6 +64,8 @@ class App : GameHost {
         document.addEventListener("touchmove", { e: dynamic -> if (game != null) e.preventDefault() }, opts)
         document.addEventListener("gesturestart", { e: dynamic -> e.preventDefault() }, opts)
         canvas.addEventListener("contextmenu", { e: dynamic -> e.preventDefault() }, opts)
+        // Mouse wheel zooms the 3D view (a computer has no two-finger pinch).
+        canvas.addEventListener("wheel", { e: dynamic -> wheel(e) }, opts)
 
         // Each time the app is opened, offer the tutorial (unless they've said not to ask).
         if (askTutorial) el("tutAsk").style.display = "flex"
@@ -123,6 +125,15 @@ class App : GameHost {
             2 -> { val s = slots.remove(pid) ?: return; g.pointerUp(s) }
             else -> { slots.remove(pid); if (slots.isEmpty()) g.cancelTouches() }
         }
+    }
+
+    private fun wheel(e: dynamic) {
+        val g = game ?: return
+        e.preventDefault()
+        val cx = (e.clientX as Number).toDouble(); val cy = (e.clientY as Number).toDouble()
+        val x = if (rotated) cy else cx
+        val y = if (rotated) vw - cx else cy
+        g.wheel(x, y, (e.deltaY as Number).toDouble())
     }
 
     // ------------------------------------------------------------------ menu

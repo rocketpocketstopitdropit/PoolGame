@@ -78,12 +78,12 @@ class Tutorial {
         Step.SPIN -> "Touch the white ball where you want the cue tip to strike: top, bottom, left or right. The red " +
             "dot marks the spot. Tap its centre to reset."
         Step.POV -> when {
-            !inPov && !jumpRaised -> "Tap the yellow 1-ball. You'll see the shot in 3D, looking down your cue."
-            !inPov -> "Tap the yellow 1-ball to look down the cue again."
-            !jumpRaised -> "This is the view down your cue. Drag sideways to aim. Drag up to raise the back of the cue: " +
-                "that's how you jump the ball. Strike low with a level cue and you scoop it — a foul."
+            !inPov && !jumpRaised -> "Tap the yellow 1-ball (or the 3D view button) to see the shot in 3D."
+            !inPov -> "Tap the 3D view button to go back to the 3D view."
+            !jumpRaised -> "One finger: drag sideways to aim, drag up to raise the back of the cue — that's how you jump " +
+                "the ball. Two fingers: pinch to zoom, drag to swing the camera round or tilt it."
             else -> "Cue raised! Where the tip hits (the spin ball), the cue's angle and your power decide whether it " +
-                "jumps. Tap Top view (top left) to go back."
+                "jumps. Strike low with a level cue and it's a scoop — a foul. Tap Top view to go back."
         }
         Step.POWER -> if (rolling) "Watch it roll…"
             else "We've lined up a shot for you. Put a finger on the POWER bar and pull down: the further, the " +

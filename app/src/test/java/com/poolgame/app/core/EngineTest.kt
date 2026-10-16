@@ -128,12 +128,17 @@ class EngineTest {
         val m = Match(GameMode.EIGHT_BALL, arrayOf("a", "b")); m.rack(Random(1), 0)
         val c = m.world.balls[0]
         for (el in doubleArrayOf(0.0, 30.0, 60.0)) {
-            val cam = PovCam(); cam.setup(c.x, c.y, 0.2, Math.toRadians(el), 0.0, 0.0, 800.0, 400.0)
+            val ctl = PovControl()
+            val cam = PovCam(); cam.setup(c.x, c.y, 0.2, ctl.pitch, ctl.dist, 0.0, 0.0, 800.0, 400.0)
             val q = DoubleArray(3)
             // The cue ball is in view, centred left to right and below the middle.
             assertTrue("cue ball projects", cam.project(c.x, c.y, P.R, q))
             assertEquals(400.0, q[0], 1.0)
-            assertTrue("cue ball low in the view at $el°: ${q[1]}", q[1] > 200 && q[1] < 400)
+            assertTrue("cue ball low in the view: ${q[1]}", q[1] > 200 && q[1] < 400)
+            // Tapping the screen where the cue ball is finds it on the table again.
+            val back = DoubleArray(2)
+            assertTrue(cam.unproject(q[0], q[1], P.R, back))
+            assertEquals(c.x, back[0], 1e-6); assertEquals(c.y, back[1], 1e-6)
             // A point behind the eye doesn't project.
             assertFalse("behind the eye", cam.project(c.x - 2 * cos(0.2), c.y - 2 * sin(0.2), 0.0, q))
             val sc = PovScene(); sc.build(cam, m.world, c.x, c.y)
