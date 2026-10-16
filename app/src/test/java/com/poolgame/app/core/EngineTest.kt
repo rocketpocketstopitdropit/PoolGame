@@ -18,8 +18,8 @@ class EngineTest {
     }
     private fun World.clearAll() { for (b in balls) { b.onTable = false; b.stop() } }
 
-    /** Trick-shot tests switch to the gap table; put the regulation table back for the others. */
-    @After fun regulationTable() = Table.useStandard()
+    /** Trick-shot and table-size tests switch tables; put the 9 ft regulation table back for the others. */
+    @After fun regulationTable() = Table.useStandard(TableSize.NINE)
 
     @Test fun centreHitReachesNaturalRoll() {
         val w = World(); w.clearAll(); w.put(0, 0.3, 0.6)
@@ -602,6 +602,90 @@ class EngineTest {
         for ((i, b) in badges.withIndex()) {
             assertTrue("badge ${i + 1} on the map", b.first in 0.0..ControlsGuide.MAP_W && b.second in 0.0..ControlsGuide.MAP_H)
             assertTrue(ControlsGuide.areas(l, i).isNotEmpty())
+        }
+    }
+
+    // ------------------------------------------------------------------ table sizes
+
+    @Test fun eachTableSizeHasRegulationDimensions() {
+        for (size in TableSize.values()) {
+            Table.useStandard(size)
+            assertEquals(size, Table.size)
+            assertEquals(size.length, P.L, 1e-12); assertEquals(size.width, P.W, 1e-12)
+            assertEquals(2.0, P.L / P.W, 1e-9)                              // always twice as long as wide
+            assertEquals(6, Table.pockets.size)
+            assertEquals(P.L / 2, Table.pockets.first { it.side }.cx, 1e-9)  // side pockets in the middle
+            assertTrue(Table.pockets.any { !it.side && it.cx > P.L - 0.1 && it.cy > P.W - 0.1 })   // far corner moved
+            assertEquals(P.L * 0.25, P.HEAD_X, 1e-12); assertEquals(P.L * 0.75, P.FOOT_X, 1e-12)
+        }
+        assertEquals(TableSize.SEVEN, TableSize.DEFAULT)
+    }
+
+    @Test fun rackFitsOnEveryTable() {
+        for (size in TableSize.values()) for (mode in listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL)) {
+            Table.useStandard(size)
+            val m = Match(mode); m.rack(Random(5), 0)
+            for (b in m.world.balls) if (b.onTable) {
+                assertTrue("$size $mode ball ${b.id} on the cloth", b.x > P.R && b.x < P.L - P.R && b.y > P.R && b.y < P.W - P.R)
+            }
+            for (i in m.world.balls.indices) for (j in i + 1 until m.world.balls.size) {
+                val a = m.world.balls[i]; val b = m.world.balls[j]
+                if (a.onTable && b.onTable) assertTrue(hypot(a.x - b.x, a.y - b.y) >= 2 * P.R - 1e-9)
+            }
+        }
+    }
+
+    @Test fun matchesKeepTheirTableSize() {
+        Table.useStandard(TableSize.SEVEN)
+        Match(GameMode.EIGHT_BALL)                                  // a copy for the CPU keeps the size
+        assertEquals(TableSize.SEVEN, Table.size); assertEquals(TableSize.SEVEN.length, P.L, 1e-12)
+        Match(GameMode.TRICK)                                       // trick shots are always on the 9 ft gap table
+        assertTrue(Table.gap); assertEquals(TableSize.NINE.length, P.L, 1e-12)
+        Match(GameMode.NINE_BALL)                                   // and back to the chosen size after
+        assertFalse(Table.gap); assertEquals(TableSize.SEVEN.length, P.L, 1e-12)
+        Table.useStandard(TableSize.EIGHT)
+        assertEquals(TableSize.EIGHT.length, P.L, 1e-12); assertEquals(6, Table.pockets.size)
+    }
+
+    @Test fun savedGameRemembersItsTable() {
+        Table.useStandard(TableSize.EIGHT)
+        val m = Match(GameMode.NINE_BALL, arrayOf("You", "CPU")); m.rack(Random(2), 0)
+        m.shoot(0.0, 7.0, 0.0, 0.0); m.world.simulate(); m.resolve()
+        val text = GameSave.write(m, GameSettings(GameMode.NINE_BALL, true, 4, 0, false, 0, tableSize = TableSize.EIGHT))
+        assertEquals(TableSize.EIGHT, GameSave.readSettings(text)!!.tableSize)
+        assertTrue(GameSave.restore(text, Match(GameMode.NINE_BALL, arrayOf("You", "CPU"))))
+        Table.useStandard(TableSize.SEVEN)
+        assertFalse(GameSave.restore(text, Match(GameMode.NINE_BALL, arrayOf("You", "CPU"))))   // wrong table: refuse
+        // A save from before table sizes existed was played on the 9 ft table.
+        val old = text.lines().filterNot { it.startsWith("table=") }.joinToString("\n")
+        assertEquals(TableSize.NINE, GameSave.readSettings(old)!!.tableSize)
+    }
+
+    @Test fun straightShotDropsOnEveryTable() {
+        for (size in TableSize.values()) {
+            Table.useStandard(size)
+            val m = Match(GameMode.EIGHT_BALL, arrayOf("You", "CPU"))
+            val out = potIntoCorner(m, 3, -1)
+            assertFalse("$size: 3 goes in", m.world.balls[3].onTable)
+            assertFalse("$size: no foul", out.foul)
+        }
+    }
+
+    @Test fun cpuFinishesGamesOnSmallerTables() {
+        for (size in listOf(TableSize.SEVEN, TableSize.EIGHT)) {
+            Table.useStandard(size)
+            for (mode in listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL)) for (seed in 0 until 2) {
+                val m = Match(mode); m.rack(Random(seed), 0)
+                val ai = arrayOf(Ai(8, seed.toLong()), Ai(3, seed + 99L))
+                var shots = 0
+                while (m.winner < 0 && shots < 300) {
+                    val p = ai[m.current].plan(m)
+                    if (m.ballInHand && p.hasPlacement) assertTrue(m.placeCue(p.placeX, p.placeY))
+                    m.shoot(p.angle, p.speed, p.side, p.vert); m.world.simulate(); m.resolve(); shots++
+                }
+                assertTrue("$size $mode seed $seed unfinished", m.winner >= 0)
+                assertEquals(size, Table.size)
+            }
         }
     }
 }

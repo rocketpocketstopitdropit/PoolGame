@@ -21,6 +21,7 @@ import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import com.poolgame.app.core.GameMode
+import com.poolgame.app.core.TableSize
 
 class MenuActivity : Activity() {
 
@@ -34,6 +35,7 @@ class MenuActivity : Activity() {
     private var practiceLevel = 0
     private var aimSens = 5
     private var callMode = 0
+    private var tableSize = TableSize.DEFAULT
     private var prediction = true
     private var resumeBtn: TextView? = null
     private var clockOn = false
@@ -69,6 +71,7 @@ class MenuActivity : Activity() {
         practiceLevel = prefs.getInt("practiceLevel", 0).coerceIn(0, com.poolgame.app.core.Trick.LEVELS.size - 1)
         aimSens = prefs.getInt("aimSens", 5).coerceIn(1, 10)
         callMode = prefs.getInt("callMode", 0).coerceIn(0, 2)
+        tableSize = TableSize.fromName(prefs.getString("tableSize", null)) ?: TableSize.DEFAULT
         prediction = prefs.getBoolean("prediction", true)
         clockOn = prefs.getBoolean("clockOn", false)
         clockSec = prefs.getInt("clockSec", 30).coerceIn(10, 120)
@@ -143,7 +146,8 @@ class MenuActivity : Activity() {
             .putBoolean("clockOn", clockOn).putInt("clockSec", clockSec)
             .putBoolean("practice", practice)
             .putBoolean("practiceTrick", practiceTrick).putInt("practiceLevel", practiceLevel)
-            .putInt("aimSens", aimSens).putInt("callMode", callMode).putBoolean("prediction", prediction).apply()
+            .putInt("aimSens", aimSens).putInt("callMode", callMode).putString("tableSize", tableSize.name)
+            .putBoolean("prediction", prediction).apply()
         refreshRecord()
     }
 
@@ -188,6 +192,7 @@ class MenuActivity : Activity() {
         card.addView(section("GAME"))
         var matchBlockRef: View? = null
         var callBlockRef: View? = null
+        var sizeBlockRef: View? = null
         val trickHelp = label("Trick shots: half the table's missing between the break area and the far end. " +
             "Jump the cue ball across the gap and sink the 1. Five levels, taking turns with the computer " +
             "or a friend: whoever makes it in fewer shots wins the level, and most levels wins the match.",
@@ -199,6 +204,7 @@ class MenuActivity : Activity() {
         practiceBlock.addView(segmented(listOf("Free table", "Trick shot"), if (practiceTrick) 1 else 0) {
             practiceTrick = it == 1
             levelBlock.visibility = if (practiceTrick) View.VISIBLE else View.GONE
+            sizeBlockRef?.visibility = if (practiceTrick) View.GONE else View.VISIBLE
             save()
         })
         val names = com.poolgame.app.core.Trick.LEVELS.map { it.name }
@@ -240,6 +246,9 @@ class MenuActivity : Activity() {
             matchBlockRef?.visibility = if (practice) View.GONE else View.VISIBLE
             callBlockRef?.visibility = if (mode == GameMode.TRICK) View.GONE else View.VISIBLE
             trickHelp.visibility = if (mode == GameMode.TRICK && !practice) View.VISIBLE else View.GONE
+            // Trick shots are always on the 9 ft table (with its gap), so the size choice hides for them.
+            val trickTable = if (practice) practiceTrick else mode == GameMode.TRICK
+            sizeBlockRef?.visibility = if (trickTable) View.GONE else View.VISIBLE
         }
         val modeSel = when { practice -> 3; mode == GameMode.TRICK -> 2; mode == GameMode.NINE_BALL -> 1; else -> 0 }
         val modeRow = segmented(listOf("8-Ball", "9-Ball", "Trick", "Practice"), modeSel) {
@@ -251,6 +260,20 @@ class MenuActivity : Activity() {
         card.addView(modeRow)
         card.addView(trickHelp)
         card.addView(practiceBlock)
+
+        // Table size (8-ball, 9-ball and free-table practice)
+        val sizeBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        sizeBlock.addView(section("TABLE SIZE"))
+        val sizes = TableSize.values()
+        val sizeHelp = label("", 12f, 0xFF8A97A1.toInt()).apply { setPadding(0, dpi(6f), 0, 0) }
+        fun refreshSize() { sizeHelp.text = tableSize.description }
+        sizeBlock.addView(segmented(sizes.map { it.label }, sizes.indexOf(tableSize)) {
+            tableSize = sizes[it]; refreshSize(); save()
+        })
+        sizeBlock.addView(sizeHelp)
+        refreshSize()
+        card.addView(sizeBlock)
+        sizeBlockRef = sizeBlock
 
         // Everything below only applies to real games, not practice.
         val matchBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -563,6 +586,7 @@ class MenuActivity : Activity() {
                 else -> mode.name
             })
             putExtra(GameActivity.EXTRA_TRICK_LEVEL, practiceLevel)
+            putExtra(GameActivity.EXTRA_TABLE, tableSize.name)
             putExtra(GameActivity.EXTRA_VS_CPU, vsCpu)
             putExtra(GameActivity.EXTRA_LEVEL, level)
             putExtra(GameActivity.EXTRA_SOUND, sound)

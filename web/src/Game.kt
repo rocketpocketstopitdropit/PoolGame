@@ -15,6 +15,7 @@ import com.poolgame.app.core.PovScene
 import com.poolgame.app.core.Prediction
 import com.poolgame.app.core.Predictor
 import com.poolgame.app.core.Table
+import com.poolgame.app.core.TableSize
 import com.poolgame.app.core.Trick
 import com.poolgame.app.core.TutTarget
 import com.poolgame.app.core.Tutorial
@@ -55,7 +56,8 @@ class Game(
     private val callMode: CallMode,
     private val sfx: Sounds,
     private val host: GameHost,
-    private val tutorialMode: Boolean = false   // the hands-on tutorial (a practice table with a guide)
+    private val tutorialMode: Boolean = false,  // the hands-on tutorial (a practice table with a guide)
+    private val tableSize: TableSize = TableSize.DEFAULT   // table for 8-ball, 9-ball and practice
 ) {
     private enum class Phase { RPS, HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
     private enum class Rps { PICK, SHAKE, REVEAL }
@@ -83,7 +85,9 @@ class Game(
         else -> arrayOf("Player 1", "Player 2")
     }
     private val rng = Random(now().toLong())
-    private var match = Match(mode, names)
+    // 8-ball, 9-ball and practice use the chosen table size (set before the layout reads its dimensions);
+    // trick shots always use the 9 ft gap table.
+    private var match = run { useTable(); Match(mode, names) }
     private var breaker = 0
     private var phase = Phase.HUMAN
     private var generation = 0
@@ -249,6 +253,7 @@ class Game(
     fun newGame(breakerPlayer: Int) {
         generation++
         breaker = breakerPlayer
+        useTable()
         match = Match(mode, names)
         match.world.trackOrientation = true
         match.world.listener = makeListener()
@@ -324,10 +329,13 @@ class Game(
 
     fun isPractice() = practiceMode
 
-    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practiceMode, breaker, match.callMode)
+    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practiceMode, breaker, match.callMode, tableSize)
+
+    private fun useTable() { if (mode != GameMode.TRICK) Table.useStandard(tableSize) }
 
     private fun resumeGame(text: String): Boolean {
         val st = GameSave.readSettings(text) ?: return false
+        useTable()
         val m = Match(mode, names)
         if (!GameSave.restore(text, m)) return false
         generation++

@@ -12,6 +12,7 @@ import android.view.WindowManager
 import com.poolgame.app.core.CallMode
 import com.poolgame.app.core.GameMode
 import com.poolgame.app.core.GameSave
+import com.poolgame.app.core.TableSize
 
 class GameActivity : Activity(), GameView.Host {
 
@@ -25,6 +26,7 @@ class GameActivity : Activity(), GameView.Host {
         const val EXTRA_RESUME = "resume"
         const val EXTRA_TRICK_LEVEL = "trickLevel"
         const val EXTRA_TUTORIAL = "tutorial"
+        const val EXTRA_TABLE = "tableSize"
 
         const val PREFS = "pool"
         const val KEY_SAVED = "savedGame"
@@ -34,11 +36,13 @@ class GameActivity : Activity(), GameView.Host {
             val text = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_SAVED, null) ?: return null
             val s = GameSave.readSettings(text) ?: return null
             val name = Stats.modeName(s.mode)
+            val size = " · ${s.tableSize.label}"
             return when {
                 s.practice && s.mode == GameMode.TRICK -> "Trick-shot practice"
-                s.practice -> "Practice"
-                s.vsCpu -> "$name vs CPU level ${s.level}"
-                else -> "$name pass & play"
+                s.mode == GameMode.TRICK -> if (s.vsCpu) "$name vs CPU level ${s.level}" else "$name pass & play"
+                s.practice -> "Practice$size"
+                s.vsCpu -> "$name vs CPU level ${s.level}$size"
+                else -> "$name pass & play$size"
             }
         }
     }
@@ -63,11 +67,14 @@ class GameActivity : Activity(), GameView.Host {
         var clock = intent.getIntExtra(EXTRA_CLOCK, 0).coerceIn(0, 300)
         var call = CallMode.values()[prefs.getInt("callMode", 0).coerceIn(0, 2)]
         tutorial = intent.getBooleanExtra(EXTRA_TUTORIAL, false)
+        var tableSize = TableSize.fromName(intent.getStringExtra(EXTRA_TABLE))
+            ?: TableSize.fromName(prefs.getString("tableSize", null)) ?: TableSize.DEFAULT
 
         // Continue a saved game: its own settings win over the menu's current ones.
         var resume: String? = null
         if (tutorial) {
             mode = GameMode.EIGHT_BALL; vsCpu = false; practice = true; clock = 0; call = CallMode.OFF
+            tableSize = TableSize.NINE   // the tutorial's lined-up shot is set up on the 9 ft table
         } else if (intent.getBooleanExtra(EXTRA_RESUME, false)) {
             val text = prefs.getString(KEY_SAVED, null)
             val s = text?.let { GameSave.readSettings(it) }
@@ -75,6 +82,7 @@ class GameActivity : Activity(), GameView.Host {
                 resume = text
                 mode = s.mode; vsCpu = s.vsCpu; level = s.level; practice = s.practice; clock = s.shotClock
                 call = s.callMode
+                tableSize = s.tableSize   // a paused game keeps the table it was started on
             }
         } else {
             prefs.edit().remove(KEY_SAVED).apply()   // starting fresh replaces any paused game
@@ -93,7 +101,8 @@ class GameActivity : Activity(), GameView.Host {
             resume,
             call,
             this,
-            tutorial
+            tutorial,
+            tableSize
         )
         setContentView(game)
         hideSystemBars()

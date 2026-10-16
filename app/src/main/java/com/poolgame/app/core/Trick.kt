@@ -27,7 +27,7 @@ class TrickLevel(
     /** Holes cut into the cloth (x, y). */
     val holes: List<DoubleArray> = emptyList(),
     val cueX: Double = 0.32,
-    val cueY: Double = P.W / 2,
+    val cueY: Double = TableSize.NINE.width / 2,
     /** The far end's two corner pockets (some levels fill them in). */
     val farCorners: Boolean = true,
     /**
@@ -103,7 +103,7 @@ object Trick {
     /** Traffic jam: the 1 has to be cut at least this much. */
     const val MIN_CUT_DEG = 12.0
 
-    private const val MID = P.W / 2
+    private val MID = TableSize.NINE.width / 2   // trick shots are always on the 9 ft table
 
     val LEVELS: List<TrickLevel> = listOf(
         TrickLevel(
@@ -147,7 +147,7 @@ object Trick {
      * the far section. Sinking the 10 as well is a bonus.
      */
     private fun bankJob(): TrickLevel {
-        val w = P.W
+        val w = TableSize.NINE.width
         fun mirror(t: List<Triple<Int, Double, Double>>) = t.map { Triple(it.first, it.second, w - it.third) }
         val top = (0 until 4).map { Triple(2 + it, 1.62 + it * 0.075, 0.30) }
         val bottom = (0 until 4).map { Triple(6 + it, 1.62 + it * 0.075, w - 0.30) }

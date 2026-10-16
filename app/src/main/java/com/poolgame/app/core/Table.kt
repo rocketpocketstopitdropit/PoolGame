@@ -7,6 +7,34 @@ import kotlin.math.sqrt
 fun toRad(deg: Double) = deg * PI / 180.0
 
 /**
+ * The table sizes you can play on, by their nominal length. Playing surface (cushion nose to nose)
+ * per WPA: 7 ft 78" x 39", 8 ft 88" x 44", 9 ft 100" x 50". Balls and pockets are the same on all.
+ */
+enum class TableSize(val feet: Int, val length: Double, val width: Double) {
+    SEVEN(7, 1.9812, 0.9906),
+    EIGHT(8, 2.2352, 1.1176),
+    NINE(9, 2.54, 1.27);
+
+    val label get() = "$feet ft"
+
+    /** One line for the menu, under the size buttons (shared by the app and the web version). */
+    val description: String get() {
+        val inches = "${kotlin.math.round(length / 0.0254).toInt()}″ × ${kotlin.math.round(width / 0.0254).toInt()}″"
+        return when (this) {
+            SEVEN -> "7 ft bar box ($inches): shorter shots, bigger balls on screen."
+            EIGHT -> "8 ft home table ($inches)."
+            NINE -> "9 ft tournament table ($inches): longer shots, more room to play position."
+        }
+    }
+
+    companion object {
+        /** New players start on the smallest table. */
+        val DEFAULT = SEVEN
+        fun fromName(s: String?): TableSize? = values().firstOrNull { it.name == s }
+    }
+}
+
+/**
  * Physical constants and table geometry. Units are SI (meters, seconds).
  *
  * Coordinates: x runs along the long side (0 = head rail, left on screen), y runs down the
@@ -15,8 +43,11 @@ fun toRad(deg: Double) = deg * PI / 180.0
  */
 object P {
     const val R = 0.028575           // ball radius (2.25" ball)
-    const val L = 2.54               // playing length (9 ft table, cushion nose to nose)
-    const val W = 1.27               // playing width
+    /** Playing length and width (cushion nose to nose) of the table in use: set by Table.useStandard / useGap. */
+    var L = 2.54
+        private set
+    var W = 1.27
+        private set
     const val G = 9.81
     const val MU_SLIDE = 0.2         // ball-cloth sliding friction
     const val MU_ROLL = 0.014        // rolling resistance
@@ -32,9 +63,11 @@ object P {
     const val MAX_ELEVATION = 60.0   // degrees
     const val RAIL_CLEAR = 0.038     // a ball whose bottom is this high clears the cushions and leaves the table
 
-    const val HEAD_X = L * 0.25      // head string
-    const val FOOT_X = L * 0.75      // foot spot x
-    const val FOOT_Y = W * 0.5
+    val HEAD_X get() = L * 0.25      // head string
+    val FOOT_X get() = L * 0.75      // foot spot x
+    val FOOT_Y get() = W * 0.5
+
+    internal fun resize(s: TableSize) { L = s.length; W = s.width }
 }
 
 class Seg(val ax: Double, val ay: Double, val bx: Double, val by: Double) {
@@ -58,9 +91,13 @@ object Table {
     const val CORNER = 0.081   // distance from corner to where each cushion ends (mouth = CORNER * sqrt 2)
     const val SIDE = 0.064     // half-opening of side pockets
 
-    /** The gap table (trick shots): the second quarter of the table is cut away. */
-    const val GAP_X0 = P.L * 0.25
-    const val GAP_X1 = P.L * 0.5
+    /** The gap table (trick shots, always on a 9 ft table): the second quarter of the table is cut away. */
+    val GAP_X0 = TableSize.NINE.length * 0.25
+    val GAP_X1 = TableSize.NINE.length * 0.5
+
+    /** Size of the regulation table (8-ball, 9-ball, practice). The trick-shot gap table is always 9 ft. */
+    var size = TableSize.NINE
+        private set
 
     var segs: Array<Seg> = emptyArray()
         private set
@@ -82,9 +119,11 @@ object Table {
 
     init { useStandard() }
 
-    /** The regulation table: four corner pockets and two side pockets. */
-    fun useStandard() {
-        if (segs.isNotEmpty() && !gap) return
+    /** The regulation table: four corner pockets and two side pockets, in [s] (default: the size in use). */
+    fun useStandard(s: TableSize = size) {
+        if (segs.isNotEmpty() && !gap && s == size) return
+        size = s
+        P.resize(s)
         val L = P.L; val W = P.W
         val s = ArrayList<Seg>()
         val p = ArrayList<Pocket>()
@@ -126,6 +165,7 @@ object Table {
     fun useGap(holes: List<DoubleArray> = emptyList(), farCorners: Boolean = true) {
         val key = holes.joinToString(";") { "${it[0]},${it[1]}" } + "|$farCorners"
         if (gap && key == holeKey) return
+        P.resize(TableSize.NINE)
         val L = P.L; val W = P.W
         val s = ArrayList<Seg>()
         val p = ArrayList<Pocket>()

@@ -3,6 +3,7 @@ package com.poolgame.web
 import com.poolgame.app.core.CallMode
 import com.poolgame.app.core.GameMode
 import com.poolgame.app.core.GameSave
+import com.poolgame.app.core.TableSize
 import kotlin.math.PI
 import kotlin.math.min
 
@@ -35,6 +36,7 @@ class App : GameHost {
     private var practiceTrick = Store.getBool("practiceTrick", false)
     private var practiceLevel = Store.getInt("practiceLevel", 0).coerceIn(0, com.poolgame.app.core.Trick.LEVELS.size - 1)
     private var askTutorial = Store.getBool("askTutorial", true)
+    private var tableSize = TableSize.fromName(Store.get("tableSize", "")) ?: TableSize.DEFAULT
     private val guide = Guide()
 
     // What the current game is (may differ from the menu when resuming a saved game)
@@ -143,6 +145,7 @@ class App : GameHost {
         segment("seg-mode") { modeIdx = when (it) { 2 -> 3; 3 -> 2; else -> it }; save(); refreshMenu() }
         segment("seg-opp") { vsCpu = it == 0; save(); refreshMenu() }
         segment("seg-call") { callIdx = it; save(); refreshMenu() }
+        segment("seg-size") { tableSize = TableSize.values()[it]; save(); refreshMenu() }
         segment("seg-ptype") { practiceTrick = it == 1; save(); refreshMenu() }
         val pl = el("seg-plevel")
         for ((i, lv) in com.poolgame.app.core.Trick.LEVELS.withIndex()) {
@@ -276,6 +279,11 @@ class App : GameHost {
         setSegment("seg-plevel", practiceLevel)
         el("callBlock").style.display = if (modeIdx == 3) "none" else "block"
         el("trickHelp").style.display = if (modeIdx == 3) "block" else "none"
+        // Trick shots are always on the 9 ft table (with its gap), so the size choice hides for them.
+        val trickTable = if (modeIdx == 2) practiceTrick else modeIdx == 3
+        el("sizeBlock").style.display = if (trickTable) "none" else "block"
+        setSegment("seg-size", tableSize.ordinal)
+        el("sizeHelp").textContent = tableSize.description
         el("skillBlock").style.display = if (vsCpu) "block" else "none"
         el("skill").value = level.toString()
         el("skillLabel").textContent = "Level $level · ${levelNames[level - 1]}"
@@ -308,16 +316,19 @@ class App : GameHost {
         Store.set("clockSec", clockSec.toString()); Store.set("sound", sound.toString())
         Store.set("aimSens", aimSens.toString()); Store.set("callMode", callIdx.toString()); Store.set("prediction", prediction.toString())
         Store.set("practiceTrick", practiceTrick.toString()); Store.set("practiceLevel", practiceLevel.toString())
+        Store.set("tableSize", tableSize.name)
     }
 
     private fun savedSummary(): String? {
         val s = GameSave.readSettings(Store.get("savedGame", "")) ?: return null
         val name = nameOf(s.mode)
+        val size = " · ${s.tableSize.label}"
         return when {
             s.practice && s.mode == GameMode.TRICK -> "Trick-shot practice"
-            s.practice -> "Practice"
-            s.vsCpu -> "$name vs CPU level ${s.level}"
-            else -> "$name pass & play"
+            s.mode == GameMode.TRICK -> if (s.vsCpu) "$name vs CPU level ${s.level}" else "$name pass & play"
+            s.practice -> "Practice$size"
+            s.vsCpu -> "$name vs CPU level ${s.level}$size"
+            else -> "$name pass & play$size"
         }
     }
 
@@ -335,6 +346,7 @@ class App : GameHost {
         var clock = if (clockOn && !practice) clockSec else 0
         var call = CallMode.values()[callIdx]
         var text: String? = null
+        var size = tableSize
         if (resume) {
             val saved = Store.get("savedGame", "")
             val s = GameSave.readSettings(saved)
@@ -342,6 +354,7 @@ class App : GameHost {
                 text = saved
                 practice = s.practice; mode = s.mode; cpu = s.vsCpu; lvl = s.level; clock = s.shotClock
                 call = s.callMode
+                size = s.tableSize   // a paused game keeps the table it was started on
             }
         } else Store.set("savedGame", "")
         if (mode == GameMode.TRICK) call = CallMode.OFF
@@ -350,7 +363,7 @@ class App : GameHost {
         el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
         el("restart").textContent = if (mode == GameMode.TRICK) "Restart match" else "Restart rack"
         el("quit").textContent = "Main menu (game is saved)"
-        game = Game(mode, cpu, lvl, clock, practice, practiceLevel, aimSens, prediction, text, call, sounds, this)
+        game = Game(mode, cpu, lvl, clock, practice, practiceLevel, aimSens, prediction, text, call, sounds, this, tableSize = size)
         showGame()
     }
 
@@ -361,7 +374,8 @@ class App : GameHost {
         el("predToggle").textContent = "Shot prediction: On"
         el("restart").textContent = "Restart tutorial"
         el("quit").textContent = "Leave tutorial"
-        game = Game(GameMode.EIGHT_BALL, false, level, 0, true, 0, aimSens, true, null, CallMode.OFF, sounds, this, tutorialMode = true)
+        game = Game(GameMode.EIGHT_BALL, false, level, 0, true, 0, aimSens, true, null, CallMode.OFF, sounds, this,
+            tutorialMode = true, tableSize = TableSize.NINE)   // its lined-up shot is set up on the 9 ft table
         showGame()
     }
 

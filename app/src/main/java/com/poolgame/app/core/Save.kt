@@ -8,7 +8,9 @@ class GameSettings(
     val shotClock: Int,
     val practice: Boolean,
     val breaker: Int,
-    val callMode: CallMode = CallMode.OFF
+    val callMode: CallMode = CallMode.OFF,
+    /** Table played on (8-ball, 9-ball, practice). Saves from before sizes existed were on the 9 ft table. */
+    val tableSize: TableSize = TableSize.NINE
 )
 
 /**
@@ -23,6 +25,7 @@ object GameSave {
         kv("mode", s.mode.name); kv("vsCpu", s.vsCpu); kv("level", s.level)
         kv("clock", s.shotClock); kv("practice", s.practice); kv("breaker", s.breaker)
         kv("call", s.callMode.name)
+        kv("table", s.tableSize.name)
         kv("current", m.current)
         kv("g0", m.groups[0].name); kv("g1", m.groups[1].name)
         kv("bih", m.ballInHand); kv("kitchen", m.kitchenOnly); kv("brk", m.isBreak)
@@ -50,7 +53,8 @@ object GameSave {
             p.getValue("clock").toInt(),
             p.getValue("practice").toBoolean(),
             p.getValue("breaker").toInt(),
-            p["call"]?.let { CallMode.valueOf(it) } ?: CallMode.OFF
+            p["call"]?.let { CallMode.valueOf(it) } ?: CallMode.OFF,
+            TableSize.fromName(p["table"]) ?: TableSize.NINE
         )
     } catch (e: Throwable) { null }
 
@@ -58,6 +62,8 @@ object GameSave {
     fun restore(text: String, m: Match): Boolean = try {
         val p = parse(text)
         if (GameMode.valueOf(p.getValue("mode")) != m.mode) throw IllegalStateException("mode")
+        if (m.mode != GameMode.TRICK && (TableSize.fromName(p["table"]) ?: TableSize.NINE) != Table.size)
+            throw IllegalStateException("table size")   // the match must be made on the saved table
         m.current = p.getValue("current").toInt()
         m.groups[0] = Group.valueOf(p.getValue("g0")); m.groups[1] = Group.valueOf(p.getValue("g1"))
         m.ballInHand = p.getValue("bih").toBoolean()

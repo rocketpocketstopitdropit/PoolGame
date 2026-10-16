@@ -1,6 +1,6 @@
 # Pool — 8-Ball, 9-Ball & Trick Shots for Android
 
-A landscape pool game with real cue-ball spin, a 3D view down the cue, physically real jump shots (and
+A landscape pool game on a 7, 8 or 9 ft table, with real cue-ball spin, a 3D view down the cue, physically real jump shots (and
 illegal scoops), 8-ball and 9-ball rules, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
 no image or sound assets (balls are rendered per-pixel and sounds are synthesized).
 
@@ -103,6 +103,11 @@ A table foul — hitting nothing, hitting the wrong ball first, or no rail and n
 **foul voice**: record it in the menu (FOUL VOICE → Record, up to 3 seconds; Play to check, Delete to remove).
 It's trimmed and levelled automatically and kept on that device. Until you record one, a synthesized cough plays.
 
+**Table size** (menu → TABLE SIZE): 7 ft (bar box, 78″ × 39″, the default), 8 ft (88″ × 44″) or 9 ft (tournament,
+100″ × 50″) for 8-ball, 9-ball and free-table practice. Balls and pockets are the same size on all three, so a smaller
+table means shorter shots and bigger balls on screen. Trick shots and the tutorial always use the 9 ft table. A paused
+game keeps the table it was started on.
+
 **Pause & resume**: ☰ → *Main menu* keeps the game; the menu shows *Resume*. The game is also saved if you switch
 apps or close it. A shot that was still rolling is replayed from the start of that turn.
 
@@ -181,7 +186,8 @@ model changed, and a unit test makes sure each level still has one).
   fly ballistically, collide in 3D, and pass over pockets and balls. Spin is kept in the air and the cloth grips the
   ball on every landing, so draw, follow and english act when it comes down. A ball higher than the cushions flies
   over them and off the table.
-- Regulation 9-ft table (100″ × 50″), 2¼″ balls, 4.5″ corner and 5″ side pocket mouths.
+- Regulation tables (`TableSize`): 7 ft 78″ × 39″, 8 ft 88″ × 44″, 9 ft 100″ × 50″ playing surface; 2¼″ balls, 4.5″
+  corner and 5″ side pocket mouths on all of them. `Table.useStandard(size)` switches; `P.L` / `P.W` follow it.
 
 Tunable constants are in the `P` object in `core/Table.kt`.
 
@@ -210,7 +216,7 @@ Head-to-head (headless, 10 games each): L10 beat L1 20/20; L7 beat L4 16/20.
 
 ```
 app/src/main/java/com/poolgame/app/
-  core/   Table.kt (constants, rails, pockets)  World.kt (physics)
+  core/   Table.kt (constants, sizes, rails)    World.kt (physics)
           Match.kt (racks + rules)              Ai.kt (computer player)
           Crowd.kt (synthesized crowd "aww", shared with the web version)
           Trick.kt (trick-shot levels, match state, known shots)
