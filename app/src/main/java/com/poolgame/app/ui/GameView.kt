@@ -1009,7 +1009,7 @@ class GameView(
         spinR = min((spinRt - spinL) * 0.42f, (h - hudH) * 0.15f)
         spinCx = (spinL + spinRt) / 2
         spinCy = hudH + 24 * dp + spinR
-        wheelRect.set(colL + 8 * dp, spinCy + spinR + 50 * dp, w - 10 * dp, h - 14 * dp)
+        wheelRect.set(colL + 8 * dp, spinCy + spinR + 58 * dp, w - 10 * dp, h - 14 * dp)
         topViewBtn.set(tableArea.left + 8 * dp, tableArea.top + 8 * dp, tableArea.left + 118 * dp, tableArea.top + 44 * dp)
         povBalls.setRadius(30 * dp)
         menuBtn.set(8 * dp, 8 * dp, 8 * dp + 44 * dp, 8 * dp + 36 * dp)
@@ -1455,7 +1455,7 @@ class GameView(
     private fun drawPovCue(canvas: Canvas, cx: Double, cy: Double) {
         val k = povScene.cue(povCam, cx, cy, aimAngle, Math.toRadians(elevDeg.toDouble()),
             (spinX * P.TIP_LIMIT).toDouble(), (-spinY * P.TIP_LIMIT).toDouble(),
-            0.012 + power * 0.22, stickSegs, 0.0065, 0.015, povCue)
+            0.012 + power * 0.07, stickSegs, 0.0065, 0.015, povCue)
         val q = povCue
         for (i in 0 until k - 1) {
             val o = i * 4

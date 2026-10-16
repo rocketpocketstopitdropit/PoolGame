@@ -7,6 +7,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.PI
 import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.hypot
 import kotlin.random.Random
 
@@ -120,6 +122,32 @@ class EngineTest {
         val w = World(); w.clearAll(); w.put(0, 0.4, 0.635)
         w.strike(0.0, 2.5, 0.45, 0.0, Math.toRadians(40.0)); w.simulate()
         assertTrue("right english curves right (down the screen): y=${w.balls[0].y}", w.balls[0].y > 0.635 + 0.03)
+    }
+
+    @Test fun povViewLooksDownTheCue() {
+        val m = Match(GameMode.EIGHT_BALL, arrayOf("a", "b")); m.rack(Random(1), 0)
+        val c = m.world.balls[0]
+        for (el in doubleArrayOf(0.0, 30.0, 60.0)) {
+            val cam = PovCam(); cam.setup(c.x, c.y, 0.2, Math.toRadians(el), 0.0, 0.0, 800.0, 400.0)
+            val q = DoubleArray(3)
+            // The cue ball is in view, centred left to right and below the middle.
+            assertTrue("cue ball projects", cam.project(c.x, c.y, P.R, q))
+            assertEquals(400.0, q[0], 1.0)
+            assertTrue("cue ball low in the view at $el°: ${q[1]}", q[1] > 200 && q[1] < 400)
+            // A point behind the eye doesn't project.
+            assertFalse("behind the eye", cam.project(c.x - 2 * cos(0.2), c.y - 2 * sin(0.2), 0.0, q))
+            val sc = PovScene(); sc.build(cam, m.world, c.x, c.y)
+            assertTrue("items ${sc.n}", sc.n > 5)
+            assertTrue("the cue ball is drawn", (0 until sc.n).any { sc.kind[it] == PovScene.BALL && sc.color[it] == 0 })
+            // Layer 2 is sorted far to near, and the cue ball (nearest ball) comes after the rack.
+            val ballsInOrder = (0 until sc.n).map { sc.order[it] }.filter { sc.kind[it] == PovScene.BALL }.map { sc.color[it] }
+            assertEquals(0, ballsInOrder.last())
+            if (el == 0.0) assertTrue("the rack is in view", ballsInOrder.size > 10)
+            val out = DoubleArray(9 * 4)
+            val k = sc.cue(cam, c.x, c.y, 0.2, Math.toRadians(el), 0.0, 0.0, 0.02,
+                doubleArrayOf(0.0, 0.008, 0.03, 0.72, 0.74, 0.98, 1.22, 1.43, 1.45), 0.0065, 0.015, out)
+            assertTrue("some of the cue is in front of the eye", k >= 2)
+        }
     }
 
     @Test fun cueBallJumpedOffTableIsFoul() {

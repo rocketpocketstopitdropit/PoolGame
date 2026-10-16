@@ -1,7 +1,7 @@
 # Pool — 8-Ball, 9-Ball & Trick Shots for Android
 
-A landscape pool game with real cue-ball spin, 8-ball and 9-ball rules, a trick-shot mode on a
-table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
+A landscape pool game with real cue-ball spin, a 3D view down the cue, physically real jump shots (and
+illegal scoops), 8-ball and 9-ball rules, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
 no image or sound assets (balls are rendered per-pixel and sounds are synthesized).
 
 ## Build & run
@@ -36,8 +36,8 @@ You can also start a build manually from the Actions tab with **Run workflow**.
 box; the menu's *Offer the tutorial when the app opens* switch turns the question back on). The tutorial is a
 one-minute, hands-on tour on a real table: each step dims the screen except one control, a moving finger shows the
 gesture, and a card says what to do. It moves on only once you've actually used that control: aim on the table,
-the fine-aim roller, spin, the jump slider (up, then back to level), then pull the power bar to pot a lined-up
-ball, the ball tray, dragging the cue ball with ball in hand, and the ☰ pause menu. *Skip tutorial* (top right)
+the fine-aim roller, spin, the 3D view (tap the 1-ball, raise the cue, back to Top view), then pull the power bar
+to pot a lined-up ball, the ball tray, dragging the cue ball with ball in hand, and the ☰ pause menu. *Skip tutorial* (top right)
 leaves at any time. It never touches your paused game or your record. Replay it from **CONTROLS → ▶ Tutorial**.
 
 **Screen guide** (menu → CONTROLS → *Screen guide*): a labelled map of the game screen, drawn from the game's own
@@ -54,9 +54,9 @@ Android app and the web version say exactly the same thing.
 |---|---|
 | Drag on the table | Aim the cue toward your finger |
 | **Fine aim** wheel (right, below spin) | Wide roller: drag up/down to nudge the aim. It accelerates with finger speed — slow drags are ~3× finer than the base speed, fast swipes up to 25× coarser, so a flick swings the cue a long way. Base speed is adjustable 1–10 in the menu (5 ≈ 0.01° per dp at ~150 dp/s, each step 1.6×) |
-| **JUMP** slider (vertical, left of the spin ball) | Slide up to raise the cue for a jump shot (0–60°). Around 45–55° with a firm stroke hops the cue ball over a blocker |
-| **Spin** cue ball (right) | Touch where the tip strikes: top = follow, bottom = draw, sides = english. Tap the centre to reset |
-| **Power** bar (left) | Pull down to set power, release to shoot. Slide back to the top to cancel. While holding it, you can use another finger on the fine-aim wheel, the table, spin or cue angle |
+| Tap a ball | Aims straight at it and opens the **3D view** down the cue (see below) |
+| **Spin** cue ball (right) | The cue ball as you see it down the cue: touch where the tip strikes (top = follow, bottom = draw, sides = english). Inside the dashed ring the tip grips; outside it slips (miscue), and low enough with a level cue it scoops the ball (a foul). The label under it warns you, and shows the cue's angle when it's raised. Tap the centre to reset |
+| **Power** bar (left) | Pull down to set power, release to shoot. Slide back to the top to cancel. While holding it, you can use another finger on the fine-aim wheel, the table (or 3D view) or spin |
 | Ball in hand | Drag the cue ball (shaded area only before the break) |
 | Ball tray (left, next to the power bar) | Pocketed balls roll down it and line up bottom-to-top in the order they were made. Respotted balls leave it |
 | ☰ / Back | Pause menu: resume, restart rack, quit |
@@ -67,6 +67,19 @@ ghost ball with an X means that ball is not a legal first contact; a red ring me
 There is no random error on your shots. **Shot prediction** can be turned off (menu or pause menu); then only a
 straight aim line from the cue ball to the cushion is shown. Pocket holes are drawn exactly the size of the
 drop zone with a bright ring: once a ball's centre crosses the ring it falls.
+
+**3D view (POV)**: tap any ball in the top view and the cue lines up straight at it while the view drops down behind
+your cue, rendered in 3D (table, cushions, pockets, lit rolling balls, the aim guide on the cloth and your cue). Drag
+sideways to aim (faster drags turn further), drag up to raise the back of the cue (0–60°) and down to level it. Tap
+another ball to line up on it, tap a pocket to call it, or tap **◀ Top view** to go back; shooting goes back to the top
+view by itself so you can watch the balls. Ball in hand is placed from the top view. The angle you set stays until the
+end of the turn and shows under the spin ball.
+
+**Jump shots** have no button and no slider: raise the cue in the 3D view, pick the tip spot on the spin ball and pull
+the power. The physics decides whether it jumps — an elevated cue drives the ball down into the slate and it bounces
+up; steeper and harder jumps higher. Follow, draw and english ride along in the air and take hold when it lands (with
+the cue raised, english also curves the ball, like a masse). A level cue struck low enough to dig under the ball
+**scoops** it into the air instead: the shot plays out, but it's a foul (opponent gets ball in hand), as in WPA rules.
 
 **Who breaks**: every new game, rematch and restart starts with rock, paper, scissors (fist, flat hand,
 sideways peace sign). Against the CPU you pick and it picks at random; in pass & play each player taps their own
@@ -110,7 +123,8 @@ the menu and after each game.
   loses, an uncalled 9 is respotted. *Every shot*: only one of your balls in the called pocket keeps your
   turn; anything else is slop (no foul, the opponent shoots, slopped balls stay down). The CPU calls too.
 - **Fouls** (scratch, no ball hit, wrong ball first, no rail after contact, a ball jumped off the
-  table) give the opponent ball in hand anywhere. Jumped object balls are respotted; jumping the 8
+  table, a scoop jump) give the opponent ball in hand anywhere. Legal jumps come off an elevated cue; digging under
+  the cue ball to lift it is a foul. A miscue on its own isn't. Jumped object balls are respotted; jumping the 8
   off in 8-ball loses (except on the break).
 - Not modelled: push-outs, break rail-count requirement.
 
@@ -140,7 +154,8 @@ goes to sudden death. The balls reset after every attempt.
 
 **Practice a trick shot**: menu → Game → Practice → Trick shot, then pick the level. Unlimited attempts on your
 own, with a made/attempts count; ◀ Level / Level ▶ switch levels and Reset puts the balls back. Every level was checked with the physics engine
-(`core/Trick.kt` holds known working shots, and a unit test makes sure each level still has one).
+(`core/Trick.kt` holds known working shots, found by a search with the physics engine and redone when the strike
+model changed, and a unit test makes sure each level still has one).
 
 ## Physics
 
@@ -148,13 +163,19 @@ own, with a made/attempts count; ◀ Level / Level ▶ switch levels and Reset p
 
 - Cloth: sliding friction at the contact point until natural roll, then rolling resistance — this is
   what produces stun, draw and follow. Side spin decays separately.
-- Cue strike: tip offset → angular impulse (striking 0.4R above centre gives exact natural roll).
+- Cue strike: the cue is a straight stick at the chosen elevation and the tip meets the ball at the spot set on the
+  spin ball (seen down the cue). Inside the tip's friction limit (half a radius off centre) the push is along the cue;
+  beyond it the tip slips and only the normal push plus what friction holds gets through (a miscue). Spin is r × J,
+  so striking 0.4R above centre gives exact natural roll, and side spin with a raised cue tilts the spin axis (masse).
+  A push with a downward part is bounced off the slate (a legal jump, with slate friction trading speed for roll); one
+  with an upward part — only possible from under the ball — lifts it directly: a scoop.
 - Ball–ball: restitution plus surface friction, so cut-induced and spin-induced throw happen naturally.
 - Cushions: friction at the nose, so running/reverse english changes rebound angles.
 - Exact time-of-impact rewind on every collision, so cut angles match the aim guide.
 - Jump shots: an elevated cue drives the ball into the slate, which bounces it up; airborne balls
-  fly ballistically, collide in 3D, and pass over pockets and balls. A ball higher than the cushions
-  flies over them and off the table.
+  fly ballistically, collide in 3D, and pass over pockets and balls. Spin is kept in the air and the cloth grips the
+  ball on every landing, so draw, follow and english act when it comes down. A ball higher than the cushions flies
+  over them and off the table.
 - Regulation 9-ft table (100″ × 50″), 2¼″ balls, 4.5″ corner and 5″ side pocket mouths.
 
 Tunable constants are in the `P` object in `core/Table.kt`.
@@ -191,6 +212,7 @@ app/src/main/java/com/poolgame/app/
           Cough.kt (synthesized cough, the foul sound until you record one)
           Voice.kt (cleans up your recorded foul voice)
           Tutorial.kt (tutorial steps, table setup, demo finger)
+          Pov.kt (3D view: camera down the cue, the table and balls as projected, depth-sorted polygons)
           ControlsGuide.kt (screen-guide text and the screen map's layout)
   ui/     MenuActivity  GameActivity  GameView (render + input + turn flow, tutorial overlay)
           ControlsActivity (the screen guide and its map)

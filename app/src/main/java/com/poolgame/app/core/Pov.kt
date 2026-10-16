@@ -130,7 +130,6 @@ class PovScene {
         const val WOOD_FAR = 0xFF4A2610.toInt()
         const val SLATE = 0xFF2C3034.toInt()
         const val POCKET = 0xFF050505.toInt()
-        const val POCKET_RIM = 0xFF151515.toInt()
         const val SHADOW = 0x5A000000
         const val DIAMOND = 0xFFEDE3C8.toInt()
 
@@ -317,10 +316,11 @@ class PovScene {
         }
         stripY(-rw, -cw, W + cw)
         stripY(L + cw, L + rw, W + cw, far = true)
-        // Pocket mouths cut into the rails.
+        // Pocket mouths cut into the rails: the pocket's circle, but only the part beyond the line
+        // between its jaw tips (inside that line there's no rail, just the cloth's own hole).
         for (pk in Table.pockets) {
             if (pk.hole) continue
-            disc(pk.cx, pk.cy, RAIL_H + 0.0005, pk.capR, POCKET, 2, 16)
+            railHole(pk)
         }
         // Diamonds.
         val dOff = RAIL_W * 0.6
@@ -353,6 +353,34 @@ class PovScene {
         // Insertion sort is fine: a few hundred items, mostly in order frame to frame.
         val tail = order.copyOfRange(l2, n).sortedByDescending { depth[it] }
         for (i in tail.indices) order[l2 + i] = tail[i]
+    }
+
+    private fun railHole(pk: Pocket) {
+        val t = pk.tips
+        // Line through the tips; keep the side the pocket's centre is on.
+        val lx = t[2] - t[0]; val ly = t[3] - t[1]
+        var nx = -ly; var ny = lx
+        if ((pk.cx - t[0]) * nx + (pk.cy - t[1]) * ny < 0) { nx = -nx; ny = -ny }
+        val segs = 20
+        // A little smaller than the drop zone and set back from the table, so it stays clear of the jaws.
+        val nl = hypot(nx, ny)
+        val ccx = pk.cx + nx / nl * 0.025; val ccy = pk.cy + ny / nl * 0.025
+        val r = pk.capR * 0.85
+        var m = 0
+        for (i in 0 until segs) {
+            val a0 = 2 * PI * i / segs; val a1 = 2 * PI * (i + 1) / segs
+            val x0 = ccx + r * cos(a0); val y0 = ccy + r * sin(a0)
+            val x1 = ccx + r * cos(a1); val y1 = ccy + r * sin(a1)
+            val s0 = (x0 - t[0]) * nx + (y0 - t[1]) * ny; val s1 = (x1 - t[0]) * nx + (y1 - t[1]) * ny
+            if (s0 >= 0) { cx3[m] = x0; cy3[m] = y0; m++ }
+            if ((s0 >= 0) != (s1 >= 0)) {
+                val k = s0 / (s0 - s1)
+                cx3[m] = x0 + (x1 - x0) * k; cy3[m] = y0 + (y1 - y0) * k; m++
+            }
+        }
+        if (m < 3) return
+        for (i in 0 until m) ch3[i] = RAIL_H + 0.0005
+        poly(cx3, cy3, ch3, m, POCKET, 2)
     }
 
     /** A vertical face from (ax, ay) to (bx, by), heights h0..h1, drawn only from the side its normal (nx, ny) faces. */

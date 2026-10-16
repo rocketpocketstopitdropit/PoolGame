@@ -24,6 +24,22 @@ class Balls {
         const val PRACTICE_RED = 0xFFC62828.toInt()
         const val PRACTICE_YELLOW = 0xFFF2BE00.toInt()
         fun isStripe(id: Int) = id in 9..15
+        // Light from upper left, above the table (world space; up is -z).
+        private val LL = sqrt(0.35 * 0.35 + 0.55 * 0.55 + 1.0)
+        val LX = -0.35 / LL; val LY = -0.55 / LL; val LZ = -1.0 / LL
+    }
+
+    /**
+     * Seen from a camera instead of from straight above (the 3D view): the screen's right, down and
+     * toward-the-viewer directions in world space (9 numbers), or null for the top-down view.
+     */
+    private var view: DoubleArray? = null
+    private val viewNow = DoubleArray(9)
+    private val viewDrawn = Array(16) { DoubleArray(9) { Double.NaN } }
+
+    fun setView(v: DoubleArray?) {
+        if (v == null) { view = null; return }
+        v.copyInto(viewNow); view = viewNow
     }
 
     var plain = false
@@ -103,8 +119,12 @@ class Balls {
     private fun sprite(b: Ball): dynamic {
         val q = lastQ[b.id]
         val cv = canvases[b.id]
-        if (q[0] == b.qw && q[1] == b.qx && q[2] == b.qy && q[3] == b.qz) return cv
+        val vw = view
+        val vd = viewDrawn[b.id]
+        val sameView = if (vw == null) vd[0].isNaN() else vd.contentEquals(vw)
+        if (sameView && q[0] == b.qw && q[1] == b.qx && q[2] == b.qy && q[3] == b.qz) return cv
         q[0] = b.qw; q[1] = b.qx; q[2] = b.qy; q[3] = b.qz
+        if (vw == null) vd[0] = Double.NaN else vw.copyInto(vd)
         matrix(b)
         val base = colorOf(b.id)
         val br = (base shr 16) and 255; val bg = (base shr 8) and 255; val bb = base and 255
@@ -118,11 +138,29 @@ class Balls {
         val img = images[b.id]!!
         val data = img.data
         val n = size * size
+        // 3D view: the screen's axes in world space, and the light and highlight worked out per pixel.
+        val v0 = vw?.get(0) ?: 1.0; val v1 = vw?.get(1) ?: 0.0; val v2 = vw?.get(2) ?: 0.0
+        val v3 = vw?.get(3) ?: 0.0; val v4 = vw?.get(4) ?: 1.0; val v5 = vw?.get(5) ?: 0.0
+        val v6 = vw?.get(6) ?: 0.0; val v7 = vw?.get(7) ?: 0.0; val v8 = vw?.get(8) ?: -1.0
+        var hx = LX + v6; var hy = LY + v7; var hz = LZ + v8
+        val hl = sqrt(hx * hx + hy * hy + hz * hz); hx /= hl; hy /= hl; hz /= hl
         for (k in 0 until n) {
             val a = alpha[k]
             val o = k * 4
             if (a <= 0) { data[o + 3] = 0; continue }
-            val wx = nx[k]; val wy = ny[k]; val wz = nz[k]
+            var wx = nx[k]; var wy = ny[k]; var wz = nz[k]
+            var sh = shade[k]; var spc = spec[k]
+            if (vw != null) {
+                val u = wx; val vv = wy; val t = -wz
+                wx = u * v0 + vv * v3 + t * v6
+                wy = u * v1 + vv * v4 + t * v7
+                wz = u * v2 + vv * v5 + t * v8
+                val lam = max(0.0, wx * LX + wy * LY + wz * LZ)
+                sh = (0.38 + 0.66 * lam) * (0.82 + 0.18 * t)
+                var hs = max(0.0, wx * hx + wy * hy + wz * hz)
+                hs *= hs; hs *= hs; hs *= hs; hs *= hs; hs *= hs; hs *= hs
+                spc = hs * 0.85
+            }
             val bx = m0 * wx + m3 * wy + m6 * wz
             val by = m1 * wx + m4 * wy + m7 * wz
             val bz = m2 * wx + m5 * wy + m8 * wz
@@ -134,7 +172,7 @@ class Balls {
                 val colored = if (stripe) abs(bx) < 0.52 && !disc else !disc
                 if (colored) { r = br; g = bg; bl = bb } else { r = wr; g = wg; bl = wb }
             }
-            val s = shade[k]; val sp = spec[k] * 255
+            val s = sh; val sp = spc * 255
             data[o] = min(255.0, r * s + sp).toInt()
             data[o + 1] = min(255.0, g * s + sp).toInt()
             data[o + 2] = min(255.0, bl * s + sp).toInt()
@@ -150,13 +188,22 @@ class Balls {
         ctx.globalAlpha = alphaMul
         ctx.drawImage(cv, sx - sz / 2, sy - sz / 2, sz, sz)
         ctx.globalAlpha = 1.0
-        if (b.id == 0 || plain || scale < 0.6) return
+        if (b.id == 0 || plain || scale * radius < 6) return
         matrix(b)
-        val s = if (m[8] < 0) 1.0 else -1.0
-        val facing = -s * m[8]
+        val v = view
+        val ax = m[2]; val ay = m[5]; val az = m[8]
+        val toward: Double; val sxo: Double; val syo: Double
+        if (v == null) { toward = -az; sxo = ax; syo = ay }
+        else {
+            toward = ax * v[6] + ay * v[7] + az * v[8]
+            sxo = ax * v[0] + ay * v[1] + az * v[2]
+            syo = ax * v[3] + ay * v[4] + az * v[5]
+        }
+        val s = if (toward > 0) 1.0 else -1.0
+        val facing = s * toward
         if (facing < 0.4) return
-        val ox = s * m[2] * radius * scale
-        val oy = s * m[5] * radius * scale
+        val ox = s * sxo * radius * scale
+        val oy = s * syo * radius * scale
         ctx.save()
         ctx.globalAlpha = ((facing - 0.4) / 0.3).coerceIn(0.0, 1.0) * alphaMul
         ctx.translate(sx + ox, sy + oy)

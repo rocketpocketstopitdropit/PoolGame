@@ -47,7 +47,7 @@ object ControlsGuide {
         val spinR = min((spinRt - spinL) * 0.42, (h - hudH) * 0.15)
         val spinCx = (spinL + spinRt) / 2
         val spinCy = hudH + 24 + spinR
-        val wheel = Box(colL + 8, spinCy + spinR + 50, w - 10, h - 14)
+        val wheel = Box(colL + 8, spinCy + spinR + 58, w - 10, h - 14)
         val menu = Box(8.0, 8.0, 52.0, 44.0)
         val cardW = min(w * 0.27, 260.0)
         val cardH = hudH - 16
