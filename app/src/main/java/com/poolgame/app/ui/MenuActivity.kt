@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.CheckBox
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -37,6 +38,7 @@ class MenuActivity : Activity() {
     private var resumeBtn: TextView? = null
     private var clockOn = false
     private var clockSec = 30
+    private var askTutorial = true
     private val stats by lazy { Stats(this) }
     private var recordText: TextView? = null
 
@@ -70,7 +72,48 @@ class MenuActivity : Activity() {
         prediction = prefs.getBoolean("prediction", true)
         clockOn = prefs.getBoolean("clockOn", false)
         clockSec = prefs.getInt("clockSec", 30).coerceIn(10, 120)
+        askTutorial = prefs.getBoolean("askTutorial", true)
         build()
+        // Each time the app is opened (not when the screen is merely recreated), offer the tutorial.
+        if (savedInstanceState == null && askTutorial) offerTutorial()
+    }
+
+    /** "Want a quick tutorial?", with a box to stop asking (it can be turned back on under CONTROLS). */
+    private fun offerTutorial() {
+        val box = CheckBox(this).apply {
+            text = "Don't ask again"
+            setTextColor(0xFFDDE3E8.toInt())
+            textSize = 14f
+        }
+        val wrap = FrameLayout(this).apply {
+            setPadding(dpi(20f), dpi(4f), dpi(20f), 0)
+            addView(box)
+        }
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Want a quick tutorial?")
+            .setMessage("A one-minute, hands-on tour of the controls on a real table. You can also find it any time " +
+                "under CONTROLS in this menu.")
+            .setView(wrap)
+            .setPositiveButton("Show me") { _, _ -> rememberAsk(box.isChecked); startTutorial() }
+            .setNegativeButton("Not now") { _, _ -> rememberAsk(box.isChecked) }
+            .setOnCancelListener { rememberAsk(box.isChecked) }
+            .show()
+    }
+
+    private var askSwitch: Switch? = null
+
+    private fun rememberAsk(dontAsk: Boolean) {
+        if (!dontAsk) return
+        askTutorial = false
+        prefs.edit().putBoolean("askTutorial", false).apply()
+        askSwitch?.isChecked = false
+    }
+
+    private fun startTutorial() {
+        startActivity(Intent(this, GameActivity::class.java).apply {
+            putExtra(GameActivity.EXTRA_TUTORIAL, true)
+            putExtra(GameActivity.EXTRA_SOUND, sound)
+        })
     }
 
     override fun onResume() {
@@ -298,8 +341,34 @@ class MenuActivity : Activity() {
         matchBlockRef = matchBlock
         refreshMode()
 
-        // Controls (apply to every game type)
+        // Controls: the tutorial, the screen guide, and the control settings (apply to every game type)
         card.addView(section("CONTROLS"))
+        card.addView(label("Learn what every button, slider and gesture on the game screen does.", 12.5f, 0xFF8A97A1.toInt())
+            .apply { setLineSpacing(0f, 1.15f); setPadding(0, 0, 0, dpi(8f)) })
+        val learnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val tutBtn = label("▶ Tutorial", 15f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER
+            background = rounded(0xFF2F8F5B.toInt(), dp(12f))
+            setOnClickListener { startTutorial() }
+        }
+        val guideBtn = label("Screen guide", 15f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER
+            background = rounded(0xFF39434C.toInt(), dp(12f))
+            setOnClickListener { startActivity(Intent(this@MenuActivity, ControlsActivity::class.java)) }
+        }
+        learnRow.addView(tutBtn, LinearLayout.LayoutParams(0, dpi(46f), 1f))
+        learnRow.addView(guideBtn, LinearLayout.LayoutParams(0, dpi(46f), 1f).apply { leftMargin = dpi(8f) })
+        card.addView(learnRow)
+        @Suppress("DEPRECATION")
+        val askSw = Switch(this).apply {
+            text = "Offer the tutorial when the app opens"
+            setTextColor(0xFFDDE3E8.toInt())
+            textSize = 14f
+            isChecked = askTutorial
+            setOnCheckedChangeListener { _, c -> askTutorial = c; prefs.edit().putBoolean("askTutorial", c).apply() }
+        }
+        askSwitch = askSw
+        card.addView(askSw, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(8f); bottomMargin = dpi(8f) })
         val sensLabel = label("", 15f, Color.WHITE, true)
         fun refreshSens() { sensLabel.text = "Fine-aim wheel speed: $aimSens" + if (aimSens == 5) " (default)" else if (aimSens < 5) " (finer)" else " (faster)" }
         refreshSens()

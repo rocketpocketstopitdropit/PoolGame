@@ -30,6 +30,24 @@ the tests, builds a debug APK and attaches it to the run. Open the repo's **Acti
 your phone and open it (allow "install unknown apps" for your browser or file manager when asked).
 You can also start a build manually from the Actions tab with **Run workflow**.
 
+## Learning the controls
+
+**Tutorial**: every time the app opens it asks *Want a quick tutorial?* (Show me / Not now, with a *Don't ask again*
+box; the menu's *Offer the tutorial when the app opens* switch turns the question back on). The tutorial is a
+one-minute, hands-on tour on a real table: each step dims the screen except one control, a moving finger shows the
+gesture, and a card says what to do. It moves on only once you've actually used that control: aim on the table,
+the fine-aim roller, spin, the jump slider (up, then back to level), then pull the power bar to pot a lined-up
+ball, the ball tray, dragging the cue ball with ball in hand, and the ☰ pause menu. *Skip tutorial* (top right)
+leaves at any time. It never touches your paused game or your record. Replay it from **CONTROLS → ▶ Tutorial**.
+
+**Screen guide** (menu → CONTROLS → *Screen guide*): a labelled map of the game screen, drawn from the game's own
+layout, with numbered badges on every control, and below it what each one does and how to operate it — plus how to
+read the lines on the table, two-finger use, the rock-paper-scissors screen and the end-of-game buttons. Tap a
+number on the map (or an entry in the list) to outline that control.
+
+The steps and the guide text live in shared engine code (`core/Tutorial.kt`, `core/ControlsGuide.kt`), so the
+Android app and the web version say exactly the same thing.
+
 ## How to play
 
 | Control | What it does |
@@ -172,7 +190,10 @@ app/src/main/java/com/poolgame/app/
           Trick.kt (trick-shot levels, match state, known shots)
           Cough.kt (synthesized cough, the foul sound until you record one)
           Voice.kt (cleans up your recorded foul voice)
-  ui/     MenuActivity  GameActivity  GameView (render + input + turn flow)
+          Tutorial.kt (tutorial steps, table setup, demo finger)
+          ControlsGuide.kt (screen-guide text and the screen map's layout)
+  ui/     MenuActivity  GameActivity  GameView (render + input + turn flow, tutorial overlay)
+          ControlsActivity (the screen guide and its map)
           BallRenderer (3D ball shading)        Sfx (synthesized sounds)
           VoiceRecorder (records your foul voice)
 app/src/test/  EngineTest.kt

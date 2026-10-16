@@ -24,6 +24,7 @@ class GameActivity : Activity(), GameView.Host {
         const val EXTRA_PRACTICE = "practice"
         const val EXTRA_RESUME = "resume"
         const val EXTRA_TRICK_LEVEL = "trickLevel"
+        const val EXTRA_TUTORIAL = "tutorial"
 
         const val PREFS = "pool"
         const val KEY_SAVED = "savedGame"
@@ -48,6 +49,8 @@ class GameActivity : Activity(), GameView.Host {
     private var level = 5
     private val stats by lazy { Stats(this) }
     private val prefs by lazy { getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
+    /** The hands-on tutorial: a practice table that never touches your saved game or record. */
+    private var tutorial = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,10 +62,13 @@ class GameActivity : Activity(), GameView.Host {
         var practice = intent.getBooleanExtra(EXTRA_PRACTICE, false)
         var clock = intent.getIntExtra(EXTRA_CLOCK, 0).coerceIn(0, 300)
         var call = CallMode.values()[prefs.getInt("callMode", 0).coerceIn(0, 2)]
+        tutorial = intent.getBooleanExtra(EXTRA_TUTORIAL, false)
 
         // Continue a saved game: its own settings win over the menu's current ones.
         var resume: String? = null
-        if (intent.getBooleanExtra(EXTRA_RESUME, false)) {
+        if (tutorial) {
+            mode = GameMode.EIGHT_BALL; vsCpu = false; practice = true; clock = 0; call = CallMode.OFF
+        } else if (intent.getBooleanExtra(EXTRA_RESUME, false)) {
             val text = prefs.getString(KEY_SAVED, null)
             val s = text?.let { GameSave.readSettings(it) }
             if (s != null) {
@@ -83,10 +89,11 @@ class GameActivity : Activity(), GameView.Host {
             practice,
             intent.getIntExtra(EXTRA_TRICK_LEVEL, 0),
             prefs.getInt("aimSens", 5),
-            prefs.getBoolean("prediction", true),
+            tutorial || prefs.getBoolean("prediction", true),   // the tutorial shows where the balls will go
             resume,
             call,
-            this
+            this,
+            tutorial
         )
         setContentView(game)
         hideSystemBars()
@@ -117,6 +124,7 @@ class GameActivity : Activity(), GameView.Host {
 
     /** Keep the game whenever we leave it (menu, home button, phone call...). */
     private fun saveGame() {
+        if (tutorial) return   // never replace a paused game with the tutorial
         val state = game.saveState()
         prefs.edit().apply { if (state != null) putString(KEY_SAVED, state) else remove(KEY_SAVED) }.apply()
     }
@@ -129,6 +137,7 @@ class GameActivity : Activity(), GameView.Host {
     override fun onBackPressed() = onMenuRequested()
 
     override fun onGameFinished(winner: Int): String {
+        if (tutorial) return ""
         prefs.edit().remove(KEY_SAVED).apply()
         if (game.isPractice()) return ""
         val lvl = if (vsCpu) level else 0
@@ -140,14 +149,17 @@ class GameActivity : Activity(), GameView.Host {
 
     override fun onMenuRequested() {
         game.menuOpen = true
+        game.onMenuOpened()
         val prediction = if (game.showPrediction) "Shot prediction: ON (tap to turn off)" else "Shot prediction: OFF (tap to turn on)"
+        val restart = when { tutorial -> "Restart tutorial"; mode == GameMode.TRICK -> "Restart match"; else -> "Restart rack" }
+        val leave = if (tutorial) "Leave tutorial" else "Main menu (your game is saved)"
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Paused")
-            .setItems(arrayOf("Resume", prediction, if (mode == GameMode.TRICK) "Restart match" else "Restart rack", "Main menu (your game is saved)")) { _, which ->
+            .setTitle(if (tutorial) "Paused (tutorial)" else "Paused")
+            .setItems(arrayOf("Resume", prediction, restart, leave)) { _, which ->
                 when (which) {
                     1 -> {
                         game.showPrediction = !game.showPrediction
-                        prefs.edit().putBoolean("prediction", game.showPrediction).apply()
+                        if (!tutorial) prefs.edit().putBoolean("prediction", game.showPrediction).apply()
                     }
                     2 -> game.restart()
                     3 -> { saveGame(); finish() }

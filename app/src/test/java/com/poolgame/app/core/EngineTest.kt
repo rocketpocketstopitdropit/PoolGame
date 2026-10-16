@@ -453,4 +453,62 @@ class EngineTest {
         }
         assertTrue("level-10 CPU made only $made of 6", made >= 3)
     }
+
+    // ------------------------------------------------------------------ tutorial and controls guide
+
+    @Test fun tutorialShotGoesInWithoutScratching() {
+        for (pw in listOf(0.3, 0.5, 0.75, 1.0)) {
+            val m = Match(GameMode.EIGHT_BALL, arrayOf("a", "b"))
+            m.rack(Random(1), 0)
+            Tutorial.setup(m)
+            val speed = 0.25 + (P.MAX_CUE_SPEED - 0.25) * Math.pow(pw, 1.6)
+            m.shoot(Tutorial.lineUp(m.world), speed, 0.0, 0.0, 0.0)
+            m.world.simulate()
+            assertFalse("1 goes in at power $pw", m.world.balls[Tutorial.TARGET_BALL].onTable)
+            assertTrue("no scratch at power $pw", m.world.balls[0].onTable)
+        }
+    }
+
+    @Test fun tutorialStepsNeedTheRightControl() {
+        val t = Tutorial()
+        fun settle() { repeat(60) { t.update(0.02) } }
+        assertEquals(Tutorial.Step.WELCOME, t.step)
+        t.next(); assertEquals(Tutorial.Step.AIM, t.step)
+        assertFalse(t.allows(TutTarget.POWER))
+        t.onWheel(500.0); settle(); assertEquals("the wheel doesn't count for aiming", Tutorial.Step.AIM, t.step)
+        t.onAim(0.3); t.onAim(-0.3); settle(); assertEquals(Tutorial.Step.FINE_AIM, t.step)
+        t.onWheel(50.0); t.onWheel(-50.0); settle(); assertEquals(Tutorial.Step.SPIN, t.step)
+        t.onSpin(0.0, 0.8); t.onRelease(TutTarget.SPIN, 0.8, 0.0); settle(); assertEquals(Tutorial.Step.JUMP, t.step)
+        t.onElevation(40.0); t.onRelease(TutTarget.JUMP, 0.0, 40.0); settle()
+        assertEquals("still raised", Tutorial.Step.JUMP, t.step)
+        t.onRelease(TutTarget.JUMP, 0.0, 0.0); settle(); assertEquals(Tutorial.Step.POWER, t.step)
+        t.onShot(); assertTrue(t.rolling); assertFalse(t.allows(TutTarget.POWER))
+        t.onShotDone(true); assertEquals(Tutorial.Step.TRAY, t.step); assertTrue(t.potted)
+        t.next(); assertEquals(Tutorial.Step.BALL_IN_HAND, t.step)
+        t.onCueMoved(0.2); t.onRelease(TutTarget.CUE, 0.0, 0.0); settle(); assertEquals(Tutorial.Step.MENU, t.step)
+        t.onMenuOpened(); settle(); assertEquals(Tutorial.Step.DONE, t.step)
+        assertFalse(t.finished)
+        t.next(); assertTrue(t.finished)
+    }
+
+    @Test fun tutorialBallInHandSpotIsClear() {
+        val m = Match(GameMode.EIGHT_BALL, arrayOf("a", "b"))
+        m.rack(Random(1), 0)
+        Tutorial.setup(m)
+        Tutorial.placeForBallInHand(m)
+        val c = m.world.balls[0]
+        assertTrue(m.ballInHand)
+        assertTrue(c.onTable)
+        assertTrue("lower half, clear of the card", c.y > P.W * 0.5)
+    }
+
+    @Test fun controlsGuideMarksEveryControlOnTheMap() {
+        val l = ControlsGuide.layout(ControlsGuide.MAP_W, ControlsGuide.MAP_H)
+        val badges = ControlsGuide.badges(l)
+        assertEquals(ControlsGuide.ITEMS.size, badges.size)
+        for ((i, b) in badges.withIndex()) {
+            assertTrue("badge ${i + 1} on the map", b.first in 0.0..ControlsGuide.MAP_W && b.second in 0.0..ControlsGuide.MAP_H)
+            assertTrue(ControlsGuide.areas(l, i).isNotEmpty())
+        }
+    }
 }

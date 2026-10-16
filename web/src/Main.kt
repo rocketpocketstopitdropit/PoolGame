@@ -34,6 +34,8 @@ class App : GameHost {
     private var prediction = Store.getBool("prediction", true)
     private var practiceTrick = Store.getBool("practiceTrick", false)
     private var practiceLevel = Store.getInt("practiceLevel", 0).coerceIn(0, com.poolgame.app.core.Trick.LEVELS.size - 1)
+    private var askTutorial = Store.getBool("askTutorial", true)
+    private val guide = Guide()
 
     // What the current game is (may differ from the menu when resuming a saved game)
     private var playingCpu = true
@@ -62,6 +64,9 @@ class App : GameHost {
         document.addEventListener("touchmove", { e: dynamic -> if (game != null) e.preventDefault() }, opts)
         document.addEventListener("gesturestart", { e: dynamic -> e.preventDefault() }, opts)
         canvas.addEventListener("contextmenu", { e: dynamic -> e.preventDefault() }, opts)
+
+        // Each time the app is opened, offer the tutorial (unless they've said not to ask).
+        if (askTutorial) el("tutAsk").style.display = "flex"
 
         try {
             if (navigator.serviceWorker != null && window.location.protocol == "https:") navigator.serviceWorker.register("sw.js")
@@ -148,6 +153,20 @@ class App : GameHost {
         el("aimSens").addEventListener("input", { aimSens = (el("aimSens").value as String).toInt(); save(); refreshMenu() })
         el("prediction").addEventListener("change", { prediction = el("prediction").checked as Boolean; save() })
         el("play").addEventListener("click", { sounds.unlock(); startGame(false) })
+        // Learning the controls: the tutorial, the screen guide, and the opening prompt.
+        el("tutBtn").addEventListener("click", { sounds.unlock(); startTutorial() })
+        el("guideBtn").addEventListener("click", { guide.show() })
+        el("guideBack").addEventListener("click", { guide.hide() })
+        el("guideTut").addEventListener("click", { guide.hide(); sounds.unlock(); startTutorial() })
+        el("askTut").addEventListener("change", { askTutorial = el("askTut").checked as Boolean; Store.set("askTutorial", askTutorial.toString()) })
+        fun closeAsk() {
+            el("tutAsk").style.display = "none"
+            if (el("tutNever").checked == true) {
+                askTutorial = false; Store.set("askTutorial", "false"); el("askTut").checked = false
+            }
+        }
+        el("tutYes").addEventListener("click", { closeAsk(); sounds.unlock(); startTutorial() })
+        el("tutNo").addEventListener("click", { closeAsk() })
         el("resumeBtn").addEventListener("click", { sounds.unlock(); startGame(true) })
         el("resume").addEventListener("click", { hidePause() })
         el("restart").addEventListener("click", { hidePause(); game?.restart() })
@@ -155,7 +174,7 @@ class App : GameHost {
             val g = game
             if (g != null) {
                 g.showPrediction = !g.showPrediction
-                prediction = g.showPrediction; save()
+                if (!g.isTutorial()) { prediction = g.showPrediction; save() }
                 el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
             }
         })
@@ -258,6 +277,7 @@ class App : GameHost {
         el("sensLabel").textContent = "Fine-aim wheel speed: $aimSens" +
             if (aimSens == 5) " (default)" else if (aimSens < 5) " (finer)" else " (faster)"
         el("prediction").checked = prediction
+        el("askTut").checked = askTutorial
         if (mediaRec == null) refreshVoice(null)
         val saved = savedSummary()
         el("resumeBtn").style.display = if (saved != null) "block" else "none"
@@ -292,6 +312,7 @@ class App : GameHost {
 
     private fun saveGame() {
         val g = game ?: return
+        if (g.isTutorial()) return   // never replace a paused game with the tutorial
         Store.set("savedGame", g.saveState() ?: "")
     }
 
@@ -317,8 +338,25 @@ class App : GameHost {
         playingCpu = cpu; playingLevel = lvl; playingMode = mode; playingPractice = practice
         el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
         el("restart").textContent = if (mode == GameMode.TRICK) "Restart match" else "Restart rack"
+        el("quit").textContent = "Main menu (game is saved)"
         game = Game(mode, cpu, lvl, clock, practice, practiceLevel, aimSens, prediction, text, call, sounds, this)
+        showGame()
+    }
+
+    /** The hands-on tutorial: a practice table with a guide. Your saved game and record are left alone. */
+    private fun startTutorial() {
+        sounds.enabled = sound
+        playingCpu = false; playingLevel = level; playingMode = GameMode.EIGHT_BALL; playingPractice = true
+        el("predToggle").textContent = "Shot prediction: On"
+        el("restart").textContent = "Restart tutorial"
+        el("quit").textContent = "Leave tutorial"
+        game = Game(GameMode.EIGHT_BALL, false, level, 0, true, 0, aimSens, true, null, CallMode.OFF, sounds, this, tutorialMode = true)
+        showGame()
+    }
+
+    private fun showGame() {
         el("menu").style.display = "none"
+        guide.hide()
         canvas.style.display = "block"
         slots.clear()
         resize()
@@ -338,6 +376,7 @@ class App : GameHost {
 
     override fun onMenuRequested() {
         game?.menuOpen = true
+        game?.onMenuOpened()
         el("pause").style.display = "flex"
     }
 

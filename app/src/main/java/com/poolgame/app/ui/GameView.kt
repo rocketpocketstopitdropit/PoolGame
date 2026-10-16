@@ -30,6 +30,8 @@ import com.poolgame.app.core.Prediction
 import com.poolgame.app.core.Predictor
 import com.poolgame.app.core.Table
 import com.poolgame.app.core.Trick
+import com.poolgame.app.core.TutTarget
+import com.poolgame.app.core.Tutorial
 import com.poolgame.app.core.World
 import com.poolgame.app.core.WorldListener
 import kotlin.math.abs
@@ -57,7 +59,8 @@ class GameView(
     var showPrediction: Boolean,         // draw where the balls will go (otherwise just an aim line)
     resume: String?,                     // a saved game to continue, or null for a new game
     private val callMode: CallMode,      // called-pocket rule
-    private val host: Host
+    private val host: Host,
+    private val tutorialMode: Boolean = false   // the hands-on tutorial (a practice table with a guide)
 ) : View(context), Choreographer.FrameCallback {
 
     interface Host {
@@ -73,8 +76,24 @@ class GameView(
     private enum class Rps { PICK, SHAKE, REVEAL }
     private enum class Touch { NONE, AIM, POWER, SPIN, ELEV, WHEEL, MOVE_CUE, BUTTON, PENDING, MOVE_BALL }
 
-    /** Free-table practice: no rules, move any ball. */
+    /** Free-table practice: no rules, move any ball. (The tutorial runs on the practice table too.) */
     private val practice = practiceMode && mode != GameMode.TRICK
+
+    // The tutorial: one control at a time is highlighted, with a card saying what to do.
+    private var tut: Tutorial? = null
+    private var tutT = 0.0                       // seconds into the current step (for the demo finger)
+    private var tutLeaving = false
+    private var tutAimFrom = 0.0; private var tutAimTo = 0.0; private var tutAimK = 1.0
+    private val tutCard = RectF()
+    private val tutBtn = RectF()
+    private val tutSkip = RectF()
+    private val tutShape = RectF()
+    private val tutPath = Path()
+    private val tutFinger = DoubleArray(4)
+    private val tutCloth = RectF()
+    private var tutLines: List<String> = emptyList()   // the card's text, wrapped (kept until it changes)
+    private var tutLinesFor = ""
+    private var tutLinesW = 0f
     /** Practising one trick shot on your own: unlimited attempts, the table resets after each. */
     private val trickPractice = practiceMode && mode == GameMode.TRICK
     private var tpTries = 0
@@ -232,7 +251,7 @@ class GameView(
 
     init {
         isFocusable = true
-        balls.plain = practice
+        balls.plain = practice && !tutorialMode
         if (resume == null || !resumeGame(resume)) newGame(0)
     }
 
@@ -269,6 +288,12 @@ class GameView(
             match.message = "Practice · hold any ball to move it"
             practiceSnapshot = null
         }
+        if (tutorialMode) {
+            Tutorial.setup(match)
+            match.message = ""
+            tut = Tutorial()
+            tutT = 0.0
+        }
         if (trickPractice) {
             match.trick.level = trickLevel.coerceIn(0, Trick.LEVELS.size - 1)
             match.setupTrickLevel()
@@ -285,6 +310,7 @@ class GameView(
         message = match.message
         // Trick shots don't need rock, paper, scissors: who goes first doesn't matter.
         if (practice || trick) startTurn() else startRps(false)
+        if (tutorialMode) aimAngle = Tutorial.lineUp(match.world)
     }
 
     // ------------------------------------------------------------------ rock, paper, scissors
@@ -357,6 +383,7 @@ class GameView(
      * undone (the saved game is from the start of that turn).
      */
     fun saveState(): String? {
+        if (tutorialMode) return null
         if (match.winner >= 0 || phase == Phase.OVER || phase == Phase.RPS) return null
         return when (phase) {
             Phase.HUMAN, Phase.PAUSE -> GameSave.write(match, settings())
@@ -566,7 +593,8 @@ class GameView(
             potIds[j] = potIds[i]; potY[j] = potY[i]; potV[j] = potV[i]; j++
         }
         potN = j
-        if (phase != Phase.RUNNING) for (id in match.ballIds()) if (!w.balls[id].onTable) addToTray(id)
+        // (Not in the tutorial: its table simply has fewer balls; only the ones you pot go in the tray.)
+        if (phase != Phase.RUNNING && !tutorialMode) for (id in match.ballIds()) if (!w.balls[id].onTable) addToTray(id)
         val g = 2200f * dp
         for (i in 0 until potN) {
             val target = traySlotY(i)
@@ -582,6 +610,7 @@ class GameView(
     }
 
     private fun update(dt: Double) {
+        updateTutorial(dt)
         if (bannerT > 0) bannerT -= dt
         if (sinks.isNotEmpty()) {
             for (s in sinks) s.age += dt.toFloat()
@@ -615,6 +644,7 @@ class GameView(
             Phase.RUNNING -> {
                 match.world.advance(dt)
                 if (!match.world.anyMoving() && practice) {
+                    tut?.onShotDone(!match.world.balls[Tutorial.TARGET_BALL].onTable)
                     if (!match.world.balls[0].onTable) {
                         match.respawnCue()
                         message = "Cue ball respotted · hold it to move it"
@@ -668,6 +698,223 @@ class GameView(
                 }
             }
             else -> {}
+        }
+    }
+
+    // ------------------------------------------------------------------ tutorial
+
+    private fun updateTutorial(dt: Double) {
+        val t = tut ?: return
+        t.update(dt)
+        tutT += dt
+        if (t.takeEntered()) {
+            tutT = 0.0
+            when (t.step) {
+                Tutorial.Step.POWER -> {
+                    // Line up the shot on the 1 (the cue swings round to it), with no spin or jump.
+                    spinX = 0f; spinY = 0f; elevDeg = 0f; power = 0f
+                    tutAimFrom = aimAngle; tutAimTo = Tutorial.lineUp(match.world); tutAimK = 0.0
+                }
+                Tutorial.Step.BALL_IN_HAND -> Tutorial.placeForBallInHand(match)
+                Tutorial.Step.MENU -> match.ballInHand = false
+                else -> {}
+            }
+        }
+        if (tutAimK < 1.0) {
+            tutAimK = (tutAimK + dt / 0.6).coerceAtMost(1.0)
+            val e = tutAimK * tutAimK * (3 - 2 * tutAimK)
+            var d = tutAimTo - tutAimFrom
+            while (d > Math.PI) d -= 2 * Math.PI
+            while (d < -Math.PI) d += 2 * Math.PI
+            aimAngle = tutAimFrom + d * e
+        }
+        if (t.finished) leaveTutorial()
+    }
+
+    private fun leaveTutorial() {
+        if (tutLeaving) return
+        tutLeaving = true
+        clearTouches()
+        host.onExitToMenu()
+    }
+
+    fun isTutorial() = tutorialMode
+
+    /** The pause menu was opened (the tutorial's last step asks you to try it). */
+    fun onMenuOpened() { tut?.onMenuOpened() }
+
+    /** Which tutorial target a touch at (x, y) would use. */
+    private fun regionAt(x: Float, y: Float): TutTarget {
+        val c = match.world.balls[0]
+        return when {
+            powerRect.left - 20 * dp <= x && x <= powerRect.right + 20 * dp && y >= powerRect.top - 30 * dp && y <= powerRect.bottom + 20 * dp -> TutTarget.POWER
+            x >= elevRect.left - 14 * dp && x <= elevRect.right + 9 * dp && y >= elevRect.top - 14 * dp && y <= elevRect.bottom + 12 * dp -> TutTarget.JUMP
+            hypot(x - spinCx, y - spinCy) <= spinR * 1.2f -> TutTarget.SPIN
+            x >= wheelRect.left - 6 * dp && x <= wheelRect.right + 8 * dp && y >= wheelRect.top - 6 * dp && y <= wheelRect.bottom + 8 * dp -> TutTarget.WHEEL
+            match.ballInHand && hypot(x - sx(c.x), y - sy(c.y)) < max(rpx * 3f, 28 * dp) -> TutTarget.CUE
+            tableArea.contains(x, y) -> TutTarget.TABLE
+            else -> TutTarget.NONE
+        }
+    }
+
+    private fun targetOf(m: Touch) = when (m) {
+        Touch.POWER -> TutTarget.POWER
+        Touch.ELEV -> TutTarget.JUMP
+        Touch.SPIN -> TutTarget.SPIN
+        Touch.WHEEL -> TutTarget.WHEEL
+        Touch.MOVE_CUE -> TutTarget.CUE
+        Touch.AIM -> TutTarget.TABLE
+        else -> TutTarget.NONE
+    }
+
+    /** The highlighted control's outline: [tutShape] is its box, and [tutPath] its exact shape. Returns false for none. */
+    private fun tutorialShape(t: Tutorial): Boolean {
+        tutPath.reset()
+        val pad = 6 * dp
+        when (t.step.target) {
+            TutTarget.TABLE -> tutShape.set(sx(-0.04), sy(-0.04), sx(P.L + 0.04), sy(P.W + 0.04))
+            TutTarget.WHEEL -> tutShape.set(wheelRect.left - pad, wheelRect.top - 22 * dp, wheelRect.right + pad, wheelRect.bottom + pad)
+            TutTarget.SPIN -> {
+                val r = spinR + 5 * dp
+                tutShape.set(spinCx - r, spinCy - r, spinCx + r, spinCy + r)
+                tutPath.addCircle(spinCx, spinCy, r, Path.Direction.CW)
+                return true
+            }
+            TutTarget.JUMP -> tutShape.set(elevRect.left - 14 * dp, elevRect.top - 22 * dp, elevRect.right + 14 * dp, elevRect.bottom + 30 * dp)
+            TutTarget.POWER -> tutShape.set(powerRect.left - 10 * dp, powerRect.top - 24 * dp, powerRect.right + 10 * dp, powerRect.bottom + 18 * dp)
+            TutTarget.TRAY -> tutShape.set(trayRect.left - pad, trayRect.top - pad, trayRect.right + pad, trayRect.bottom + pad)
+            TutTarget.CUE -> {
+                val c = match.world.balls[0]
+                val r = max(rpx * 2.6f, 22 * dp)
+                tutShape.set(sx(c.x) - r, sy(c.y) - r, sx(c.x) + r, sy(c.y) + r)
+                tutPath.addCircle(sx(c.x), sy(c.y), r, Path.Direction.CW)
+                return true
+            }
+            TutTarget.MENU -> tutShape.set(menuBtn.left - pad, menuBtn.top - pad, menuBtn.right + pad, menuBtn.bottom + pad)
+            TutTarget.NONE -> return false
+        }
+        tutPath.addRoundRect(tutShape, 12 * dp, 12 * dp, Path.Direction.CW)
+        return true
+    }
+
+    /** Splits text into lines no wider than [maxW]. */
+    private fun wrapAll(s: String, maxW: Float): List<String> {
+        val out = ArrayList<String>()
+        var line = ""
+        for (word in s.split(" ")) {
+            val t = if (line.isEmpty()) word else "$line $word"
+            if (text.measureText(t) > maxW && line.isNotEmpty()) { out += line; line = word } else line = t
+        }
+        if (line.isNotEmpty()) out += line
+        return out
+    }
+
+    /** Dims everything but the highlighted control, then draws the demo finger, the card and Skip. */
+    private fun drawTutorial(canvas: Canvas) {
+        val t = tut ?: return
+        val w = width.toFloat(); val h = height.toFloat()
+        val pulse = (0.5 + 0.5 * sin(System.nanoTime() / 2.2e8)).toFloat()
+        val hasShape = tutorialShape(t)
+        paint.style = Paint.Style.FILL; paint.shader = null
+        if (!t.rolling) {
+            paint.color = if (hasShape) 0x8C000000.toInt() else 0xA6000000.toInt()
+            canvas.save()
+            if (hasShape) canvas.clipOutPath(tutPath)
+            canvas.drawRect(0f, 0f, w, h, paint)
+            canvas.restore()
+        }
+        if (hasShape && !t.rolling) {
+            guide.pathEffect = null
+            guide.strokeWidth = (2.5f + 1.5f * pulse) * dp
+            guide.color = Color.argb((170 + 85 * pulse).toInt(), 242, 201, 76)
+            canvas.drawPath(tutPath, guide)
+            // The demo finger, looping through the gesture this step wants.
+            if (t.flash <= 0.0) {
+                t.finger(tutT, tutShape.left.toDouble(), tutShape.top.toDouble(), tutShape.right.toDouble(), tutShape.bottom.toDouble(), tutFinger)
+                val fx = tutFinger[0].toFloat(); val fy = tutFinger[1].toFloat()
+                val a = tutFinger[2].toFloat(); val pr = tutFinger[3].toFloat()
+                val r = 15 * dp * (1.15f - 0.25f * pr)
+                paint.color = Color.argb((90 * a + 60 * a * pr).toInt(), 255, 255, 255)
+                canvas.drawCircle(fx, fy, r, paint)
+                guide.strokeWidth = 2 * dp
+                guide.color = Color.argb((230 * a).toInt(), 255, 255, 255)
+                canvas.drawCircle(fx, fy, r, guide)
+                if (pr > 0.05f) {
+                    paint.color = Color.argb((200 * a * pr).toInt(), 242, 201, 76)
+                    canvas.drawCircle(fx, fy, 5 * dp, paint)
+                }
+            }
+        }
+
+        // The card: over the top of the table, or in the middle for the first and last cards.
+        val cloth = tutCloth.apply { set(sx(0.0), sy(0.0), sx(P.L), sy(P.W)) }
+        val cw = min(cloth.width() * 0.8f, 470 * dp)
+        val pad = 16 * dp
+        text.typeface = regular; text.textSize = 13.5f * dp
+        val body = t.body
+        if (body != tutLinesFor || cw != tutLinesW) { tutLines = wrapAll(body, cw - 2 * pad); tutLinesFor = body; tutLinesW = cw }
+        val lines = tutLines
+        val lineH = 18.5f * dp
+        val btnH = if (t.step.button != null) 40 * dp else 0f
+        val ch = pad + 14 * dp + 24 * dp + lines.size * lineH + (if (btnH > 0) 10 * dp + btnH else 0f) + pad * 0.8f
+        val centred = t.step.target == TutTarget.NONE
+        val top = if (centred) (hudH + h) / 2 - ch / 2 else cloth.top + 6 * dp
+        tutCard.set(cloth.centerX() - cw / 2, top, cloth.centerX() + cw / 2, top + ch)
+        paint.color = 0xF2161C21.toInt()
+        canvas.drawRoundRect(tutCard, 16 * dp, 16 * dp, paint)
+        guide.strokeWidth = 1.5f * dp; guide.color = 0xFFF2C94C.toInt()
+        canvas.drawRoundRect(tutCard, 16 * dp, 16 * dp, guide)
+        text.textAlign = Paint.Align.LEFT
+        var y = tutCard.top + pad + 8 * dp
+        text.typeface = bold; text.textSize = 11 * dp; text.color = 0xFFF2C94C.toInt()
+        val head = if (t.step == Tutorial.Step.WELCOME || t.step == Tutorial.Step.DONE) "TUTORIAL" else "STEP ${t.number} OF ${t.total}"
+        canvas.drawText(head, tutCard.left + pad, y, text)
+        y += 24 * dp
+        text.textSize = 18 * dp; text.color = Color.WHITE
+        canvas.drawText(t.title, tutCard.left + pad, y, text)
+        if (t.flash > 0.0) {
+            text.textAlign = Paint.Align.RIGHT; text.color = 0xFF3CCB7F.toInt()
+            canvas.drawText("✓ Got it!", tutCard.right - pad, y, text)
+            text.textAlign = Paint.Align.LEFT
+        }
+        text.typeface = regular; text.textSize = 13.5f * dp; text.color = 0xFFDDE3E8.toInt()
+        for (l in lines) { y += lineH; canvas.drawText(l, tutCard.left + pad, y, text) }
+        val label = t.step.button
+        if (label != null) {
+            val bw = max(110 * dp, text.measureText(label) + 40 * dp)
+            tutBtn.set(tutCard.right - pad - bw, tutCard.bottom - pad * 0.8f - btnH, tutCard.right - pad, tutCard.bottom - pad * 0.8f)
+            paint.color = 0xFFF2C94C.toInt()
+            canvas.drawRoundRect(tutBtn, 12 * dp, 12 * dp, paint)
+            text.typeface = bold; text.textSize = 16 * dp; text.color = 0xFF1A1A1A.toInt(); text.textAlign = Paint.Align.CENTER
+            canvas.drawText(label, tutBtn.centerX(), tutBtn.centerY() + 5.5f * dp, text)
+        } else tutBtn.setEmpty()
+
+        // Skip: always there, top right.
+        if (t.step != Tutorial.Step.DONE) {
+            tutSkip.set(rightCard.right - 120 * dp, rightCard.top, rightCard.right, rightCard.bottom)
+            paint.color = 0xFF39434C.toInt()
+            canvas.drawRoundRect(tutSkip, 10 * dp, 10 * dp, paint)
+            text.typeface = bold; text.textSize = min(15 * dp, tutSkip.height() * 0.4f); text.color = Color.WHITE
+            text.textAlign = Paint.Align.CENTER
+            canvas.drawText("Skip tutorial", tutSkip.centerX(), tutSkip.centerY() + text.textSize * 0.35f, text)
+        } else tutSkip.setEmpty()
+    }
+
+    /** Tutorial HUD: what this is and how far along you are (Skip is drawn on top by [drawTutorial]). */
+    private fun drawTutorialHud(canvas: Canvas) {
+        val t = tut ?: return
+        paint.style = Paint.Style.FILL; paint.shader = null
+        paint.color = 0xFF1E252B.toInt()
+        canvas.drawRoundRect(leftCard, 10 * dp, 10 * dp, paint)
+        text.textAlign = Paint.Align.LEFT; text.typeface = bold
+        text.textSize = min(16 * dp, leftCard.height() * 0.32f); text.color = Color.WHITE
+        canvas.drawText("TUTORIAL", leftCard.left + 12 * dp, leftCard.top + leftCard.height() * 0.42f, text)
+        // Progress dots, one per step.
+        val n = t.total
+        val r = min(4 * dp, leftCard.height() * 0.08f)
+        for (i in 1..n) {
+            paint.color = if (i < t.number || t.step == Tutorial.Step.DONE) 0xFF3CCB7F.toInt() else if (i == t.number) 0xFFF2C94C.toInt() else 0xFF39434C.toInt()
+            canvas.drawCircle(leftCard.left + 12 * dp + r + (i - 1) * r * 3.2f, leftCard.top + leftCard.height() * 0.72f, r, paint)
         }
     }
 
@@ -1013,6 +1260,7 @@ class GameView(
         drawWheel(canvas)
         if (phase == Phase.RPS) drawRps(canvas)
         if (phase == Phase.OVER) drawGameOver(canvas)
+        drawTutorial(canvas)
     }
 
     /** Trick shots: the level's name and goal over the table as it starts, fading out. */
@@ -1221,6 +1469,7 @@ class GameView(
         val mx = menuBtn.centerX(); val my = menuBtn.centerY()
         for (i in -1..1) canvas.drawRoundRect(mx - 9 * dp, my + i * 6 * dp - 1.2f * dp, mx + 9 * dp, my + i * 6 * dp + 1.2f * dp, dp, dp, paint)
 
+        if (tutorialMode) { drawTutorialHud(canvas); return }
         if (practice) { drawPracticeHud(canvas); return }
         if (trickPractice) { drawTrickPracticeHud(canvas); return }
         drawPlayerCard(canvas, leftCard, 0)
@@ -1733,6 +1982,16 @@ class GameView(
             }
             return
         }
+        val tu = tut
+        if (tu != null) {
+            ptrMode[id] = Touch.BUTTON
+            if (first && tutSkip.contains(x, y)) { leaveTutorial(); return }
+            if (first && tutBtn.contains(x, y)) { tu.next(); return }
+            if (tutCard.contains(x, y)) return
+            // Only the highlighted control works.
+            if (phase != Phase.HUMAN || !tu.allows(regionAt(x, y))) return
+            ptrMode[id] = Touch.NONE
+        }
         if (trickPractice && first) {
             when {
                 retryBtn.contains(x, y) -> { trickPracticeGo(-1); ptrMode[id] = Touch.BUTTON; return }
@@ -1740,7 +1999,7 @@ class GameView(
                 clearBtn.contains(x, y) -> { trickPracticeGo(1); ptrMode[id] = Touch.BUTTON; return }
             }
         }
-        if (practice && first) {
+        if (practice && !tutorialMode && first) {
             when {
                 retryBtn.contains(x, y) -> { practiceRetry(); ptrMode[id] = Touch.BUTTON; return }
                 rackBtn.contains(x, y) -> { newGame(0); ptrMode[id] = Touch.BUTTON; return }
@@ -1757,7 +2016,7 @@ class GameView(
         if (phase != Phase.HUMAN) return
         val c = match.world.balls[0]
         val spinDist = hypot(x - spinCx, y - spinCy)
-        val grabbed = if (practice && tableArea.contains(x, y)) ballUnder(x, y) else -1
+        val grabbed = if (practice && !tutorialMode && tableArea.contains(x, y)) ballUnder(x, y) else -1
         ptrMode[id] = when {
             powerRect.left - 20 * dp <= x && x <= powerRect.right + 20 * dp && y >= powerRect.top - 30 * dp && y <= powerRect.bottom + 20 * dp -> {
                 if (anyTouch(Touch.POWER)) Touch.NONE else { ptrStartY[id] = y; power = 0f; Touch.POWER }
@@ -1833,6 +2092,7 @@ class GameView(
                 ptrVel[id] = ptrVel[id] * 0.5f + (abs(d) / dp / secs) * 0.5f
                 wheelOffset += d
                 aimAngle += d / dp * wheelRadPerDp * wheelGain(ptrVel[id])
+                tut?.onWheel((d / dp).toDouble())
             }
             Touch.MOVE_CUE -> {
                 dragX = x; dragY = y
@@ -1843,7 +2103,10 @@ class GameView(
                     dragInvalid = !match.placeCue(q[0], q[1])
                 } else {
                     val maxX = if (match.kitchenOnly) P.HEAD_X else P.L - P.R
+                    val c0 = match.world.balls[0]
+                    val bx = c0.x; val by = c0.y
                     dragInvalid = !match.placeCue(px.coerceIn(P.R, maxX), py.coerceIn(P.R, P.W - P.R))
+                    tut?.onCueMoved(hypot(c0.x - bx, c0.y - by))
                 }
             }
             Touch.AIM -> aimAt(x, y)
@@ -1861,12 +2124,14 @@ class GameView(
         val mode = ptrMode[id]
         ptrMode[id] = Touch.NONE
         if (phase != Phase.HUMAN) return
+        tut?.onRelease(targetOf(mode), hypot(spinX, spinY).toDouble(), elevDeg.toDouble())
         if (mode == Touch.POWER) {
             if (power > 0.02f && match.callRequired() && match.calledPocket < 0) {
                 power = 0f
                 callFlashUntil = System.nanoTime() + 1_500_000_000L
             } else if (power > 0.02f) {
                 lastPower = power
+                tut?.onShot()
                 shoot(aimAngle, speedFor(power), (spinX * P.MAX_TIP).toDouble(), (-spinY * P.MAX_TIP).toDouble(),
                     Math.toRadians(elevDeg.toDouble()))
             } else power = 0f
@@ -1879,7 +2144,14 @@ class GameView(
     private fun aimAt(x: Float, y: Float) {
         val c = match.world.balls[0]
         val dx = x - sx(c.x); val dy = y - sy(c.y)
-        if (hypot(dx, dy) > rpx * 0.8f) aimAngle = atan2(dy.toDouble(), dx.toDouble())
+        if (hypot(dx, dy) > rpx * 0.8f) {
+            val a = atan2(dy.toDouble(), dx.toDouble())
+            var d = a - aimAngle
+            while (d > Math.PI) d -= 2 * Math.PI
+            while (d < -Math.PI) d += 2 * Math.PI
+            tut?.onAim(d)
+            aimAngle = a
+        }
     }
 
     private fun setSpin(x: Float, y: Float) {
@@ -1887,6 +2159,7 @@ class GameView(
         val m = hypot(u, v)
         if (m > 1f) { u /= m; v /= m }
         spinX = u; spinY = v
+        tut?.onSpin(u.toDouble(), v.toDouble())
     }
 
     private fun setCueAngle(y: Float) {
@@ -1894,6 +2167,7 @@ class GameView(
         var d = f * P.MAX_ELEVATION.toFloat()
         if (d < 3f) d = 0f
         elevDeg = d
+        tut?.onElevation(d.toDouble())
     }
 
     private companion object {

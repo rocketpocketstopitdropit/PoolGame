@@ -34,6 +34,7 @@ external interface Ctx2D {
     fun arcTo(x1: Double, y1: Double, x2: Double, y2: Double, r: Double)
     fun rect(x: Double, y: Double, w: Double, h: Double)
     fun fill()
+    fun fill(rule: String)
     fun stroke()
     fun clip()
     fun fillRect(x: Double, y: Double, w: Double, h: Double)
@@ -107,6 +108,17 @@ fun Ctx2D.roundRect(x: Double, y: Double, w: Double, h: Double, r: Double) {
 }
 
 fun Ctx2D.roundRect(r: Rect, rad: Double) = roundRect(r.l, r.t, r.w, r.h, rad)
+
+/** Adds a rounded rectangle to the current path (without starting a new one). */
+fun Ctx2D.addRoundRect(x: Double, y: Double, w: Double, h: Double, r: Double) {
+    val rr = minOf(r, w / 2, h / 2)
+    moveTo(x + rr, y)
+    arcTo(x + w, y, x + w, y + h, rr)
+    arcTo(x + w, y + h, x, y + h, rr)
+    arcTo(x, y + h, x, y, rr)
+    arcTo(x, y, x + w, y, rr)
+    closePath()
+}
 
 fun Ctx2D.circle(x: Double, y: Double, r: Double) {
     beginPath()
