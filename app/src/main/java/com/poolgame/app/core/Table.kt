@@ -25,7 +25,9 @@ object P {
     const val MU_BALL = 0.06         // ball-ball friction (gives cut-induced and spin-induced throw)
     const val MU_CUSHION = 0.14      // ball-cushion friction (gives running/reverse english)
     const val MAX_CUE_SPEED = 8.5    // m/s, a hard break
-    const val MAX_TIP = 0.5          // max tip offset as a fraction of R before a miscue
+    const val MAX_TIP = 0.5          // tip offset (fraction of R) where the tip's friction runs out: a miscue past it
+    const val MU_TIP = 0.5773502691896258      // tip-ball friction (tan 30°): exactly the limit at MAX_TIP
+    const val TIP_LIMIT = 0.85       // furthest the tip can be put from centre (the spin ball's edge)
     const val E_SLATE = 0.35         // bounce off the slate when the cue drives the ball down (jump shots)
     const val MAX_ELEVATION = 60.0   // degrees
     const val RAIL_CLEAR = 0.038     // a ball whose bottom is this high clears the cushions and leaves the table

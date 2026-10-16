@@ -255,6 +255,9 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         when {
             cueIn -> { foul = true; reason = "Scratch" }
             cueOff -> { foul = true; reason = "Cue ball jumped off the table" }
+            // WPA: digging under the cue ball to lift it is not a legal jump (an elevated cue that
+            // bounces it off the slate is).
+            log.scooped -> { foul = true; reason = "Scoop shot — the cue ball was dug under and lifted" }
             log.firstHit < 0 -> { foul = true; reason = "No ball hit" }
             !(mode == GameMode.EIGHT_BALL && isBreak) && log.firstHit !in preTargets -> {
                 foul = true

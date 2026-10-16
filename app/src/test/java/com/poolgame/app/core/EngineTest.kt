@@ -66,6 +66,62 @@ class EngineTest {
         assertEquals(5, v.log.firstHit)
     }
 
+    @Test fun tipInsideTheLimitPushesAlongTheCue() {
+        // A level cue: no lift for any tip spot inside the friction limit, and the ball goes where the cue points.
+        for (v in doubleArrayOf(-0.5, -0.3, 0.0, 0.3, 0.5)) {
+            val w = World(); w.clearAll(); w.put(0, 1.0, 0.6)
+            w.strike(0.3, 3.0, 0.0, v)
+            val c = w.balls[0]
+            assertEquals(0.0, c.vz, 1e-9); assertFalse(w.log.scooped); assertFalse(w.log.miscue)
+            assertEquals(0.3, atan2(c.vy, c.vx), 1e-9)
+            assertEquals(3.0, hypot(c.vx, c.vy), 1e-9)
+        }
+    }
+
+    @Test fun diggingUnderTheBallScoopsItAndFouls() {
+        val m = Match(GameMode.NINE_BALL, arrayOf("You", "CPU")); m.rack(Random(1), 0)
+        m.isBreak = false; m.ballInHand = false
+        val c = m.world.balls[0]; c.x = 0.5; c.y = 0.3
+        // Level cue, tip right at the bottom of the ball: it slips under and lifts the ball.
+        m.shoot(0.0, 4.0, 0.0, -0.8, 0.0)
+        assertTrue(m.world.log.scooped); assertTrue(m.world.log.miscue)
+        assertTrue(c.vz > 0.5)
+        m.world.simulate()
+        val out = m.resolve()
+        assertTrue(out.foul); assertTrue(out.foulReason.startsWith("Scoop"))
+        assertTrue(m.ballInHand); assertEquals(1, m.current)
+    }
+
+    @Test fun elevatedCueJumpIsLegal() {
+        val w = World(); w.clearAll(); w.put(0, 1.0, 0.635)
+        w.strike(0.0, 5.0, 0.0, 0.0, Math.toRadians(45.0))
+        assertTrue(w.balls[0].vz > 0.5); assertFalse(w.log.scooped)
+        // ...even struck low on the ball (relative to the cue): the push is still down into the slate.
+        val v = World(); v.clearAll(); v.put(0, 1.0, 0.635)
+        v.strike(0.0, 5.0, 0.0, -0.45, Math.toRadians(45.0))
+        assertTrue(v.balls[0].vz > 0.3); assertFalse(v.log.scooped)
+    }
+
+    @Test fun spinOnAJumpTakesHoldWhenItLands() {
+        fun end(vert: Double): Double {
+            val w = World(); w.clearAll(); w.put(0, 0.3, 0.635)
+            w.strike(0.0, 3.0, 0.0, vert, Math.toRadians(35.0))
+            assertTrue(w.balls[0].vz > 0.3)
+            w.advance(0.8)
+            return w.balls[0].x
+        }
+        val draw = end(-0.45); val stun = end(0.0); val follow = end(0.45)
+        assertTrue("draw $draw < stun $stun", draw < stun - 0.1)
+        assertTrue("follow $follow > stun $stun", follow > stun + 0.1)
+    }
+
+    @Test fun englishOnAnElevatedCueCurves() {
+        // Side spin with the cue raised tilts the spin axis: the ball swerves toward the english side (masse).
+        val w = World(); w.clearAll(); w.put(0, 0.4, 0.635)
+        w.strike(0.0, 2.5, 0.45, 0.0, Math.toRadians(40.0)); w.simulate()
+        assertTrue("right english curves right (down the screen): y=${w.balls[0].y}", w.balls[0].y > 0.635 + 0.03)
+    }
+
     @Test fun cueBallJumpedOffTableIsFoul() {
         val m = Match(GameMode.NINE_BALL, arrayOf("You", "CPU")); m.rack(Random(1), 0)
         m.isBreak = false; m.ballInHand = false
@@ -478,10 +534,14 @@ class EngineTest {
         t.onWheel(500.0); settle(); assertEquals("the wheel doesn't count for aiming", Tutorial.Step.AIM, t.step)
         t.onAim(0.3); t.onAim(-0.3); settle(); assertEquals(Tutorial.Step.FINE_AIM, t.step)
         t.onWheel(50.0); t.onWheel(-50.0); settle(); assertEquals(Tutorial.Step.SPIN, t.step)
-        t.onSpin(0.0, 0.8); t.onRelease(TutTarget.SPIN, 0.8, 0.0); settle(); assertEquals(Tutorial.Step.JUMP, t.step)
-        t.onElevation(40.0); t.onRelease(TutTarget.JUMP, 0.0, 40.0); settle()
-        assertEquals("still raised", Tutorial.Step.JUMP, t.step)
-        t.onRelease(TutTarget.JUMP, 0.0, 0.0); settle(); assertEquals(Tutorial.Step.POWER, t.step)
+        t.onSpin(0.0, 0.8); t.onRelease(TutTarget.SPIN, 0.8, 0.0); settle(); assertEquals(Tutorial.Step.POV, t.step)
+        t.onElevation(40.0); settle()
+        assertEquals("raising the cue only counts in the 3D view", Tutorial.Step.POV, t.step)
+        t.onPov(true); t.onPov(false); settle()
+        assertEquals("has to raise the cue first", Tutorial.Step.POV, t.step)
+        t.onPov(true); t.onElevation(40.0); settle()
+        assertEquals("still in the 3D view", Tutorial.Step.POV, t.step)
+        t.onPov(false); settle(); assertEquals(Tutorial.Step.POWER, t.step)
         t.onShot(); assertTrue(t.rolling); assertFalse(t.allows(TutTarget.POWER))
         t.onShotDone(true); assertEquals(Tutorial.Step.TRAY, t.step); assertTrue(t.potted)
         t.next(); assertEquals(Tutorial.Step.BALL_IN_HAND, t.step)

@@ -50,6 +50,13 @@ class ShotLog {
     /** Where the cue ball first came down after a jump, or NaN. */
     var cueLandX = Double.NaN
     var cueLandY = Double.NaN
+    /** The tip was outside the friction limit and slipped off the ball (a miscue). Not a foul by itself. */
+    var miscue = false
+    /**
+     * The cue ball was struck below centre and lifted straight off the cloth by the cue ("scooped"
+     * or "dug under") instead of being driven down into the slate by an elevated cue. A foul.
+     */
+    var scooped = false
 
     fun reset() {
         firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0; jumpedOff.clear()
@@ -57,6 +64,7 @@ class ShotLog {
         pocketIn.fill(-1)
         touched.fill(0); cueLanded = false; cueAirTouched = 0; cutDeg = Double.NaN
         cueLandX = Double.NaN; cueLandY = Double.NaN
+        miscue = false; scooped = false
     }
 
     fun copyFrom(o: ShotLog) {
@@ -68,6 +76,7 @@ class ShotLog {
         o.pocketIn.copyInto(pocketIn)
         o.touched.copyInto(touched); cueLanded = o.cueLanded; cueAirTouched = o.cueAirTouched; cutDeg = o.cutDeg
         cueLandX = o.cueLandX; cueLandY = o.cueLandY
+        miscue = o.miscue; scooped = o.scooped
     }
 }
 
@@ -107,31 +116,88 @@ class World {
 
     /**
      * Strike the cue ball.
-     * @param side tip offset to the shooter's right as a fraction of R (right english > 0)
-     * @param vert tip offset above centre as a fraction of R (follow > 0, draw < 0)
-     * @param elevation cue elevation in radians. An elevated cue drives the ball into the slate,
-     *   which bounces it up: that is a jump shot.
+     *
+     * The cue is a straight stick coming in along [angle], tilted up by [elevation]. [side] and
+     * [vert] say where its tip meets the ball, as seen looking down the cue: offsets from the cue's
+     * own line through the centre, as fractions of R (right english > 0, above the line > 0).
+     *
+     * Within the tip's friction limit ([P.MAX_TIP] off centre) the push is along the cue. Further out
+     * the tip slips: only the push along the ball's surface normal, plus as much friction as the
+     * tip can hold, gets through (a miscue). The ball's spin is r x J for the contact point r.
+     *
+     * An elevated cue drives the ball down into the slate, which bounces it up: a legal jump. Slate
+     * friction during that bounce takes some speed off and turns it into roll. A tip that digs in
+     * under the ball instead pushes it up off the cloth directly: a scoop, logged as [ShotLog.scooped].
+     * Spin is kept in the air, so follow, draw and english all take effect when the ball lands.
      */
     fun strike(angle: Double, speed: Double, side: Double, vert: Double, elevation: Double = 0.0) {
         val c = balls[0]
-        var a = side; var b = vert
-        val m = hypot(a, b)
-        if (m > P.MAX_TIP) { a *= P.MAX_TIP / m; b *= P.MAX_TIP / m }
-        val dx = cos(angle); val dy = sin(angle)
-        val el = elevation.coerceIn(0.0, toRad(P.MAX_ELEVATION))
-        val down = speed * sin(el)
-        // Part of the horizontal speed is lost to slate friction during the bounce.
-        val h = speed * cos(el) * (1.0 - 0.3 * sin(el))
-        c.vx = h * dx; c.vy = h * dy
-        // Angular impulse r x J with r = R(a*right + b*up), up = -z, right = (-dy, dx)
-        val k = 5.0 * h / (2.0 * P.R)
-        c.wx = k * b * dy
-        c.wy = -k * b * dx
-        c.wz = -k * a
-        c.z = 0.0
-        c.vz = if (el > 0.03) P.E_SLATE * down else 0.0
-        c.moving = true
         log.reset()
+        var a = side; var b = vert
+        val m0 = hypot(a, b)
+        if (m0 > P.TIP_LIMIT) { a *= P.TIP_LIMIT / m0; b *= P.TIP_LIMIT / m0 }
+        val m = hypot(a, b)
+        val fx = cos(angle); val fy = sin(angle)
+        val el = elevation.coerceIn(0.0, toRad(P.MAX_ELEVATION))
+        val ce = cos(el); val se = sin(el)
+        // Engine frame: x, y on the table, z into the table (down). up = (0, 0, -1).
+        // Cue direction d (forward and down), the cue's own "up" u and "right" rr (both across it).
+        val dX = ce * fx; val dY = ce * fy; val dZ = se
+        val uX = se * fx; val uY = se * fy; val uZ = -ce
+        val rX = -fy; val rY = fx
+        // Contact point on the ball (unit sphere): the tip line's offset, then back onto the surface.
+        val cc = sqrt((1.0 - a * a - b * b).coerceAtLeast(0.0))
+        val pX = a * rX + b * uX - cc * dX
+        val pY = a * rY + b * uY - cc * dY
+        val pZ = b * uZ - cc * dZ
+        // Velocity the ball gets (impulse / mass). Normal part: speed * cc along -p. Tangential: the
+        // rest of the cue's motion, as far as the tip's friction allows (exactly the whole of it inside
+        // the friction limit, so a normal hit is pushed straight along the cue).
+        var jX = -cc * pX; var jY = -cc * pY; var jZ = -cc * pZ
+        if (m > 1e-9) {
+            val tX = dX + cc * pX; val tY = dY + cc * pY; val tZ = dZ + cc * pZ   // |t| = m
+            val k = minOf(P.MU_TIP * cc, m) / m
+            jX += k * tX; jY += k * tY; jZ += k * tZ
+        }
+        jX *= speed; jY *= speed; jZ *= speed
+        log.miscue = m > P.MAX_TIP + 1e-9
+        c.vx = jX; c.vy = jY
+        // Spin: w = (5 / 2R) p x J  (p in units of R)
+        val kw = 5.0 / (2.0 * P.R)
+        c.wx = kw * (pY * jZ - pZ * jY)
+        c.wy = kw * (pZ * jX - pX * jZ)
+        c.wz = kw * (pX * jY - pY * jX)
+        c.z = 0.0; c.vz = 0.0
+        if (jZ > 0.02) {
+            // Driven into the slate: it bounces back up, and the slate's grip trades speed for roll.
+            slateGrip(c, (1 + P.E_SLATE) * jZ)
+            c.vz = P.E_SLATE * jZ
+            if (c.vz < 0.05) c.vz = 0.0
+        } else if (jZ < -0.05) {
+            // Lifted straight up by the tip: a scoop.
+            c.vz = -jZ
+            log.scooped = true
+        }
+        c.moving = true
+    }
+
+    /**
+     * A short, hard contact with the slate carrying [impulse] (per unit mass, along the normal):
+     * friction at the contact point, as much as that impulse allows, cuts the slip between the ball's
+     * bottom and the cloth (the same friction as rolling on the cloth, just all at once).
+     */
+    private fun slateGrip(b: Ball, impulse: Double) {
+        val r = P.R
+        val ux = b.vx + r * b.wy
+        val uy = b.vy - r * b.wx
+        val us = hypot(ux, uy)
+        if (us < 1e-6) return
+        val jt = minOf(P.MU_SLIDE * impulse, us / 3.5)
+        val ex = ux / us; val ey = uy / us
+        b.vx -= jt * ex; b.vy -= jt * ey
+        val k = 2.5 * jt / r
+        b.wx += k * ey
+        b.wy -= k * ex
     }
 
     /** Advance one adaptive sub-step no longer than maxDt. Returns the time advanced. */
@@ -223,7 +289,9 @@ class World {
             val rest = dt * (1 - frac)
             if (up > 0.0) { b.z = up * rest; b.vz = up - P.G * rest } else { b.z = 0.0; b.vz = 0.0 }
             if (b.z < 0.0) b.z = 0.0
-            b.vx *= 0.96; b.vy *= 0.96
+            // Landing: the cloth grips the ball, so the spin it carried through the air takes hold
+            // (draw checks it up, follow drives it on, english starts to bite).
+            slateGrip(b, impact + up)
             listener?.onCushion(impact * 0.6)
         }
     }

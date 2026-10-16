@@ -33,6 +33,9 @@ class BallRenderer {
         // Practice set: plain red and yellow balls (plus the black), no numbers.
         const val PRACTICE_RED = 0xFFC62828.toInt()
         const val PRACTICE_YELLOW = 0xFFF2BE00.toInt()
+        // Light from upper left, above the table (world space; up is -z).
+        private val LL = sqrt(0.35f * 0.35f + 0.55f * 0.55f + 1f)
+        val LX = -0.35f / LL; val LY = -0.55f / LL; val LZ = -1f / LL
     }
 
     /** Practice style: solid colours, no stripes or numbers. */
@@ -48,6 +51,19 @@ class BallRenderer {
 
     var radius = 0f
         private set
+
+    /**
+     * Seen from a camera instead of from straight above (the 3D view): the screen's right, down and
+     * toward-the-viewer directions in world space (9 numbers), or null for the top-down view.
+     */
+    private var view: DoubleArray? = null
+    private val viewNow = DoubleArray(9)
+    private val viewDrawn = Array(16) { DoubleArray(9) { Double.NaN } }
+
+    fun setView(v: DoubleArray?) {
+        if (v == null) { view = null; return }
+        v.copyInto(viewNow); view = viewNow
+    }
     private var size = 0
     private lateinit var nx: FloatArray
     private lateinit var ny: FloatArray
@@ -117,8 +133,12 @@ class BallRenderer {
     fun sprite(b: Ball): Bitmap {
         val q = lastQ[b.id]
         val cached = bitmaps[b.id]
-        if (cached != null && q[0] == b.qw && q[1] == b.qx && q[2] == b.qy && q[3] == b.qz) return cached
+        val vw = view
+        val vd = viewDrawn[b.id]
+        val sameView = if (vw == null) vd[0].isNaN() else vd.contentEquals(vw)
+        if (cached != null && sameView && q[0] == b.qw && q[1] == b.qx && q[2] == b.qy && q[3] == b.qz) return cached
         q[0] = b.qw; q[1] = b.qx; q[2] = b.qy; q[3] = b.qz
+        if (vw == null) vd[0] = Double.NaN else vw.copyInto(vd)
         matrix(b)
         val base = colorOf(b.id)
         val br = (base shr 16) and 255; val bg = (base shr 8) and 255; val bb = base and 255
@@ -131,10 +151,29 @@ class BallRenderer {
         val m3 = m[3].toFloat(); val m4 = m[4].toFloat(); val m5 = m[5].toFloat()
         val m6 = m[6].toFloat(); val m7 = m[7].toFloat(); val m8 = m[8].toFloat()
         val n = size * size
+        // 3D view: the screen's axes in world space, and the light and highlight worked out per pixel.
+        val v0 = (vw?.get(0) ?: 1.0).toFloat(); val v1 = (vw?.get(1) ?: 0.0).toFloat(); val v2 = (vw?.get(2) ?: 0.0).toFloat()
+        val v3 = (vw?.get(3) ?: 0.0).toFloat(); val v4 = (vw?.get(4) ?: 1.0).toFloat(); val v5 = (vw?.get(5) ?: 0.0).toFloat()
+        val v6 = (vw?.get(6) ?: 0.0).toFloat(); val v7 = (vw?.get(7) ?: 0.0).toFloat(); val v8 = (vw?.get(8) ?: -1.0).toFloat()
+        var hx = LX + v6; var hy = LY + v7; var hz = LZ + v8
+        val hl = sqrt(hx * hx + hy * hy + hz * hz); hx /= hl; hy /= hl; hz /= hl
         for (k in 0 until n) {
             val a = alpha[k]
             if (a <= 0f) { px[k] = 0; continue }
-            val wx = nx[k]; val wy = ny[k]; val wz = nz[k]
+            var wx = nx[k]; var wy = ny[k]; var wz = nz[k]
+            var sh = shade[k]; var spc = spec[k]
+            if (vw != null) {
+                // nx, ny are the screen offsets; -nz is toward the viewer.
+                val u = wx; val vv = wy; val t = -wz
+                wx = u * v0 + vv * v3 + t * v6
+                wy = u * v1 + vv * v4 + t * v7
+                wz = u * v2 + vv * v5 + t * v8
+                val lam = max(0f, wx * LX + wy * LY + wz * LZ)
+                sh = (0.38f + 0.66f * lam) * (0.82f + 0.18f * t)
+                var hs = max(0f, wx * hx + wy * hy + wz * hz)
+                hs *= hs; hs *= hs; hs *= hs; hs *= hs; hs *= hs; hs *= hs   // ^64
+                spc = hs * 0.85f
+            }
             // world -> body (transpose)
             val bx = m0 * wx + m3 * wy + m6 * wz
             val by = m1 * wx + m4 * wy + m7 * wz
@@ -148,7 +187,7 @@ class BallRenderer {
                 val colored = if (stripe) kotlin.math.abs(bx) < 0.52f && !disc else !disc
                 if (colored) { r = br; g = bg; bl = bb } else { r = wr; g = wg; bl = wb }
             }
-            val s = shade[k]; val sp = spec[k] * 255f
+            val s = sh; val sp = spc * 255f
             r = min(255f, r * s + sp).toInt(); g = min(255f, g * s + sp).toInt(); bl = min(255f, bl * s + sp).toInt()
             val ai = (a * 255f).toInt()
             // premultiplied-free ARGB; Bitmap.setPixels expects non-premultiplied
@@ -171,14 +210,24 @@ class BallRenderer {
             canvas.drawBitmap(bmp, -half, -half, paint)
             canvas.restore()
         }
-        if (b.id == 0 || plain || scale < 0.6f) return
-        // Number on whichever disc faces the viewer (up is -z in world space).
+        if (b.id == 0 || plain || scale * radius < 6f) return
+        // Number on whichever disc faces the viewer.
         matrix(b)
-        val s = if (m[8] < 0) 1.0 else -1.0
-        val facing = (-s * m[8]).toFloat()
+        val vw = view
+        // The disc axis (body z) in world space, then on screen.
+        val ax = m[2]; val ay = m[5]; val az = m[8]
+        val toward: Double; val sxo: Double; val syo: Double
+        if (vw == null) { toward = -az; sxo = ax; syo = ay }
+        else {
+            toward = ax * vw[6] + ay * vw[7] + az * vw[8]
+            sxo = ax * vw[0] + ay * vw[1] + az * vw[2]
+            syo = ax * vw[3] + ay * vw[4] + az * vw[5]
+        }
+        val s = if (toward > 0) 1.0 else -1.0
+        val facing = (s * toward).toFloat()
         if (facing < 0.4f) return
-        val ox = (s * m[2]).toFloat() * radius * scale
-        val oy = (s * m[5]).toFloat() * radius * scale
+        val ox = (s * sxo).toFloat() * radius * scale
+        val oy = (s * syo).toFloat() * radius * scale
         numPaint.alpha = (255 * ((facing - 0.4f) / 0.3f).coerceIn(0f, 1f)).toInt()
         canvas.save()
         canvas.translate(sx + ox, sy + oy)

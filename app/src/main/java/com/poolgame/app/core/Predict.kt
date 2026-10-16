@@ -17,8 +17,15 @@ class Prediction {
     /** Where the cue ball first comes down after a jump (before it hits anything), or NaN. */
     var landX = Double.NaN
     var landY = Double.NaN
+    /** The tip would slip off the ball (miscue). */
+    var miscue = false
+    /** The tip would dig under the ball and lift it: an illegal scoop jump (a foul). */
+    var scoop = false
 
-    fun reset() { cueN = 0; contactIndex = -1; hitId = -1; objN = 0; scratch = false; landX = Double.NaN; landY = Double.NaN }
+    fun reset() {
+        cueN = 0; contactIndex = -1; hitId = -1; objN = 0; scratch = false; landX = Double.NaN; landY = Double.NaN
+        miscue = false; scoop = false
+    }
 
     internal fun addCue(x: Double, y: Double, air: Boolean) {
         if (cueN >= MAX) return
@@ -56,6 +63,8 @@ object Predictor {
         val c = scratch.balls[0]
         if (!c.onTable) return
         scratch.strike(angle, speed, side, vert, elevation)
+        out.miscue = scratch.log.miscue
+        out.scoop = scratch.log.scooped
         out.addCue(c.x, c.y, false)
         var lx = c.x; var ly = c.y
         var travel = 0.0

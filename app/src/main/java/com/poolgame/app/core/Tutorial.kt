@@ -8,7 +8,7 @@ import kotlin.math.hypot
 import kotlin.math.sin
 
 /** Which control on the game screen a tutorial step points at. */
-enum class TutTarget { NONE, TABLE, WHEEL, SPIN, JUMP, POWER, TRAY, CUE, MENU }
+enum class TutTarget { NONE, TABLE, WHEEL, SPIN, POWER, TRAY, CUE, MENU }
 
 /**
  * The hands-on tutorial: a short tour of the game screen's controls, played on a real table.
@@ -26,7 +26,7 @@ class Tutorial {
         AIM(TutTarget.TABLE, "AIM", null),
         FINE_AIM(TutTarget.WHEEL, "FINE AIM", null),
         SPIN(TutTarget.SPIN, "SPIN", null),
-        JUMP(TutTarget.JUMP, "JUMP", null),
+        POV(TutTarget.TABLE, "3D VIEW & JUMP SHOTS", null),
         POWER(TutTarget.POWER, "POWER & SHOOT", null),
         TRAY(TutTarget.TRAY, "BALL TRAY", "Next"),
         BALL_IN_HAND(TutTarget.CUE, "BALL IN HAND", null),
@@ -48,6 +48,9 @@ class Tutorial {
     private var wheelMoved = 0.0     // dp the fine-aim wheel has been dragged
     private var spinSet = false
     var jumpRaised = false
+        private set
+    /** The 3D view (down the cue) is showing. The screen reports it through [onPov]. */
+    var inPov = false
         private set
     /** The tutorial shot has been played and the balls are still rolling. */
     var rolling = false
@@ -74,8 +77,14 @@ class Tutorial {
             "fine; a quick flick swings it further."
         Step.SPIN -> "Touch the white ball where you want the cue tip to strike: top, bottom, left or right. The red " +
             "dot marks the spot. Tap its centre to reset."
-        Step.JUMP -> if (!jumpRaised) "Slide the JUMP slider up to tilt the cue up for a jump shot (0–60°)."
-            else "Now slide it back down to the bottom (level) for a normal shot."
+        Step.POV -> when {
+            !inPov && !jumpRaised -> "Tap the yellow 1-ball. You'll see the shot in 3D, looking down your cue."
+            !inPov -> "Tap the yellow 1-ball to look down the cue again."
+            !jumpRaised -> "This is the view down your cue. Drag sideways to aim. Drag up to raise the back of the cue: " +
+                "that's how you jump the ball. Strike low with a level cue and you scoop it — a foul."
+            else -> "Cue raised! Where the tip hits (the spin ball), the cue's angle and your power decide whether it " +
+                "jumps. Tap Top view (top left) to go back."
+        }
         Step.POWER -> if (rolling) "Watch it roll…"
             else "We've lined up a shot for you. Put a finger on the POWER bar and pull down: the further, the " +
                 "harder. Let go to shoot. Slide back to the top before letting go to cancel."
@@ -139,15 +148,20 @@ class Tutorial {
 
     /** The cue angle is now [deg] degrees. */
     fun onElevation(deg: Double) {
-        if (step != Step.JUMP) return
+        if (step != Step.POV || !inPov) return
         if (deg >= 20.0) jumpRaised = true
+    }
+
+    /** The 3D view was opened ([on]) or closed. */
+    fun onPov(on: Boolean) {
+        inPov = on
+        if (step == Step.POV && !on && jumpRaised) complete()
     }
 
     /** A finger was lifted off [t]. Steps that end on letting go finish here. */
     fun onRelease(t: TutTarget, spinNow: Double, elevNow: Double) {
         when {
             step == Step.SPIN && t == TutTarget.SPIN && spinSet && spinNow > 0.2 -> complete()
-            step == Step.JUMP && t == TutTarget.JUMP && jumpRaised && elevNow < 0.5 -> complete()
             step == Step.BALL_IN_HAND && t == TutTarget.CUE && cueMoved > 0.12 -> complete()
         }
     }
@@ -175,7 +189,8 @@ class Tutorial {
      * (l, top, r, b) on screen. Writes x, y, opacity (0..1) and press (0 = hovering, 1 = touching)
      * into [out]. The finger loops through the gesture the current step asks for.
      */
-    fun finger(t: Double, l: Double, top: Double, r: Double, b: Double, out: DoubleArray) {
+    fun finger(t: Double, l: Double, top: Double, r: Double, b: Double, out: DoubleArray,
+               tapX: Double = Double.NaN, tapY: Double = Double.NaN) {
         val w = r - l; val h = b - top
         val cycle = 2.6
         val k = (t % cycle) / cycle
@@ -186,10 +201,14 @@ class Tutorial {
         val alpha = when { k < 0.06 -> k / 0.06; k > 0.85 -> (1 - k) / 0.15; else -> 1.0 }
         var x0 = 0.5; var y0 = 0.5; var x1 = 0.5; var y1 = 0.5
         when (step.target) {
-            TutTarget.TABLE -> { x0 = 0.62; y0 = 0.78; x1 = 0.86; y1 = 0.5 }
+            TutTarget.TABLE -> when {
+                // The 3D-view step: tap the ball (or Top view) where the screen says; in between, drag up.
+                step == Step.POV && !tapX.isNaN() -> { x0 = (tapX - l) / w; y0 = (tapY - top) / h; x1 = x0; y1 = y0 }
+                step == Step.POV -> { x0 = 0.5; y0 = 0.8; x1 = 0.5; y1 = 0.35 }
+                else -> { x0 = 0.62; y0 = 0.78; x1 = 0.86; y1 = 0.5 }
+            }
             TutTarget.WHEEL -> { x0 = 0.5; y0 = 0.62; x1 = 0.5; y1 = 0.3 }
             TutTarget.SPIN -> { x0 = 0.5; y0 = 0.5; x1 = 0.5; y1 = 0.84 }
-            TutTarget.JUMP -> if (!jumpRaised) { y0 = 0.95; y1 = 0.2 } else { y0 = 0.2; y1 = 0.97 }
             TutTarget.POWER -> { y0 = 0.05; y1 = 0.62 }
             TutTarget.CUE -> { x0 = 0.5; y0 = 0.5; x1 = 0.5 + 1.6 * cos(PI * 0.15); y1 = 0.5 + 1.6 * sin(PI * 0.15) }
             else -> {}   // tap in the middle

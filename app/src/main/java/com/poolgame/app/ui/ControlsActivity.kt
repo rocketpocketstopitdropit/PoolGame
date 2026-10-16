@@ -268,15 +268,10 @@ class ScreenMapView(context: Context, private val onPick: (Int) -> Unit) : View(
             c.drawCircle(X(L.tray.cx), X(L.tray.b - 12 - i * 23), tw * 0.36f, p)
         }
 
-        // Jump slider, spin ball, fine-aim roller.
+        // Spin ball, fine-aim roller.
         t.color = 0xFF9AA7B1.toInt(); t.typeface = bold; t.textSize = 10 * d
-        c.drawText("JUMP", X(L.jump.cx), X(L.spinCy - L.spinR - 8), t)
         c.drawText("SPIN", X(L.spinCx), X(L.spinCy - L.spinR - 8), t)
         c.drawText("FINE AIM", X(L.wheel.cx), X(L.wheel.t - 8), t)
-        p.color = 0xFF1E252B.toInt()
-        c.drawRoundRect(box(L.jump), 3 * d, 3 * d, p)
-        p.color = Color.WHITE
-        c.drawCircle(X(L.jump.cx), X(L.jump.b), 7 * d, p)
         p.shader = RadialGradient(X(L.spinCx - L.spinR * 0.3), X(L.spinCy - L.spinR * 0.35), X(L.spinR * 1.3),
             intArrayOf(0xFFFFFFFF.toInt(), 0xFFE9E4D4.toInt(), 0xFFAFA997.toInt()), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
         c.drawCircle(X(L.spinCx), X(L.spinCy), X(L.spinR), p)

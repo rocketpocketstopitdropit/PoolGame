@@ -177,13 +177,10 @@ class Guide {
             c.fillStyle = colr; c.circle(X(L.tray.cx), X(L.tray.b - 12 - i * 23), tw * 0.36); c.fill()
         }
 
-        // Jump slider, spin ball, fine-aim roller.
+        // Spin ball, fine-aim roller.
         c.fillStyle = "#9AA7B1"; c.font = font(10 * d, true)
-        c.fillText("JUMP", X(L.jump.cx), X(L.spinCy - L.spinR - 8))
         c.fillText("SPIN", X(L.spinCx), X(L.spinCy - L.spinR - 8))
         c.fillText("FINE AIM", X(L.wheel.cx), X(L.wheel.t - 8))
-        c.fillStyle = "#1E252B"; c.box(L.jump, 3 * d); c.fill()
-        c.fillStyle = "#FFFFFF"; c.circle(X(L.jump.cx), X(L.jump.b), 7 * d); c.fill()
         val sg = c.createRadialGradient(X(L.spinCx - L.spinR * 0.3), X(L.spinCy - L.spinR * 0.35), 0.0,
             X(L.spinCx - L.spinR * 0.3), X(L.spinCy - L.spinR * 0.35), X(L.spinR * 1.3))
         sg.addColorStop(0.0, "#FFFFFF"); sg.addColorStop(0.55, "#E9E4D4"); sg.addColorStop(1.0, "#AFA997")

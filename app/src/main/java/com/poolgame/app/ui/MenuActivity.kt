@@ -450,8 +450,8 @@ class MenuActivity : Activity() {
         card.addView(label(
             "Rock, paper, scissors decides who breaks. Drag on the table to aim, fine-tune with the wheel " +
                 "(slow drags are extra fine, fast swipes swing the cue a long way), touch the cue ball on the right " +
-                "to add spin, slide the JUMP slider up for a jump shot, then pull the power bar down and let go to " +
-                "shoot. With ball in hand, drag the cue ball to place it.",
+                "to add spin, then pull the power bar down and let go to shoot. Tap a ball to look down the cue in 3D: " +
+                "drag up there to raise the cue for a jump shot. With ball in hand, drag the cue ball to place it.",
             12.5f, 0xFF8A97A1.toInt()
         ).apply { setPadding(0, dpi(14f), 0, 0); setLineSpacing(0f, 1.15f) })
 
