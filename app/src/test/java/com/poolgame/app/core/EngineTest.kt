@@ -688,4 +688,183 @@ class EngineTest {
             }
         }
     }
+
+    // ------------------------------------------------------------------ bumper pool
+
+    /** A bumper pool game past its opening, with only the given balls on the table, red to shoot. */
+    private fun bumper(vararg at: Triple<Int, Double, Double>): Match {
+        val m = Match(GameMode.BUMPER, arrayOf("You", "CPU"))
+        m.rack(Random(1), 0)
+        m.isBreak = false
+        m.world.clearAll()
+        for ((id, x, y) in at) m.world.put(id, x, y)
+        m.current = 0
+        m.prepareTurn()
+        return m
+    }
+
+    @Test fun bumperTableHasTwoCupsAndTwelveBumpers() {
+        Match(GameMode.BUMPER)
+        assertTrue(Table.bumper)
+        assertEquals(2, Table.pockets.size)
+        assertTrue(Table.pockets.all { it.hole })
+        assertEquals(12, Table.posts.size)
+        assertEquals(Table.BUMPER_L, P.L, 1e-9)
+        // Every spot a ball starts on is clear of the bumpers, the cups and the other balls.
+        val m = Match(GameMode.BUMPER); m.rack(Random(3), 0)
+        for (id in 1..10) assertTrue("ball $id", m.world.isFree(m.world.balls[id].x, m.world.balls[id].y, id))
+        assertEquals(1, m.world.cue)                 // red's marked ball is up first
+        assertEquals(listOf(1), m.shootable(0))
+        Table.useStandard(TableSize.SEVEN)
+        assertFalse(Table.bumper); assertEquals(0, Table.posts.size)
+    }
+
+    @Test fun ballBouncesOffABumper() {
+        val m = bumper(Triple(1, 0.25, 0.4), Triple(6, 1.0, 0.7))
+        m.world.strike(0.0, 1.0, 0.0, 0.0)            // straight at the bumper at x = 0.39
+        m.world.advance(0.25)
+        val b = m.world.balls[1]
+        assertTrue("came back off the bumper: x = ${b.x}", b.x < 0.39 - P.R - Table.POST_R)
+        assertTrue("heading back: vx = ${b.vx}", b.vx < -0.2)
+    }
+
+    @Test fun sinkingYourBallInTheRightCupKeepsTheTurn() {
+        val m = bumper(Triple(2, 0.92, 0.4), Triple(3, 0.3, 0.1), Triple(6, 0.3, 0.7))
+        assertEquals(listOf(2, 3), m.shootable().sorted())   // marked ball's already down
+        assertTrue(m.selectBall(2))
+        m.shoot(0.0, 0.9, 0.0, 0.0); m.world.simulate()
+        val out = m.resolve()
+        assertFalse(m.world.balls[2].onTable)
+        assertFalse(out.foul); assertTrue(out.keepTurn)
+        assertEquals(0, m.current)
+    }
+
+    @Test fun ownCupIsAFoulAndTheOpponentDropsTwo() {
+        val m = bumper(Triple(2, 0.28, 0.4), Triple(3, 0.9, 0.1),
+            Triple(6, 1.0, 0.7), Triple(7, 0.7, 0.75), Triple(8, 0.3, 0.75), Triple(9, 0.95, 0.15))
+        assertTrue(m.selectBall(2))
+        m.shoot(Math.PI, 0.8, 0.0, 0.0); m.world.simulate()
+        val out = m.resolve()
+        assertFalse(m.world.balls[2].onTable)
+        assertTrue(out.foul)
+        assertEquals(2, m.ballsLeft(1))                // white had 4, dropped two (the marked one first)
+        assertFalse(m.world.balls[6].onTable)
+        assertEquals(1, m.current)
+        assertEquals(-1, m.winner)
+    }
+
+    @Test fun lastBallInYourOwnCupLoses() {
+        val m = bumper(Triple(2, 0.28, 0.4), Triple(6, 1.0, 0.7), Triple(7, 0.7, 0.75))
+        m.shoot(Math.PI, 0.8, 0.0, 0.0); m.world.simulate()
+        m.resolve()
+        assertEquals(1, m.winner)
+    }
+
+    @Test fun lastBallInTheRightCupWins() {
+        val m = bumper(Triple(2, 0.92, 0.4), Triple(6, 1.0, 0.7))
+        m.shoot(0.0, 0.9, 0.0, 0.0); m.world.simulate()
+        m.resolve()
+        assertEquals(0, m.winner)
+    }
+
+    @Test fun markedBallMustGoFirst() {
+        val m = bumper(Triple(1, 0.86, 0.4), Triple(2, 0.95, 0.4), Triple(3, 0.3, 0.1),
+            Triple(6, 1.0, 0.7), Triple(7, 0.7, 0.75), Triple(8, 0.3, 0.75))
+        assertEquals(listOf(1), m.shootable())
+        assertFalse(m.selectBall(2))
+        m.shoot(0.0, 0.9, 0.0, -0.3); m.world.simulate()   // the marked ball knocks the 2 in
+        val out = m.resolve()
+        assertFalse(m.world.balls[2].onTable)
+        assertTrue(out.foul)
+        assertEquals(1, m.current)
+        assertEquals(1, m.ballsLeft(1))
+    }
+
+    @Test fun opponentsBallCountsForThem() {
+        val m = bumper(Triple(2, 0.33, 0.4), Triple(3, 0.9, 0.1), Triple(7, 0.235, 0.4), Triple(8, 0.9, 0.7))
+        assertTrue(m.selectBall(2))
+        m.shoot(Math.PI, 0.9, 0.0, -0.45); m.world.simulate()   // draw, so the red ball comes back
+        val out = m.resolve()
+        assertFalse("white went in white's cup", m.world.balls[7].onTable)
+        assertTrue("red stayed up", m.world.balls[2].onTable)
+        assertFalse(out.foul); assertFalse(out.keepTurn)
+        assertEquals(1, m.ballsLeft(1))
+        assertEquals(1, m.current)
+    }
+
+    @Test fun ballOffTheTableGoesBackInTheMiddle() {
+        val m = bumper(Triple(2, 0.92, 0.2), Triple(6, 1.0, 0.7), Triple(7, 0.3, 0.7), Triple(8, 0.3, 0.1), Triple(9, 0.6, 0.75))
+        m.shoot(0.0, 1.0, 0.0, 0.0, toRad(50.0))
+        m.world.simulate()
+        val out = m.resolve()
+        assertTrue(out.foul)   // a jump shot (and off the table, if it got that far)
+        assertTrue(m.world.balls[2].onTable)
+        assertEquals(1, m.current)
+    }
+
+    @Test fun openingShotsGoTogether() {
+        val m = Match(GameMode.BUMPER, arrayOf("Player 1", "Player 2")); m.rack(Random(5), 0)
+        assertTrue(m.openingPending())
+        assertFalse(m.setOpening(toRad(52.0), 1.4, 0.0, 0.0, 0.0))
+        assertEquals(1, m.current)
+        assertEquals(6, m.world.cue)
+        assertTrue(m.setOpening(toRad(-52.0) + Math.PI, 1.4, 0.0, 0.0, 0.0))
+        m.fireOpening()
+        assertTrue(m.world.balls[1].moving && m.world.balls[6].moving)
+        m.world.simulate()
+        m.resolve()
+        assertFalse(m.isBreak && m.opening.any { it != null })
+        assertTrue(m.winner < 0)
+    }
+
+    @Test fun bothSinkingTheOpeningGoesAgain() {
+        // Red's bank off the bottom cushion; white's the mirror image off the top one.
+        val m = Match(GameMode.BUMPER, arrayOf("A", "B")); m.rack(Random(5), 0)
+        val ang = toRad(51.5)
+        m.setOpening(ang, 1.4, 0.0, 0.0, 0.0); m.setOpening(Math.PI + ang, 1.4, 0.0, 0.0, 0.0)
+        m.fireOpening(); m.world.simulate()
+        m.resolve()
+        assertFalse(m.world.balls[1].onTable); assertFalse(m.world.balls[6].onTable)
+        assertTrue("another opening", m.openingPending())
+        assertEquals(0, m.current)
+        for (p in 0..1) assertTrue(m.openingBall(p) >= 0)
+    }
+
+    @Test fun bumperGameSurvivesSaving() {
+        val m = Match(GameMode.BUMPER, arrayOf("You", "CPU")); m.rack(Random(2), 0)
+        m.setOpening(toRad(40.0), 1.6, 0.0, 0.0, 0.0); m.setOpening(Math.PI, 1.6, 0.0, 0.0, 0.0)
+        m.fireOpening(); m.world.simulate(); m.resolve()
+        val text = GameSave.write(m, GameSettings(GameMode.BUMPER, true, 4, 0, false, 0))
+        Table.useStandard(TableSize.SEVEN)
+        val r = Match(GameMode.BUMPER, arrayOf("You", "CPU"))
+        assertTrue(GameSave.restore(text, r))
+        assertTrue(Table.bumper)
+        assertEquals(m.current, r.current)
+        for (id in 1..10) assertEquals(m.world.balls[id].onTable, r.world.balls[id].onTable)
+        // A game saved while the opening was being set up starts the opening over.
+        val o = Match(GameMode.BUMPER, arrayOf("You", "CPU")); o.rack(Random(2), 0)
+        o.setOpening(0.5, 1.0, 0.0, 0.0, 0.0)
+        val r2 = Match(GameMode.BUMPER, arrayOf("You", "CPU"))
+        assertTrue(GameSave.restore(GameSave.write(o, GameSettings(GameMode.BUMPER, true, 4, 0, false, 0)), r2))
+        assertTrue(r2.openingPending()); assertEquals(0, r2.current); assertTrue(r2.opening.all { it == null })
+    }
+
+    @Test fun cpuFinishesBumperGames() {
+        for (seed in 0 until 3) {
+            val m = Match(GameMode.BUMPER, arrayOf("A", "B")); m.rack(Random(seed), 0)
+            val ai = arrayOf(Ai(8, seed.toLong()), Ai(3, seed + 99L))
+            var shots = 0
+            while (m.winner < 0 && shots < 300) {
+                m.prepareTurn()
+                val p = ai[m.current].plan(Match(m.mode, m.names).also { it.copyFrom(m) }, 400)
+                assertTrue("seed $seed shot $shots: ball ${p.ball} is shootable", m.selectBall(p.ball))
+                if (m.openingPending()) {
+                    if (!m.setOpening(p.angle, p.speed, p.side, p.vert, p.elevation)) continue
+                    m.fireOpening()
+                } else m.shoot(p.angle, p.speed, p.side, p.vert, p.elevation)
+                m.world.simulate(); m.resolve(); shots++
+            }
+            assertTrue("seed $seed unfinished", m.winner >= 0)
+        }
+    }
 }

@@ -186,7 +186,7 @@ class MenuActivity : Activity() {
         col.addView(card, LinearLayout.LayoutParams(minOf(dpi(560f), resources.displayMetrics.widthPixels - dpi(48f)), ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL })
 
         card.addView(label("POOL", 38f, Color.WHITE, true).apply { letterSpacing = 0.25f; gravity = Gravity.CENTER })
-        card.addView(label("8-Ball · 9-Ball · trick shots · practice", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
+        card.addView(label("8-Ball · 9-Ball · bumper pool · trick shots · practice", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
 
         // Game type
         card.addView(section("GAME"))
@@ -196,6 +196,11 @@ class MenuActivity : Activity() {
         val trickHelp = label("Trick shots: half the table's missing between the break area and the far end. " +
             "Jump the cue ball across the gap and sink the 1. Five levels, taking turns with the computer " +
             "or a friend: whoever makes it in fewer shots wins the level, and most levels wins the match.",
+            12.5f, 0xFF8A97A1.toInt()).apply { setPadding(0, dpi(8f), 0, 0); setLineSpacing(0f, 1.15f) }
+        val bumperHelp = label("Bumper pool: a small table with a cup at each end and twelve bumpers in the way. " +
+            "No cue ball: you shoot your own five balls (red, or white) into the far cup, your marked (spotted) ball " +
+            "first. Both marked balls go at once to open. Your ball in your own cup, a ball off the table or a jump " +
+            "shot is a foul: your opponent drops two of theirs in. First to sink all five wins.",
             12.5f, 0xFF8A97A1.toInt()).apply { setPadding(0, dpi(8f), 0, 0); setLineSpacing(0f, 1.15f) }
         // Practice: the free table, or one trick shot (pick which).
         val practiceBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -244,21 +249,24 @@ class MenuActivity : Activity() {
         fun refreshMode() {
             practiceBlock.visibility = if (practice) View.VISIBLE else View.GONE
             matchBlockRef?.visibility = if (practice) View.GONE else View.VISIBLE
-            callBlockRef?.visibility = if (mode == GameMode.TRICK) View.GONE else View.VISIBLE
+            callBlockRef?.visibility = if (mode == GameMode.TRICK || mode == GameMode.BUMPER) View.GONE else View.VISIBLE
             trickHelp.visibility = if (mode == GameMode.TRICK && !practice) View.VISIBLE else View.GONE
-            // Trick shots are always on the 9 ft table (with its gap), so the size choice hides for them.
-            val trickTable = if (practice) practiceTrick else mode == GameMode.TRICK
-            sizeBlockRef?.visibility = if (trickTable) View.GONE else View.VISIBLE
+            bumperHelp.visibility = if (mode == GameMode.BUMPER && !practice) View.VISIBLE else View.GONE
+            // Trick shots are always on the 9 ft table (with its gap) and bumper pool on its own table,
+            // so the size choice hides for them.
+            val ownTable = if (practice) practiceTrick else mode == GameMode.TRICK || mode == GameMode.BUMPER
+            sizeBlockRef?.visibility = if (ownTable) View.GONE else View.VISIBLE
         }
-        val modeSel = when { practice -> 3; mode == GameMode.TRICK -> 2; mode == GameMode.NINE_BALL -> 1; else -> 0 }
-        val modeRow = segmented(listOf("8-Ball", "9-Ball", "Trick", "Practice"), modeSel) {
-            practice = it == 3
-            if (it < 3) mode = when (it) { 0 -> GameMode.EIGHT_BALL; 1 -> GameMode.NINE_BALL; else -> GameMode.TRICK }
+        val modeSel = when { practice -> 4; mode == GameMode.TRICK -> 3; mode == GameMode.BUMPER -> 2; mode == GameMode.NINE_BALL -> 1; else -> 0 }
+        val modeRow = segmented(listOf("8-Ball", "9-Ball", "Bumper", "Trick", "Practice"), modeSel) {
+            practice = it == 4
+            if (it < 4) mode = when (it) { 0 -> GameMode.EIGHT_BALL; 1 -> GameMode.NINE_BALL; 2 -> GameMode.BUMPER; else -> GameMode.TRICK }
             refreshMode()
             save()
         }
         card.addView(modeRow)
         card.addView(trickHelp)
+        card.addView(bumperHelp)
         card.addView(practiceBlock)
 
         // Table size (8-ball, 9-ball and free-table practice)
@@ -566,7 +574,7 @@ class MenuActivity : Activity() {
             }
         }
         options.forEachIndexed { i, o ->
-            val v = label(o, 15f, Color.WHITE, true).apply {
+            val v = label(o, if (options.size > 4) 14f else 15f, Color.WHITE, true).apply {
                 gravity = Gravity.CENTER
                 setOnClickListener { paint(i); onPick(i) }
             }

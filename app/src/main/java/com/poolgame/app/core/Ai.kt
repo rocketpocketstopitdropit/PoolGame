@@ -23,10 +23,11 @@ class Plan(
     val placeX: Double = Double.NaN,
     val placeY: Double = Double.NaN,
     val elevation: Double = 0.0,
-    val pocket: Int = -1           // the pocket the CPU is calling (index into Table.pockets), or -1
+    val pocket: Int = -1,          // the pocket the CPU is calling (index into Table.pockets), or -1
+    val ball: Int = -1             // bumper pool: which of its balls the CPU shoots, or -1
 ) {
     val hasPlacement get() = !placeX.isNaN()
-    fun withPlacement(x: Double, y: Double) = Plan(angle, speed, side, vert, kind, x, y, elevation, pocket)
+    fun withPlacement(x: Double, y: Double) = Plan(angle, speed, side, vert, kind, x, y, elevation, pocket, ball)
 }
 
 class Cand(
@@ -57,13 +58,17 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         started = TimeSource.Monotonic.markNow()
         budget = budgetMs
         simulations = 0
-        val ideal = if (m.mode == GameMode.TRICK) trickShot(m) else choose(m)
+        val ideal = when (m.mode) {
+            GameMode.TRICK -> trickShot(m)
+            GameMode.BUMPER -> bumperShot(m)
+            else -> choose(m)
+        }
         return Plan(
             ideal.angle + gauss() * aimSigma,
             (ideal.speed * (1 + gauss() * speedSigma)).coerceIn(0.2, P.MAX_CUE_SPEED),
             ideal.side + gauss() * spinSigma,
             ideal.vert + gauss() * spinSigma,
-            ideal.kind, ideal.placeX, ideal.placeY, ideal.elevation, ideal.pocket
+            ideal.kind, ideal.placeX, ideal.placeY, ideal.elevation, ideal.pocket, ideal.ball
         )
     }
 
@@ -146,6 +151,117 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         // Nothing found: a hopeful jump straight at the 1.
         val c = base.balls[0]
         return Plan(atan2(tb.y - c.y, tb.x - c.x), 6.5, 0.0, 0.0, "trick", elevation = toRad(40.0))
+    }
+
+    // ------------------------------------------------------------------ bumper pool
+
+    /**
+     * Bumper pool: for each ball it may shoot, try it straight at the cup, banked off each cushion,
+     * and fanned out a little either side (the bumpers deflect a lot), at a few speeds — all run
+     * through the physics engine and scored on what goes in, fouls, and how the balls are left.
+     * Stronger players then check their best few against their own aim and speed error, and
+     * keep searching around the best shot while there's time.
+     */
+    private fun bumperShot(m: Match): Plan {
+        val me = m.current
+        val opp = 1 - me
+        val ids = m.shootable(me)
+        val work = Match(m.mode, m.names).also { it.copyFrom(m) }
+        // The opening is tried as an ordinary shot: the other player's ball just stays where it is.
+        work.isBreak = false
+        val s = Match(m.mode, m.names)
+        if (ids.isEmpty()) return Plan(0.0, 1.0, 0.0, 0.0, "bumper")
+        val cup = Table.pockets[m.targetCup(me)]
+        val r = P.R
+        val myLeft = work.ballsLeft(me); val theirLeft = work.ballsLeft(opp)
+
+        fun nearest(x: Match, p: Int): Double {
+            val c = Table.pockets[x.targetCup(p)]
+            var best = 2.0
+            for (id in x.shootable(p)) {
+                val b = x.world.balls[id]
+                val d = hypot(b.x - c.cx, b.y - c.cy)
+                if (d < best) best = d
+            }
+            return best
+        }
+        fun run(ball: Int, angle: Double, speed: Double): Double {
+            s.copyFrom(work)
+            s.world.cue = ball
+            s.shoot(angle, speed.coerceIn(0.2, P.MAX_CUE_SPEED), 0.0, 0.0)
+            s.world.simulate()
+            simulations++
+            val out = s.resolve()
+            if (out.winner == me) return 100.0
+            if (out.winner >= 0) return -100.0
+            var v = 5.0 * (myLeft - s.ballsLeft(me)) - 5.0 * (theirLeft - s.ballsLeft(opp))
+            if (out.foul) v -= 3.0
+            v += if (out.keepTurn) 2.0 - 1.5 * nearest(s, me) else 1.2 * nearest(s, opp) - 0.8 * nearest(s, me)
+            return v
+        }
+        val samples = if (level >= 7) 8 else 5
+        fun robust(c: DoubleArray): Double {
+            var t = 0.0
+            repeat(samples) {
+                t += run(c[0].toInt(), c[1] + gauss() * aimSigma, c[2] * (1 + gauss() * speedSigma))
+            }
+            return t / samples
+        }
+
+        // Candidate aims: [ball, angle, speed]. Mirror points put the bank shots' targets beyond each cushion.
+        val cands = ArrayList<DoubleArray>()
+        val endX = if (cup.cx > P.L / 2) 2 * (P.L - r) - cup.cx else 2 * r - cup.cx
+        val topBank = cup.cx to 2 * r - cup.cy
+        val bottomBank = cup.cx to 2 * (P.W - r) - cup.cy
+        // The opening is banked off the cushion on the player's right, so the two balls pass each other.
+        val aims = if (m.isBreak) listOf(if (m.openingRight(me) == 0) topBank else bottomBank)
+            else listOf(cup.cx to cup.cy, topBank, bottomBank, endX to cup.cy)
+        val offsets = if (level <= 3) doubleArrayOf(0.0, -2.0, 2.0) else doubleArrayOf(0.0, -1.5, 1.5, -3.5, 3.5, -7.0, 7.0)
+        val speedF = if (level <= 3) doubleArrayOf(1.2, 1.7) else doubleArrayOf(1.0, 1.3, 1.7, 2.3)
+        for (off in offsets) for (id in ids) {
+            val b = work.world.balls[id]
+            for ((k, a) in aims.withIndex()) {
+                if (level <= 2 && k == 3) continue
+                val d = hypot(a.first - b.x, a.second - b.y)
+                val v0 = 1.5 * sqrt(2 * P.MU_ROLL * P.G * (d + 0.1)) + 0.3
+                val ang = atan2(a.second - b.y, a.first - b.x) + toRad(off)
+                for (f in speedF) cands += doubleArrayOf(id.toDouble(), ang, v0 * f)
+            }
+        }
+        // Also nudge the opponent's balls around (a few shots straight at each), in case nothing goes.
+        if (level >= 4) for (id in ids) {
+            val b = work.world.balls[id]
+            for (o in work.bumperBalls(opp)) {
+                val t = work.world.balls[o]
+                if (!t.onTable) continue
+                cands += doubleArrayOf(id.toDouble(), atan2(t.y - b.y, t.x - b.x), 1.6)
+            }
+        }
+        val scored = ArrayList<Pair<DoubleArray, Double>>()
+        for (c in cands) {
+            if (timeUp() && scored.isNotEmpty()) break
+            scored += c to run(c[0].toInt(), c[1], c[2])
+        }
+        scored.sortByDescending { it.second }
+        var best = scored.firstOrNull()?.first ?: doubleArrayOf(ids[0].toDouble(), atan2(cup.cy - work.world.balls[ids[0]].y, cup.cx - work.world.balls[ids[0]].x), 1.5)
+        if (level >= 4) {
+            // Pick the shot that holds up best with this player's own aim and speed error, then refine it.
+            var bestScore = -1e9
+            for ((c, _) in scored.take(if (level >= 7) 6 else 3)) {
+                if (timeUp() && bestScore > -1e9) break
+                val sc = robust(c)
+                if (sc > bestScore) { bestScore = sc; best = c }
+            }
+            while (!timeUp() && level >= 6) {
+                val t = best.copyOf()
+                t[1] += toRad(0.6) * gauss()
+                t[2] = (t[2] * (1 + 0.08 * gauss())).coerceIn(0.4, 6.0)
+                if (run(t[0].toInt(), t[1], t[2]) < -50) continue
+                val sc = robust(t)
+                if (sc > bestScore) { bestScore = sc; best = t }
+            }
+        }
+        return Plan(best[1], best[2], 0.0, 0.0, "bumper", ball = best[0].toInt())
     }
 
     // ------------------------------------------------------------------ top level

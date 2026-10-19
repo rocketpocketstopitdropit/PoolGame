@@ -57,6 +57,8 @@ class ShotLog {
      * or "dug under") instead of being driven down into the slate by an elevated cue. A foul.
      */
     var scooped = false
+    /** Balls that left the cloth this shot (bit n = ball n), more than a few millimetres up. */
+    var air = 0
 
     fun reset() {
         firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0; jumpedOff.clear()
@@ -64,7 +66,7 @@ class ShotLog {
         pocketIn.fill(-1)
         touched.fill(0); cueLanded = false; cueAirTouched = 0; cutDeg = Double.NaN
         cueLandX = Double.NaN; cueLandY = Double.NaN
-        miscue = false; scooped = false
+        miscue = false; scooped = false; air = 0
     }
 
     fun copyFrom(o: ShotLog) {
@@ -76,7 +78,7 @@ class ShotLog {
         o.pocketIn.copyInto(pocketIn)
         o.touched.copyInto(touched); cueLanded = o.cueLanded; cueAirTouched = o.cueAirTouched; cutDeg = o.cutDeg
         cueLandX = o.cueLandX; cueLandY = o.cueLandY
-        miscue = o.miscue; scooped = o.scooped
+        miscue = o.miscue; scooped = o.scooped; air = o.air
     }
 }
 
@@ -98,6 +100,12 @@ interface WorldListener {
  */
 class World {
     val balls = Array(16) { Ball(it) }
+    /**
+     * The ball the cue strikes. Always the cue ball (0) in 8-ball, 9-ball and trick shots; in bumper
+     * pool there is no cue ball and you shoot one of your own balls, so it's whichever one you picked.
+     */
+    var cue = 0
+    val cueBall get() = balls[cue]
     val log = ShotLog()
     var listener: WorldListener? = null
     var trackOrientation = false
@@ -107,6 +115,12 @@ class World {
     fun copyFrom(o: World) {
         for (i in 0 until 16) balls[i].copyFrom(o.balls[i])
         log.copyFrom(o.log)
+        cue = o.cue
+    }
+
+    private companion object {
+        /** A ball higher than this off the cloth counts as having left it ([ShotLog.air]). */
+        const val AIR_Z = 0.004
     }
 
     fun anyMoving(): Boolean {
@@ -130,9 +144,10 @@ class World {
      * under the ball instead pushes it up off the cloth directly: a scoop, logged as [ShotLog.scooped].
      * Spin is kept in the air, so follow, draw and english all take effect when the ball lands.
      */
-    fun strike(angle: Double, speed: Double, side: Double, vert: Double, elevation: Double = 0.0) {
-        val c = balls[0]
-        log.reset()
+    fun strike(angle: Double, speed: Double, side: Double, vert: Double, elevation: Double = 0.0,
+               id: Int = cue, resetLog: Boolean = true) {
+        val c = balls[id]
+        if (resetLog) log.reset()
         var a = side; var b = vert
         val m0 = hypot(a, b)
         if (m0 > P.TIP_LIMIT) { a *= P.TIP_LIMIT / m0; b *= P.TIP_LIMIT / m0 }
@@ -160,7 +175,7 @@ class World {
             jX += k * tX; jY += k * tY; jZ += k * tZ
         }
         jX *= speed; jY *= speed; jZ *= speed
-        log.miscue = m > P.MAX_TIP + 1e-9
+        log.miscue = (!resetLog && log.miscue) || m > P.MAX_TIP + 1e-9
         c.vx = jX; c.vy = jY
         // Spin: w = (5 / 2R) p x J  (p in units of R)
         val kw = 5.0 / (2.0 * P.R)
@@ -225,6 +240,7 @@ class World {
         if (Table.gap) gapEdges()
         collideBalls()
         collideCushions()
+        if (Table.posts.isNotEmpty()) collidePosts()
         checkPockets()
         return dt
     }
@@ -244,7 +260,7 @@ class World {
 
     private fun cloth(b: Ball, dt: Double) {
         val r = P.R
-        if (b.id == 0 && !log.cueLanded && Table.gap && b.x > Table.GAP_X1) log.cueLanded = true
+        if (b.id == cue && !log.cueLanded && Table.gap && b.x > Table.GAP_X1) log.cueLanded = true
         val ux = b.vx + r * b.wy
         val uy = b.vy - r * b.wx
         val us = hypot(ux, uy)
@@ -275,12 +291,13 @@ class World {
         val z0 = b.z; val vz0 = b.vz
         b.z += b.vz * dt
         b.vz -= P.G * dt
+        if (b.z > AIR_Z) log.air = log.air or (1 shl b.id)
         if (b.z <= 0.0 && b.vz < 0.0 && !Table.overGap(b.x)) {
             // Find when in this step it actually touched down, and bounce from that moment, so the
             // landing spot moves smoothly with the stroke instead of in step-sized jumps.
             val frac = if (z0 > 0.0 && z0 - b.z > 1e-12) (z0 / (z0 - b.z)).coerceIn(0.0, 1.0) else 1.0
             val impact = (-(vz0 - P.G * dt * frac)).coerceAtLeast(0.0)
-            if (b.id == 0) {
+            if (b.id == cue) {
                 val lx = b.x + b.vx * dt * frac; val ly = b.y + b.vy * dt * frac
                 if (log.cueLandX.isNaN()) { log.cueLandX = lx; log.cueLandY = ly }
                 if (Table.gap && lx > Table.GAP_X1) log.cueLanded = true
@@ -456,12 +473,12 @@ class World {
     private fun noteContact(i: Int, j: Int, a: Ball, b: Ball) {
         log.touched[i] = log.touched[i] or (1 shl j)
         log.touched[j] = log.touched[j] or (1 shl i)
-        if (i != 0 && j != 0) return
-        val other = if (i == 0) j else i
+        if (i != cue && j != cue) return
+        val other = if (i == cue) j else i
         if (!log.cueLanded) log.cueAirTouched = log.cueAirTouched or (1 shl other)
         if (log.firstHit < 0 && log.cutDeg.isNaN()) {
-            val c = if (i == 0) a else b
-            val o = if (i == 0) b else a
+            val c = if (i == cue) a else b
+            val o = if (i == cue) b else a
             val nx = o.x - c.x; val ny = o.y - c.y
             val v = hypot(c.vx, c.vy); val n = hypot(nx, ny)
             if (v > 1e-9 && n > 1e-9) {
@@ -473,8 +490,8 @@ class World {
 
     private fun recordFirstHit(i: Int, j: Int, a: Ball, b: Ball) {
         if (log.firstHit >= 0) return
-        if (i == 0) { log.firstHit = j; log.hitX = a.x; log.hitY = a.y }
-        else if (j == 0) { log.firstHit = i; log.hitX = b.x; log.hitY = b.y }
+        if (i == cue) { log.firstHit = j; log.hitX = a.x; log.hitY = a.y }
+        else if (j == cue) { log.firstHit = i; log.hitX = b.x; log.hitY = b.y }
     }
 
     private fun collideCushions() {
@@ -532,10 +549,80 @@ class World {
                 }
                 b.x += b.vx * s; b.y += b.vy * s
                 if (log.firstHit >= 0) log.railAfterHit = true
-                else if (b.id == 0) log.cueCushionsBeforeHit++
+                else if (b.id == cue) log.cueCushionsBeforeHit++
                 listener?.onCushion(-vn)
             }
         }
+    }
+
+    /**
+     * Bumper posts (bumper pool): round, springy rubber rings. Same contact model as the cushions —
+     * rewind to the moment of contact, bounce, friction at the contact point — but livelier.
+     */
+    private fun collidePosts() {
+        val r = P.R
+        for (b in balls) {
+            if (!b.onTable || !b.moving || b.z > Table.POST_H) continue
+            for (pt in Table.posts) {
+                val rr = r + pt.r
+                var dx = b.x - pt.x; var dy = b.y - pt.y
+                val d2 = dx * dx + dy * dy
+                if (d2 >= rr * rr) continue
+                var d = sqrt(d2).coerceAtLeast(1e-9)
+                var nx = dx / d; var ny = dy / d
+                var vn = b.vx * nx + b.vy * ny
+                if (vn >= 0) { b.x = pt.x + nx * rr; b.y = pt.y + ny * rr; continue }
+                // Rewind to the moment of contact (solve |p - v s - post| = rr for the latest s).
+                val vv = b.vx * b.vx + b.vy * b.vy
+                val dv = dx * b.vx + dy * b.vy
+                val disc = dv * dv - vv * (d2 - rr * rr)
+                var s = if (vv > 1e-12 && disc >= 0) ((dv + sqrt(disc)) / vv) else 0.0
+                if (s < 0 || s > lastDt * 1.01) s = 0.0
+                b.x -= b.vx * s; b.y -= b.vy * s
+                dx = b.x - pt.x; dy = b.y - pt.y
+                d = sqrt(dx * dx + dy * dy).coerceAtLeast(1e-9)
+                nx = dx / d; ny = dy / d
+                if (d < rr) { b.x = pt.x + nx * rr; b.y = pt.y + ny * rr }
+                vn = b.vx * nx + b.vy * ny
+                if (vn >= 0) { b.x += b.vx * s; b.y += b.vy * s; continue }
+                val e = (0.9 - 0.03 * -vn).coerceIn(0.7, 0.9)
+                val jn = -(1 + e) * vn
+                b.vx += jn * nx; b.vy += jn * ny
+                val cx = b.vx + r * b.wz * ny
+                val cy = b.vy - r * b.wz * nx
+                val cz = -r * (b.wx * ny - b.wy * nx)
+                val cn = cx * nx + cy * ny
+                val tx = cx - cn * nx; val ty = cy - cn * ny; val tz = cz
+                val tm = sqrt(tx * tx + ty * ty + tz * tz)
+                if (tm > 1e-9) {
+                    val jt = minOf(P.MU_CUSHION * jn, tm / 3.5)
+                    val ex = tx / tm; val ey = ty / tm; val ez = tz / tm
+                    b.vx -= jt * ex; b.vy -= jt * ey
+                    val k = 2.5 * jt / r
+                    b.wx += k * (ny * ez); b.wy += k * (-nx * ez); b.wz += k * (nx * ey - ny * ex)
+                }
+                b.x += b.vx * s; b.y += b.vy * s
+                if (log.firstHit >= 0) log.railAfterHit = true
+                else if (b.id == cue) log.cueCushionsBeforeHit++   // (the aim guide stops a little after the first)
+                listener?.onCushion(-vn)
+            }
+        }
+    }
+
+    /** How far a ball (centre) at (x, y) moving along unit (dx, dy) travels before touching a bumper post. */
+    private fun postDistance(x: Double, y: Double, dx: Double, dy: Double): Double {
+        var best = Double.MAX_VALUE
+        for (pt in Table.posts) {
+            val rr = P.R + pt.r
+            val ox = pt.x - x; val oy = pt.y - y
+            val t = ox * dx + oy * dy
+            if (t <= 0) continue
+            val perp2 = ox * ox + oy * oy - t * t
+            if (perp2 >= rr * rr) continue
+            val tt = t - sqrt(rr * rr - perp2)
+            if (tt < best) best = tt
+        }
+        return best
     }
 
     private fun checkPockets() {
@@ -589,6 +676,8 @@ class World {
         val r = P.R
         if (x < r || x > P.L - r || y < r || y > P.W - r) return false
         if (Table.gap && x > Table.GAP_X0 - 0.6 * r && x < Table.GAP_X1 + 0.6 * r) return false
+        for (pt in Table.posts) if ((pt.x - x) * (pt.x - x) + (pt.y - y) * (pt.y - y) < (r + pt.r + 0.001) * (r + pt.r + 0.001)) return false
+        if (Table.bumper) for (pk in Table.pockets) if ((pk.cx - x) * (pk.cx - x) + (pk.cy - y) * (pk.cy - y) < (pk.capR + r) * (pk.capR + r)) return false
         val m = (2 * r + 0.0005)
         for (b in balls) {
             if (!b.onTable || b.id == ignore) continue
@@ -604,12 +693,13 @@ class World {
             if (!b.onTable || b.id == ex1 || b.id == ex2) continue
             if (Table.pointSegDist(b.x, b.y, x1, y1, x2, y2) < clear) return false
         }
+        for (pt in Table.posts) if (Table.pointSegDist(pt.x, pt.y, x1, y1, x2, y2) < P.R + pt.r) return false
         return true
     }
 
     /** Where the cue ball's centre would meet the cushions travelling along `angle` (ignores balls). */
     fun railPoint(angle: Double, out: DoubleArray) {
-        val c = balls[0]
+        val c = balls[cue]
         val dx = cos(angle); val dy = sin(angle)
         val r = P.R
         var tw = Double.MAX_VALUE
@@ -618,6 +708,7 @@ class World {
         if (dy > 1e-9) tw = minOf(tw, (P.W - r - c.y) / dy)
         if (dy < -1e-9) tw = minOf(tw, (r - c.y) / dy)
         if (tw == Double.MAX_VALUE || tw < 0) tw = 0.0
+        if (Table.posts.isNotEmpty()) tw = minOf(tw, postDistance(c.x, c.y, dx, dy))
         out[0] = c.x + dx * tw; out[1] = c.y + dy * tw
     }
 
@@ -626,12 +717,12 @@ class World {
      * where type 1 = ball (x,y = ghost-ball centre), type 2 = cushion (x,y = cue centre at contact), 0 = nothing.
      */
     fun castCue(angle: Double, out: DoubleArray) {
-        val c = balls[0]
+        val c = balls[cue]
         val dx = cos(angle); val dy = sin(angle)
         var best = Double.MAX_VALUE; var id = -1
         val d4 = 4 * P.R * P.R
         for (b in balls) {
-            if (!b.onTable || b.id == 0) continue
+            if (!b.onTable || b.id == cue) continue
             val ox = b.x - c.x; val oy = b.y - c.y
             val t = ox * dx + oy * dy
             if (t <= 0) continue
@@ -647,6 +738,7 @@ class World {
         if (dx < -1e-9) tw = minOf(tw, (r - c.x) / dx)
         if (dy > 1e-9) tw = minOf(tw, (P.W - r - c.y) / dy)
         if (dy < -1e-9) tw = minOf(tw, (r - c.y) / dy)
+        if (Table.posts.isNotEmpty()) tw = minOf(tw, postDistance(c.x, c.y, dx, dy))
         if (id >= 0 && best <= tw) {
             out[0] = 1.0; out[1] = c.x + dx * best; out[2] = c.y + dy * best; out[3] = id.toDouble()
         } else if (tw < Double.MAX_VALUE) {

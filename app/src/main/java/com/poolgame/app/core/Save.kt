@@ -62,7 +62,7 @@ object GameSave {
     fun restore(text: String, m: Match): Boolean = try {
         val p = parse(text)
         if (GameMode.valueOf(p.getValue("mode")) != m.mode) throw IllegalStateException("mode")
-        if (m.mode != GameMode.TRICK && (TableSize.fromName(p["table"]) ?: TableSize.NINE) != Table.size)
+        if (m.mode != GameMode.TRICK && m.mode != GameMode.BUMPER && (TableSize.fromName(p["table"]) ?: TableSize.NINE) != Table.size)
             throw IllegalStateException("table size")   // the match must be made on the saved table
         m.current = p.getValue("current").toInt()
         m.groups[0] = Group.valueOf(p.getValue("g0")); m.groups[1] = Group.valueOf(p.getValue("g1"))
@@ -93,6 +93,7 @@ object GameSave {
             b.qw = f[3].toDouble(); b.qx = f[4].toDouble(); b.qy = f[5].toDouble(); b.qz = f[6].toDouble()
         }
         m.world.log.reset()
+        m.afterRestore()
         true
     } catch (e: Throwable) { false }
 

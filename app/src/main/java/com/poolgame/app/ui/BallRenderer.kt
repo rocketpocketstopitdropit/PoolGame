@@ -33,6 +33,9 @@ class BallRenderer {
         // Practice set: plain red and yellow balls (plus the black), no numbers.
         const val PRACTICE_RED = 0xFFC62828.toInt()
         const val PRACTICE_YELLOW = 0xFFF2BE00.toInt()
+        // Bumper pool: five red and five white balls; the marked one of each is spotted in the other colour.
+        const val BUMPER_RED = 0xFFC62828.toInt()
+        fun isMarked(id: Int) = id == 1 || id == 6
         // Light from upper left, above the table (world space; up is -z).
         private val LL = sqrt(0.35f * 0.35f + 0.55f * 0.55f + 1f)
         val LX = -0.35f / LL; val LY = -0.55f / LL; val LZ = -1f / LL
@@ -42,7 +45,11 @@ class BallRenderer {
     var plain = false
         set(v) { field = v; for (i in 0 until 16) lastQ[i][0] = Double.NaN }
 
-    private fun colorOf(id: Int): Int = if (!plain) BASE[id] else when (id) {
+    /** Bumper pool style: red balls 1-5 and white 6-10, no numbers; 1 and 6 are spotted (the marked balls). */
+    var bumper = false
+        set(v) { field = v; for (i in 0 until 16) lastQ[i][0] = Double.NaN }
+
+    private fun colorOf(id: Int): Int = if (bumper) (if (id in 1..5) BUMPER_RED else WHITE) else if (!plain) BASE[id] else when (id) {
         0 -> BASE[0]
         8 -> BASE[8]
         in 1..7 -> PRACTICE_RED
@@ -144,9 +151,13 @@ class BallRenderer {
         val br = (base shr 16) and 255; val bg = (base shr 8) and 255; val bb = base and 255
         val wr = (WHITE shr 16) and 255; val wg = (WHITE shr 8) and 255; val wb = WHITE and 255
         val dr = (DOT shr 16) and 255; val dg = (DOT shr 8) and 255; val db = DOT and 255
-        val stripe = !plain && isStripe(b.id)
+        val stripe = !plain && !bumper && isStripe(b.id)
         val cue = b.id == 0
-        val numbered = !plain
+        val numbered = !plain && !bumper
+        // A marked bumper pool ball: spots of the other colour (white on red, red on white).
+        val marked = bumper && isMarked(b.id)
+        val spot = if (b.id == 1) WHITE else BUMPER_RED
+        val sr = (spot shr 16) and 255; val sg = (spot shr 8) and 255; val sb = spot and 255
         val m0 = m[0].toFloat(); val m1 = m[1].toFloat(); val m2 = m[2].toFloat()
         val m3 = m[3].toFloat(); val m4 = m[4].toFloat(); val m5 = m[5].toFloat()
         val m6 = m[6].toFloat(); val m7 = m[7].toFloat(); val m8 = m[8].toFloat()
@@ -182,6 +193,9 @@ class BallRenderer {
             if (cue) {
                 val dot = max(max(kotlin.math.abs(bx), kotlin.math.abs(by)), kotlin.math.abs(bz)) > 0.975f
                 if (dot) { r = dr; g = dg; bl = db } else { r = wr; g = wg; bl = wb }
+            } else if (marked) {
+                val dot = max(max(kotlin.math.abs(bx), kotlin.math.abs(by)), kotlin.math.abs(bz)) > 0.93f
+                if (dot) { r = sr; g = sg; bl = sb } else { r = br; g = bg; bl = bb }
             } else {
                 val disc = numbered && kotlin.math.abs(bz) > 0.86f
                 val colored = if (stripe) kotlin.math.abs(bx) < 0.52f && !disc else !disc
@@ -210,7 +224,7 @@ class BallRenderer {
             canvas.drawBitmap(bmp, -half, -half, paint)
             canvas.restore()
         }
-        if (b.id == 0 || plain || scale * radius < 6f) return
+        if (b.id == 0 || plain || bumper || scale * radius < 6f) return
         // Number on whichever disc faces the viewer.
         matrix(b)
         val vw = view
@@ -280,10 +294,18 @@ class BallRenderer {
         p.shader = null
         val base = colorOf(id)
         val alphaMul = if (dim) 0.22f else 1f
-        val striped = !plain && isStripe(id)
+        val striped = !plain && !bumper && isStripe(id)
         p.color = if (striped) WHITE else base
         p.alpha = (255 * alphaMul).toInt()
         canvas.drawCircle(cx, cy, r, p)
+        if (bumper) {
+            if (isMarked(id)) {
+                p.color = if (id == 1) WHITE else BUMPER_RED; p.alpha = (255 * alphaMul).toInt()
+                canvas.drawCircle(cx, cy, r * 0.32f, p)
+            }
+            p.alpha = 255
+            return
+        }
         if (plain) { p.alpha = 255; return }
         if (striped) {
             canvas.save()

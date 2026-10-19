@@ -1,7 +1,7 @@
 # Pool — 8-Ball, 9-Ball & Trick Shots for Android
 
 A landscape pool game on a 7, 8 or 9 ft table, with real cue-ball spin, a 3D view down the cue, physically real jump shots (and
-illegal scoops), 8-ball and 9-ball rules, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
+illegal scoops), 8-ball and 9-ball rules, bumper pool on its own table, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
 no image or sound assets (balls are rendered per-pixel and sounds are synthesized).
 
 ## Build & run
@@ -86,7 +86,7 @@ up; steeper and harder jumps higher. Follow, draw and english ride along in the 
 the cue raised, english also curves the ball, like a masse). A level cue struck low enough to dig under the ball
 **scoops** it into the air instead: the shot plays out, but it's a foul (opponent gets ball in hand), as in WPA rules.
 
-**Who breaks**: every new game, rematch and restart starts with rock, paper, scissors (fist, flat hand,
+**Who breaks**: every new 8-ball or 9-ball game, rematch and restart starts with rock, paper, scissors (fist, flat hand,
 sideways peace sign). Against the CPU you pick and it picks at random; in pass & play each player taps their own
 side (the pick stays hidden until both are in). Ties go again; the winner breaks. The two hands point at each
 other: the left one is the mirror image of the right one. Your rock, paper, scissors wins and losses, the longest
@@ -138,6 +138,31 @@ the menu and after each game.
   off in 8-ball loses (except on the break).
 - Not modelled: push-outs, break rail-count requirement.
 
+## Bumper pool (menu → Game → Bumper)
+
+Its own small table (47″ × 31½″) with a cup cut into the cloth at each end and twelve rubber bumpers: two
+flanking each cup and eight in a cross in the middle, one arm running between the cups, with a small open space at
+its centre. Each player has five balls — **red** (you / Player 1, shooting into the right-hand cup) or **white**
+(shooting into the left one) — and there is **no cue ball**: you shoot your own balls. One of each set is the
+**marked** ball, spotted in the other colour; it has to go first. Each cup is ringed in the colour of the player
+who shoots into it, and the player cards show who has what left.
+
+- **Picking a ball**: your turn starts with a ball picked for you (the marked one while it's up, then the one nearest
+  your cup). Tap any of your others (dashed yellow rings) to shoot that one instead. Aim, spin, power and the 3D view
+  work as usual; the cue is shorter.
+- **The opening**: both marked balls go at the same moment, each banked off the cushion on that player's right
+  (red the bottom one, white the top). You set your shot, then the CPU (or Player 2) sets theirs without seeing
+  yours, and both are played together. One in: that player shoots first. Neither: whoever finished nearer their
+  cup. Both: each puts another ball on their spot and you go again.
+- **Your turn** carries on while you sink one of your own in the right cup.
+- **Fouls** — one of your balls in your own cup, another of yours going in before the marked ball, a ball knocked
+  off the table (it goes back in the middle of the bumpers) or a jump shot: your opponent drops two of their balls in
+  by hand (their marked one first) and it's their turn.
+- A ball of your opponent's that you knock in, in either cup, counts for them, no penalty.
+- **Winning**: first to get all five down. Sinking your last ball in your own cup loses.
+- The shot clock works as in the other games (running out is a foul; in the opening it just means no shot).
+- The aim guide rings a ball dropping into your cup in gold and into your own cup in red.
+
 ## Trick shots (menu → Game → Trick)
 
 The table's second quarter — from the head string to the side pockets — is cut away. The cue ball starts in
@@ -186,6 +211,9 @@ model changed, and a unit test makes sure each level still has one).
   fly ballistically, collide in 3D, and pass over pockets and balls. Spin is kept in the air and the cloth grips the
   ball on every landing, so draw, follow and english act when it comes down. A ball higher than the cushions flies
   over them and off the table.
+- Bumpers (bumper pool, `Table.useBumper`): round rubber posts with the same contact model as the cushions
+  (exact time-of-impact, friction at the contact point) but livelier. A ball in the air higher than a bumper
+  passes over it. `World.cue` is the ball the cue strikes: always the cue ball except in bumper pool.
 - Regulation tables (`TableSize`): 7 ft 78″ × 39″, 8 ft 88″ × 44″, 9 ft 100″ × 50″ playing surface; 2¼″ balls, 4.5″
   corner and 5″ side pocket mouths on all of them. `Table.useStandard(size)` switches; `P.L` / `P.W` follow it.
 
@@ -198,6 +226,12 @@ angles, and estimates make-probability from cut angle, distances and its own aim
 candidates are run through the real physics engine (several speeds and spins at higher levels) and
 scored on whether they pot and how good the next shot is. With nothing makeable it plays a safety
 (level 5+) or sweeps the rails for a kick. Ball in hand is placed for the easiest shot.
+
+Bumper pool: for each ball it may shoot it tries straight at its cup, banked off each cushion, and fanned out
+either side (the bumpers deflect a lot) at a few speeds, all through the physics engine, scored on what goes in,
+fouls and how the balls are left (its own near its cup, the opponent's far from theirs). From level 4 it checks its
+best few against its own aim and speed error; from level 6 it keeps refining the best while there's time. In the
+opening it banks off its right-hand cushion. Headless, L10 beat L1 10/10 and L7 beat L3 10/10.
 
 Trick shots: it starts from the known working shots for the level, searches for more with the physics engine,
 and picks the one that still goes in most often with its own aim and speed error. Headless, a level-1 CPU made
@@ -217,7 +251,7 @@ Head-to-head (headless, 10 games each): L10 beat L1 20/20; L7 beat L4 16/20.
 ```
 app/src/main/java/com/poolgame/app/
   core/   Table.kt (constants, sizes, rails)    World.kt (physics)
-          Match.kt (racks + rules)              Ai.kt (computer player)
+          Match.kt (racks + rules, bumper pool)  Ai.kt (computer player)
           Crowd.kt (synthesized crowd "aww", shared with the web version)
           Trick.kt (trick-shot levels, match state, known shots)
           Cough.kt (synthesized cough, the foul sound until you record one)

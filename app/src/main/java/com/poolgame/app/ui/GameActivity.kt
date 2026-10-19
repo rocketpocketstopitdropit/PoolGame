@@ -36,7 +36,7 @@ class GameActivity : Activity(), GameView.Host {
             val text = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_SAVED, null) ?: return null
             val s = GameSave.readSettings(text) ?: return null
             val name = Stats.modeName(s.mode)
-            val size = " · ${s.tableSize.label}"
+            val size = if (s.mode == GameMode.BUMPER) "" else " · ${s.tableSize.label}"
             return when {
                 s.practice && s.mode == GameMode.TRICK -> "Trick-shot practice"
                 s.mode == GameMode.TRICK -> if (s.vsCpu) "$name vs CPU level ${s.level}" else "$name pass & play"
@@ -88,7 +88,7 @@ class GameActivity : Activity(), GameView.Host {
             prefs.edit().remove(KEY_SAVED).apply()   // starting fresh replaces any paused game
         }
         if (practice) { if (mode != GameMode.TRICK) mode = GameMode.EIGHT_BALL; vsCpu = false; clock = 0 }
-        if (mode == GameMode.TRICK) call = CallMode.OFF
+        if (mode == GameMode.TRICK || mode == GameMode.BUMPER) call = CallMode.OFF
 
         game = GameView(
             this, mode, vsCpu, level,

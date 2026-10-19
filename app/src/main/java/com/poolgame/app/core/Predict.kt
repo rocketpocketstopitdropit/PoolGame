@@ -60,7 +60,7 @@ object Predictor {
         scratch.copyFrom(src)
         scratch.listener = null
         scratch.trackOrientation = false
-        val c = scratch.balls[0]
+        val c = scratch.cueBall
         if (!c.onTable) return
         scratch.strike(angle, speed, side, vert, elevation)
         out.miscue = scratch.log.miscue

@@ -168,6 +168,8 @@ class Game(
 
     // Trick shots: a banner announcing each level as it starts.
     private val trick = mode == GameMode.TRICK
+    /** Bumper pool: no cue ball (you shoot your own balls), its own table, and an opening shot both players take at once. */
+    private val bumper = mode == GameMode.BUMPER
     private var bannerLevel = -1
     private var bannerT = 0.0
     private var clockStarted = false
@@ -228,6 +230,8 @@ class Game(
     init {
         balls.plain = practice && !tutorialMode
         povBalls.plain = balls.plain
+        balls.bumper = bumper
+        povBalls.bumper = bumper
         if (resume == null || !resumeGame(resume)) newGame(0)
     }
 
@@ -284,8 +288,9 @@ class Game(
         bannerLevel = -1; bannerT = 0.0
         rpsRounds = 0
         message = match.message
-        // Trick shots don't need rock, paper, scissors: who goes first doesn't matter.
-        if (practice || trick) startTurn() else startRps(false)
+        // Trick shots don't need rock, paper, scissors (who goes first doesn't matter), nor does
+        // bumper pool (both players open at the same moment).
+        if (practice || trick || bumper) startTurn() else startRps(false)
         if (tutorialMode) aimAngle = Tutorial.lineUp(match.world)
     }
 
@@ -331,7 +336,13 @@ class Game(
 
     private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practiceMode, breaker, match.callMode, tableSize)
 
-    private fun useTable() { if (mode != GameMode.TRICK) Table.useStandard(tableSize) }
+    private fun useTable() {
+        when (mode) {
+            GameMode.TRICK -> {}
+            GameMode.BUMPER -> Table.useBumper()
+            else -> Table.useStandard(tableSize)
+        }
+    }
 
     private fun resumeGame(text: String): Boolean {
         val st = GameSave.readSettings(text) ?: return false
@@ -415,7 +426,13 @@ class Game(
     }
 
     private fun aimAtNearestTarget() {
-        val c = match.world.balls[0]
+        val c = match.world.cueBall
+        if (bumper) {
+            // Bumper pool: start out aimed at the cup you're shooting for.
+            val cup = Table.pockets[match.targetCup(match.current)]
+            aimAngle = atan2(cup.cy - c.y, cup.cx - c.x)
+            return
+        }
         if (trick) {
             val b = match.world.balls[Trick.TARGET]
             if (b.onTable) { aimAngle = atan2(b.y - c.y, b.x - c.x); return }
@@ -431,10 +448,11 @@ class Game(
         cpuPlan = p
         animT = 0.0
         animFromAngle = aimAngle
-        val c = match.world.balls[0]
+        if (p.ball >= 0) match.selectBall(p.ball)   // bumper pool: the ball it's going to shoot
+        val c = match.world.cueBall
         animFromX = c.x; animFromY = c.y
         if (p.hasPlacement && !match.placeCue(p.placeX, p.placeY)) {
-            cpuPlan = Plan(p.angle, p.speed, p.side, p.vert, p.kind, elevation = p.elevation, pocket = p.pocket)
+            cpuPlan = Plan(p.angle, p.speed, p.side, p.vert, p.kind, elevation = p.elevation, pocket = p.pocket, ball = p.ball)
         }
         if (match.callAllowed()) {
             match.calledPocket = when {
@@ -449,7 +467,7 @@ class Game(
     private fun nearestPocketToAim(): Int {
         match.world.castCue(aimAngle, hit)
         val id = hit[3].toInt()
-        val b = if (hit[0] == 1.0 && id > 0) match.world.balls[id] else match.world.balls[0]
+        val b = if (hit[0] == 1.0 && id > 0) match.world.balls[id] else match.world.cueBall
         return match.world.nearestPocket(b.x, b.y)
     }
 
@@ -457,6 +475,7 @@ class Game(
     private fun powerFor(speed: Double) = ((speed - 0.25) / (P.MAX_CUE_SPEED - 0.25)).coerceIn(0.0, 1.0).pow(1 / 1.6)
 
     private fun shoot(angle: Double, speed: Double, side: Double, vert: Double, elev: Double) {
+        if (match.openingPending()) { openingShot(angle, speed, side, vert, elev); return }
         if (practice) practiceSnapshot = World().also { it.copyFrom(match.world) }
         turnSave = GameSave.write(match, settings())
         sfx.strike(speed)
@@ -464,6 +483,25 @@ class Game(
         lockPov()
         phase = Phase.RUNNING
         clearTouches()
+    }
+
+    /**
+     * Bumper pool's opening: each player's shot is held (unseen) until the other has set theirs,
+     * then both marked balls go at the same moment.
+     */
+    private fun openingShot(angle: Double, speed: Double, side: Double, vert: Double, elev: Double) {
+        clearTouches()
+        power = 0.0
+        if (!match.setOpening(angle, speed, side, vert, elev)) {
+            message = match.message
+            phase = Phase.PAUSE; pauseT = 0.9
+            return
+        }
+        turnSave = GameSave.write(match, settings())
+        sfx.strike(max(speed, 1.0))
+        match.fireOpening()
+        lockPov()
+        phase = Phase.RUNNING
     }
 
     private fun clearTouches() { for (i in ptrMode.indices) ptrMode[i] = Touch.NONE }
@@ -601,8 +639,11 @@ class Game(
                     if (secs in 1..5 && secs != lastBeep) { lastBeep = secs; sfx.beep() }
                     if (clockLeft <= 0) {
                         clearTouches(); power = 0.0
-                        message = match.timeFoul().message
-                        phase = Phase.PAUSE; pauseT = 1.0
+                        if (match.openingPending()) openingShot(aimAngle, 0.0, 0.0, 0.0, 0.0)   // time's up: no opening shot
+                        else {
+                            message = match.timeFoul().message
+                            phase = Phase.PAUSE; pauseT = 1.0
+                        }
                     }
                 }
             }
@@ -611,7 +652,7 @@ class Game(
                 if (!match.world.anyMoving()) {
                     if (practice) {
                         tut?.onShotDone(!match.world.balls[Tutorial.TARGET_BALL].onTable)
-                        message = if (!match.world.balls[0].onTable) { match.respawnCue(); "Cue ball respotted · hold it to move it" }
+                        message = if (!match.world.cueBall.onTable) { match.respawnCue(); "Cue ball respotted · hold it to move it" }
                             else if (match.world.log.scooped) "Scoop shot — in a game that's a foul" else ""
                         phase = Phase.HUMAN; power = 0.0; povLocked = false
                     } else if (trickPractice) {
@@ -704,7 +745,7 @@ class Game(
 
     /** Which tutorial target a touch at (x, y) would use. */
     private fun regionAt(x: Double, y: Double): TutTarget {
-        val c = match.world.balls[0]
+        val c = match.world.cueBall
         return when {
             powerRect.l - 20 <= x && x <= powerRect.r + 20 && y >= powerRect.t - 30 && y <= powerRect.b + 20 -> TutTarget.POWER
             hypot(x - spinCx, y - spinCy) <= spinR * 1.2 -> TutTarget.SPIN
@@ -736,7 +777,7 @@ class Game(
             TutTarget.POWER -> tutShape.set(powerRect.l - 10, powerRect.t - 24, powerRect.r + 10, powerRect.b + 18)
             TutTarget.TRAY -> tutShape.set(trayRect.l - pad, trayRect.t - pad, trayRect.r + pad, trayRect.b + pad)
             TutTarget.CUE -> {
-                val c = match.world.balls[0]
+                val c = match.world.cueBall
                 val r = max(rpx * 2.6, 22.0)
                 tutShape.set(sx(c.x) - r, sy(c.y) - r, sx(c.x) + r, sy(c.y) + r); tutRound = true
             }
@@ -1022,8 +1063,13 @@ class Game(
             // Keep the pocket holes off the floor in the gap.
             c.beginPath(); c.rect(0.0, 0.0, gl, h); c.rect(gr2, 0.0, w - gr2, h); c.clip()
         }
-        for (pk in Table.pockets) {
+        for ((pi, pk) in Table.pockets.withIndex()) {
             val pr = pk.capR * scale
+            if (Table.bumper) {
+                // Bumper pool: each cup is ringed in the colour of the player who shoots into it.
+                c.strokeStyle = if (pi == 1) "#C62828" else "#EDE6D2"; c.lineWidth = 4.0
+                c.circle(sx(pk.cx), sy(pk.cy), pr + 5); c.stroke()
+            }
             if (pk.hole) {
                 // A cup cut into the cloth, like a golf hole.
                 val cup = c.createRadialGradient(sx(pk.cx) - pr * 0.2, sy(pk.cy) - pr * 0.25, 0.0, sx(pk.cx), sy(pk.cy), pr)
@@ -1042,6 +1088,17 @@ class Game(
         c.restore()
         c.strokeStyle = "#0E4A2D"; c.lineWidth = 2.0; c.lineCap = "round"
         for (sg in Table.segs) c.line(sx(sg.ax), sy(sg.ay), sx(sg.bx), sy(sg.by))
+        // Bumpers: a black rubber ring with a red band and a metal cap, seen from above.
+        for (pt in Table.posts) {
+            val px = sx(pt.x); val py = sy(pt.y); val pr = pt.r * scale
+            c.fillStyle = "rgba(0,0,0,0.35)"; c.circle(px + pr * 0.2, py + pr * 0.32, pr * 1.08); c.fill()
+            c.fillStyle = "#1C1C1C"; c.circle(px, py, pr); c.fill()
+            c.fillStyle = "#8E1A1A"; c.circle(px, py, pr * 0.8); c.fill()
+            c.fillStyle = "#1C1C1C"; c.circle(px, py, pr * 0.62); c.fill()
+            val cap = c.createRadialGradient(px - pr * 0.2, py - pr * 0.25, 0.0, px, py, pr * 0.5)
+            cap.addColorStop(0.0, "#F4F6F8"); cap.addColorStop(1.0, "#8D949B")
+            c.fillStyle = cap; c.circle(px, py, pr * 0.5); c.fill()
+        }
 
         c.fillStyle = "#EDE3C8"
         val dOff = rail * 0.55
@@ -1055,7 +1112,7 @@ class Game(
             diamond(sx(-dOff), sy(y))
             if (!(Table.gap && i == 2)) diamond(sx(P.L + dOff), sy(y))
         }
-        if (Table.gap) return
+        if (Table.gap || Table.bumper) return
         c.strokeStyle = "rgba(255,255,255,0.19)"; c.lineWidth = 1.0
         c.setLineDash(arrayOf(4.0, 6.0)); c.line(sx(P.HEAD_X), sy(0.0), sx(P.HEAD_X), sy(P.W)); c.setLineDash(noDash)
         c.fillStyle = "rgba(255,255,255,0.33)"
@@ -1089,7 +1146,7 @@ class Game(
         }
         if (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) drawGuide(ctx)
 
-        val cue = w.balls[0]
+        val cue = w.cueBall
         var cueX = cue.x; var cueY = cue.y
         val plan = cpuPlan
         if (phase == Phase.CPU_ANIM && plan != null && plan.hasPlacement && animT < 0.45) {
@@ -1100,7 +1157,7 @@ class Game(
         // Shadows stay on the cloth, right under the ball. A ball in the air casts a smaller, fainter one;
         // a ball dropping into the gap has no cloth under it, so no shadow.
         for (b in w.balls) if (b.onTable) {
-            val bx = if (b.id == 0) cueX else b.x; val by = if (b.id == 0) cueY else b.y
+            val bx = if (b.id == w.cue) cueX else b.x; val by = if (b.id == w.cue) cueY else b.y
             if (b.z < 0.0) continue
             val h = (b.z / 0.12).coerceIn(0.0, 1.0)
             balls.drawShadow(ctx, sx(bx), sy(by), 1 - 0.35 * h, 1 - 0.55 * h)
@@ -1114,7 +1171,7 @@ class Game(
             balls.draw(ctx, b, sx(b.x), sy(b.y), (1 + b.z * 6).coerceAtLeast(0.45))
         }
         for (b in w.balls) if (b.onTable && b.z == 0.0) {
-            val bx = if (b.id == 0) cueX else b.x; val by = if (b.id == 0) cueY else b.y
+            val bx = if (b.id == w.cue) cueX else b.x; val by = if (b.id == w.cue) cueY else b.y
             balls.draw(ctx, b, sx(bx), sy(by))
         }
         // In the air: the height is exaggerated on screen (the distance is real) so a jump is easy to
@@ -1141,6 +1198,12 @@ class Game(
             if (dragInvalid) { ctx.strokeStyle = "rgba(255,64,64,0.8)"; ctx.circle(dragX, dragY, rpx); ctx.stroke() }
         }
         drawPocketCall(ctx)
+        if (bumper && humanTurn) {
+            // The other balls you could shoot instead: tap one to pick it.
+            ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(255,214,64,0.6)"; ctx.setLineDash(arrayOf(3.0, 4.0))
+            for (id in match.shootable()) if (id != w.cue) { val b = w.balls[id]; ctx.circle(sx(b.x), sy(b.y), rpx * 1.45); ctx.stroke() }
+            ctx.setLineDash(noDash)
+        }
 
         val showCue = (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) ||
             (phase == Phase.CPU_ANIM && (plan == null || !plan.hasPlacement || animT >= 0.45))
@@ -1239,7 +1302,7 @@ class Game(
     private fun guideSpeed() = speedFor(if (power > 0.02) power else lastPower)
 
     private fun updatePrediction() {
-        val c = match.world.balls[0]
+        val c = match.world.cueBall
         val sp = guideSpeed()
         val k = doubleArrayOf(aimAngle, sp, spinX, spinY, elevDeg, c.x, c.y, match.current.toDouble(),
             generation + (if (match.ballInHand) 0.5 else 0.0))
@@ -1250,7 +1313,7 @@ class Game(
     }
 
     private fun drawGuide(ctx: Ctx2D) {
-        val c = match.world.balls[0]
+        val c = match.world.cueBall
         if (!c.onTable) return
         if (!showPrediction) {
             match.world.railPoint(aimAngle, hit)
@@ -1299,8 +1362,11 @@ class Game(
             ctx.circle(sx(pr.cueX[pr.cueN - 1].toDouble()), sy(pr.cueY[pr.cueN - 1].toDouble()), rpx); ctx.stroke()
         }
         if (pr.scratch) {
-            ctx.strokeStyle = "rgba(255,80,80,0.88)"; ctx.lineWidth = 2.0
-            ctx.circle(sx(pr.cueX[pr.cueN - 1].toDouble()), sy(pr.cueY[pr.cueN - 1].toDouble()), rpx * 1.3); ctx.stroke()
+            val lx = pr.cueX[pr.cueN - 1].toDouble(); val ly = pr.cueY[pr.cueN - 1].toDouble()
+            // Bumper pool: dropping into the cup you're shooting for is the point (gold), your own cup is a foul (red).
+            val good = bumper && intoTargetCup(lx, ly)
+            ctx.strokeStyle = if (good) "rgba(255,214,64,0.95)" else "rgba(255,80,80,0.88)"; ctx.lineWidth = 2.0
+            ctx.circle(sx(lx), sy(ly), rpx * 1.3); ctx.stroke()
         }
         // Jump shots: where the cue ball first comes down. It slides smoothly as you add power.
         if (!pr.landX.isNaN()) {
@@ -1311,11 +1377,19 @@ class Game(
         }
     }
 
+    /** Bumper pool: the guide's ball drops at (x, y) into the cup the current player is shooting for. */
+    private fun intoTargetCup(x: Double, y: Double): Boolean {
+        val pk = Table.pockets[match.targetCup(match.current)]
+        return hypot(x - pk.cx, y - pk.cy) < pk.capR + 0.06
+    }
+
     private fun drawCueStick(ctx: Ctx2D, cx: Double, cy: Double) {
         val s = scale
         val fore = cos(toRad(elevDeg))
         val gap = (P.R + 0.012 + power * 0.22) * s * fore
-        val len = 1.45 * s * fore
+        // Bumper pool is played with a short cue (and on a small table a full-length one hangs off the screen).
+        val k = if (bumper) SHORT_CUE else 1.0
+        val len = 1.45 * s * fore * k
         val tipW = 0.0065 * s; val buttW = 0.015 * s
         fun halfW(x: Double) = tipW + (buttW - tipW) * ((-x - gap) / len)
         ctx.save()
@@ -1326,7 +1400,7 @@ class Game(
         ctx.beginPath(); ctx.moveTo(-gap, -tipW); ctx.lineTo(-gap - len, -buttW); ctx.lineTo(-gap - len, buttW); ctx.lineTo(-gap, tipW); ctx.closePath(); ctx.fill()
         ctx.restore()
         for (i in 0 until 8) {
-            val a = -gap - stickSegs[i] * s * fore; val b = -gap - stickSegs[i + 1] * s * fore
+            val a = -gap - stickSegs[i] * s * fore * k; val b = -gap - stickSegs[i + 1] * s * fore * k
             ctx.fillStyle = stickGrads[i]
             ctx.beginPath(); ctx.moveTo(a, -halfW(a)); ctx.lineTo(b, -halfW(b)); ctx.lineTo(b, halfW(b)); ctx.lineTo(a, halfW(a)); ctx.closePath(); ctx.fill()
         }
@@ -1379,6 +1453,9 @@ class Game(
             ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
             val lvl = if (t.suddenDeath) "Sudden death" else "Level ${t.levelNo + 1} of ${Trick.LEVELS.size}"
             ctx.fillText(ellipsize(ctx, "$lvl · ${Trick.LEVELS[t.level].name} · fewest shots wins", midR - midL), (midL + midR) / 2, subY)
+        } else if (bumper && phase == Phase.HUMAN) {
+            ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
+            ctx.fillText(ellipsize(ctx, match.bumperHint(), midR - midL), (midL + midR) / 2, subY)
         } else if (mode == GameMode.NINE_BALL) {
             val r = min(hudH * 0.13, 9.0)
             var x = (midL + midR) / 2 - 9 * r * 2.4 / 2 + r
@@ -1476,6 +1553,11 @@ class Game(
                 if (t.made[player] > 0) sb.append(" = ${t.score(player)}")
             }
             ctx.fillText(sb.toString(), r.l + 12, iy + iconR * 0.4)
+        } else if (bumper) {
+            // Five balls each (dim once they're down), and which way this player shoots.
+            var x = r.l + 12 + iconR
+            for (id in match.bumperBalls(player)) { balls.icon(ctx, id, x, iy, iconR, !match.world.balls[id].onTable); x += iconR * 2.3 }
+            ctx.fillText(ellipsize(ctx, if (match.targetCup(player) == 1) "red · shoots ▶" else "white · shoots ◀", r.r - x - 4), x, iy + iconR * 0.4)
         } else if (mode == GameMode.EIGHT_BALL) {
             val g = match.groups[player]
             if (g == Group.OPEN) {
@@ -1831,7 +1913,7 @@ class Game(
             }
         }
         if (phase != Phase.HUMAN) return
-        val c = match.world.balls[0]
+        val c = match.world.cueBall
         val spinDist = hypot(x - spinCx, y - spinCy)
         val inTable = tableArea.contains(x, y)
         val grabbed = if (!pov && practice && !tutorialMode && inTable) ballUnder(x, y) else -1
@@ -1877,7 +1959,7 @@ class Game(
         val reach = max(rpx * 1.5, 18.0)
         var best = -1; var bestD = Double.MAX_VALUE
         for (b in match.world.balls) {
-            if (!b.onTable || b.id == 0) continue
+            if (!b.onTable || b.id == match.world.cue) continue
             val d = hypot(x - sx(b.x), y - sy(b.y))
             if (d < reach && d < bestD) { best = b.id; bestD = d }
         }
@@ -1933,7 +2015,7 @@ class Game(
                     dragInvalid = !match.placeCue(q[0], q[1])
                 } else {
                     val maxX = if (match.kitchenOnly) P.HEAD_X else P.L - P.R
-                    val c0 = match.world.balls[0]
+                    val c0 = match.world.cueBall
                     val bx = c0.x; val by = c0.y
                     dragInvalid = !match.placeCue(px.coerceIn(P.R, maxX), py.coerceIn(P.R, P.W - P.R))
                     tut?.onCueMoved(hypot(c0.x - bx, c0.y - by))
@@ -1968,7 +2050,7 @@ class Game(
             } else power = 0.0
         }
         if (mode == Touch.MOVE_CUE) dragInvalid = false
-        if (mode == Touch.TAP_BALL) { aimAtBall(ptrBall[id]); setPov(true) }
+        if (mode == Touch.TAP_BALL && !pickBumperBall(ptrBall[id])) { aimAtBall(ptrBall[id]); setPov(true) }
         if (mode == Touch.POV && ptrAxis[id] == 0) povTap(ptrDownX[id], ptrDownY[id])
         if (mode == Touch.PENDING) {
             if (ptrBall[id] > 0 && povAllowed()) { aimAtBall(ptrBall[id]); setPov(true) }
@@ -1980,7 +2062,7 @@ class Game(
     fun cancelTouches() { if (anyTouch(Touch.POWER)) power = 0.0; clearTouches(); movingBall = -1 }
 
     private fun aimAt(x: Double, y: Double) {
-        val c = match.world.balls[0]
+        val c = match.world.cueBall
         val dx = x - sx(c.x); val dy = y - sy(c.y)
         if (hypot(dx, dy) > rpx * 0.8) {
             val a = atan2(dy, dx)
@@ -2008,7 +2090,7 @@ class Game(
 
     /** Hold the camera where it is (it otherwise follows the cue ball). */
     private fun lockPov() {
-        val c = match.world.balls[0]
+        val c = match.world.cueBall
         povLocked = true; povLockX = c.x; povLockY = c.y
     }
 
@@ -2021,7 +2103,7 @@ class Game(
     /** One finger down on the 3D view: the cue ball (ball in hand), a ball to move (practice), or aim / cue angle. */
     private fun povDown(id: Int, x: Double, y: Double): Touch {
         ptrLastX[id] = x; ptrLastY[id] = y; ptrLastT[id] = now(); ptrVel[id] = 0.0; ptrAxis[id] = 0
-        val c = match.world.balls[0]
+        val c = match.world.cueBall
         if (match.ballInHand && c.onTable && !anyTouch(Touch.MOVE_CUE) && !anyTouch(Touch.POWER) &&
             povCam.project(c.x, c.y, P.R, povPt)) {
             val r = povCam.ballRadius(povPt[2])
@@ -2041,7 +2123,7 @@ class Game(
     private fun povBallUnder(x: Double, y: Double, cue: Boolean): Int {
         var best = -1; var bestD = Double.MAX_VALUE
         for (b in match.world.balls) {
-            if (!b.onTable || (b.id == 0 && !cue)) continue
+            if (!b.onTable || (b.id == match.world.cue && !cue)) continue
             if (!povCam.project(b.x, b.y, P.R + b.z, povPt)) continue
             val r = povCam.ballRadius(povPt[2])
             if (hypot(x - povPt[0], y - povPt[1]) < max(r * 1.3, 16.0) && povPt[2] < bestD) { best = b.id; bestD = povPt[2] }
@@ -2062,10 +2144,23 @@ class Game(
         camDist = d; camMidX = mx; camMidY = my
     }
 
+    /**
+     * Bumper pool: a tap on one of your own balls picks it to shoot (aimed at your cup). Returns true
+     * if the tap was taken that way: your ball, picked or not (the marked ball has to go first).
+     */
+    private fun pickBumperBall(id: Int): Boolean {
+        if (!bumper || match.ownerOf(id) != match.current) return false
+        if (match.selectBall(id)) {
+            aimAtNearestTarget()
+            sfx.ball(0.6)
+        } else message = match.bumperHint()
+        return true
+    }
+
     /** Aim straight at the centre of ball [id]. */
     private fun aimAtBall(id: Int) {
-        val c = match.world.balls[0]; val b = match.world.balls[id]
-        if (!b.onTable || id == 0) return
+        val c = match.world.cueBall; val b = match.world.balls[id]
+        if (!b.onTable || id == match.world.cue) return
         val a = atan2(b.y - c.y, b.x - c.x)
         var d = a - aimAngle
         while (d > PI) d -= 2 * PI
@@ -2113,12 +2208,12 @@ class Game(
         }
         var best = -1; var bestD = Double.MAX_VALUE
         for (b in match.world.balls) {
-            if (!b.onTable || b.id == 0) continue
+            if (!b.onTable || b.id == match.world.cue) continue
             if (!povCam.project(b.x, b.y, P.R + b.z, povPt)) continue
             val r = povCam.ballRadius(povPt[2])
             if (hypot(x - povPt[0], y - povPt[1]) < max(r * 1.3, 16.0) && povPt[2] < bestD) { best = b.id; bestD = povPt[2] }
         }
-        if (best > 0) aimAtBall(best)
+        if (best > 0 && !pickBumperBall(best)) aimAtBall(best)
     }
 
     // ------------------------------------------------------------------ 3D view (drawing)
@@ -2126,7 +2221,7 @@ class Game(
     /** The view down the cue: the table in 3D, the balls, the aim guide and the cue, plus Top view. */
     private fun drawPov(ctx: Ctx2D) {
         val w = match.world
-        val c = w.balls[0]
+        val c = w.cueBall
         val a = tableArea
         // The camera orbits the cue ball (where it's being placed, during the CPU's ball in hand),
         // or holds still while balls roll and while a ball is being dragged.
@@ -2251,7 +2346,7 @@ class Game(
 
     /** The aim guide, drawn on the cloth in 3D (before the cushions and balls, which can hide it). */
     private fun drawPovGuide(ctx: Ctx2D) {
-        val c = match.world.balls[0]
+        val c = match.world.cueBall
         if (!c.onTable) return
         val h = 0.002
         ctx.lineCap = "round"; ctx.lineJoin = "round"
@@ -2345,6 +2440,8 @@ class Game(
 
     private companion object {
         const val RPS_BEAT = 0.42
+        /** Bumper pool cue length, as a fraction of a full-length one (shorter than a real bumper cue, so it stays over the table). */
+        const val SHORT_CUE = 0.55
         /** 3D view: radians the cue turns per px of sideways drag at moderate speed. */
         const val POV_AIM_PER_PX = 0.0022
         /** 3D view: degrees the cue rises per px of upward drag. */

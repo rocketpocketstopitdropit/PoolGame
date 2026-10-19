@@ -69,6 +69,7 @@ class Stats(context: Context) {
             GameMode.EIGHT_BALL -> "8-Ball"
             GameMode.NINE_BALL -> "9-Ball"
             GameMode.TRICK -> "Trick shots"
+            GameMode.BUMPER -> "Bumper pool"
         }
     }
 }

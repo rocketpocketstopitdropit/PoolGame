@@ -126,7 +126,9 @@ object ControlsGuide {
             "Calling a pocket (when Call pocket is on in the menu): tap the pocket you're shooting at; tap it again " +
                 "to cancel. Gold rings around the pockets mean a call is needed before you can shoot.",
             "Practice: tap a ball to aim at it. Hold a finger still on any ball for a moment to pick it up, then " +
-                "drag it anywhere."
+                "drag it anywhere.",
+            "Bumper pool: there's no cue ball, you shoot your own balls. Tap one of yours (the ones with a dashed " +
+                "gold ring) to shoot it instead; your marked ball has to go first. The cup ringed in your colour is yours."
         )),
         Item(7, "Spin ball", "Right, top", listOf(
             "The cue ball as you see it down the cue. Touch where you want the tip to strike it; drag to adjust. " +

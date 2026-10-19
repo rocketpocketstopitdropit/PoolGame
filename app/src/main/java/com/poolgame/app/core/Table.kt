@@ -68,7 +68,11 @@ object P {
     val FOOT_Y get() = W * 0.5
 
     internal fun resize(s: TableSize) { L = s.length; W = s.width }
+    internal fun resize(l: Double, w: Double) { L = l; W = w }
 }
+
+/** A round bumper post (bumper pool): a rubber ring on a post, standing up off the cloth. */
+class Post(val x: Double, val y: Double, val r: Double)
 
 class Seg(val ax: Double, val ay: Double, val bx: Double, val by: Double) {
     val dx = bx - ax
@@ -103,6 +107,12 @@ object Table {
         private set
     var pockets: Array<Pocket> = emptyArray()
         private set
+    /** Bumper posts standing on the cloth (only the bumper pool table has them). */
+    var posts: Array<Post> = emptyArray()
+        private set
+    /** True while the bumper pool table is in use. */
+    var bumper = false
+        private set
     /** True while the gap table is in use (balls over the gap fall to the floor). */
     var gap = false
         private set
@@ -121,7 +131,7 @@ object Table {
 
     /** The regulation table: four corner pockets and two side pockets, in [s] (default: the size in use). */
     fun useStandard(s: TableSize = size) {
-        if (segs.isNotEmpty() && !gap && s == size) return
+        if (segs.isNotEmpty() && !gap && !bumper && s == size) return
         size = s
         P.resize(s)
         val L = P.L; val W = P.W
@@ -150,9 +160,48 @@ object Table {
         }
         segs = s.toTypedArray()
         pockets = p.toTypedArray()
+        posts = emptyArray()
         gap = false
+        bumper = false
         holeKey = ""
         hasHoles = false
+        version++
+    }
+
+    // Bumper pool table: 47" x 31.5" playing surface, a cup cut into the cloth at each end and
+    // twelve rubber bumpers — two flanking each cup, and eight in a cross in the middle (one arm
+    // of the cross runs between the cups) with a small open space at its centre.
+    const val BUMPER_L = 1.2
+    const val BUMPER_W = 0.8
+    /** Bumper pool cups: centre this far in from each end cushion, and the drop radius for a ball's centre. */
+    const val CUP_IN = 0.13
+    const val CUP_R = 0.05
+    /** Radius of a bumper (its rubber ring) and how high it stands (a ball higher than this passes over). */
+    const val POST_R = 0.025
+    const val POST_H = 0.055
+
+    /** The bumper pool table. Pocket 0 is the cup at the left end (x = 0), pocket 1 the one at the right. */
+    fun useBumper() {
+        if (bumper) return
+        P.resize(BUMPER_L, BUMPER_W)
+        val L = P.L; val W = P.W
+        val cy = W / 2
+        segs = arrayOf(Seg(0.0, 0.0, L, 0.0), Seg(0.0, W, L, W), Seg(0.0, 0.0, 0.0, W), Seg(L, 0.0, L, W))
+        pockets = arrayOf(CUP_IN, L - CUP_IN).map { x ->
+            Pocket(x, cy, CUP_R, x, cy, false, doubleArrayOf(x - CUP_R, cy, x + CUP_R, cy), CUP_R - P.R * 0.5, hole = true)
+        }.toTypedArray()
+        val ps = ArrayList<Post>()
+        for (x in doubleArrayOf(CUP_IN, L - CUP_IN)) for (s in doubleArrayOf(-1.0, 1.0)) ps += Post(x, cy + s * 0.095, POST_R)
+        val mx = L / 2
+        for (d in doubleArrayOf(0.11, 0.21)) for (s in doubleArrayOf(-1.0, 1.0)) {
+            ps += Post(mx + s * d, cy, POST_R)    // the arm between the cups
+            ps += Post(mx, cy + s * d, POST_R)    // the arm across the table
+        }
+        posts = ps.toTypedArray()
+        gap = false
+        bumper = true
+        holeKey = ""
+        hasHoles = true
         version++
     }
 
@@ -164,7 +213,7 @@ object Table {
      */
     fun useGap(holes: List<DoubleArray> = emptyList(), farCorners: Boolean = true) {
         val key = holes.joinToString(";") { "${it[0]},${it[1]}" } + "|$farCorners"
-        if (gap && key == holeKey) return
+        if (gap && !bumper && key == holeKey) return
         P.resize(TableSize.NINE)
         val L = P.L; val W = P.W
         val s = ArrayList<Seg>()
@@ -190,6 +239,8 @@ object Table {
         }
         segs = s.toTypedArray()
         pockets = p.toTypedArray()
+        posts = emptyArray()
+        bumper = false
         gap = true
         holeKey = key
         hasHoles = holes.isNotEmpty()

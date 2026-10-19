@@ -23,6 +23,9 @@ class Balls {
         const val DOT = 0xFFC8222A.toInt()
         const val PRACTICE_RED = 0xFFC62828.toInt()
         const val PRACTICE_YELLOW = 0xFFF2BE00.toInt()
+        // Bumper pool: five red and five white balls; the marked one of each is spotted in the other colour.
+        const val BUMPER_RED = 0xFFC62828.toInt()
+        fun isMarked(id: Int) = id == 1 || id == 6
         fun isStripe(id: Int) = id in 9..15
         // Light from upper left, above the table (world space; up is -z).
         private val LL = sqrt(0.35 * 0.35 + 0.55 * 0.55 + 1.0)
@@ -45,6 +48,10 @@ class Balls {
     var plain = false
         set(v) { field = v; for (i in 0 until 16) lastQ[i][0] = Double.NaN }
 
+    /** Bumper pool style: red balls 1-5 and white 6-10, no numbers; 1 and 6 are spotted (the marked balls). */
+    var bumper = false
+        set(v) { field = v; for (i in 0 until 16) lastQ[i][0] = Double.NaN }
+
     var radius = 0.0       // CSS px
         private set
     private var dpr = 1.0
@@ -58,7 +65,7 @@ class Balls {
     private var shadow: dynamic = null
     private var shadowSize = 0
 
-    private fun colorOf(id: Int): Int = if (!plain) BASE[id] else when (id) {
+    private fun colorOf(id: Int): Int = if (bumper) (if (id in 1..5) BUMPER_RED else WHITE) else if (!plain) BASE[id] else when (id) {
         0 -> BASE[0]
         8 -> BASE[8]
         in 1..7 -> PRACTICE_RED
@@ -130,9 +137,13 @@ class Balls {
         val br = (base shr 16) and 255; val bg = (base shr 8) and 255; val bb = base and 255
         val wr = (WHITE shr 16) and 255; val wg = (WHITE shr 8) and 255; val wb = WHITE and 255
         val dr = (DOT shr 16) and 255; val dg = (DOT shr 8) and 255; val db = DOT and 255
-        val stripe = !plain && isStripe(b.id)
+        val stripe = !plain && !bumper && isStripe(b.id)
         val cue = b.id == 0
-        val numbered = !plain
+        val numbered = !plain && !bumper
+        // A marked bumper pool ball: spots of the other colour (white on red, red on white).
+        val marked = bumper && isMarked(b.id)
+        val spot = if (b.id == 1) WHITE else BUMPER_RED
+        val sr = (spot shr 16) and 255; val sg = (spot shr 8) and 255; val sb = spot and 255
         val m0 = m[0]; val m1 = m[1]; val m2 = m[2]; val m3 = m[3]; val m4 = m[4]; val m5 = m[5]
         val m6 = m[6]; val m7 = m[7]; val m8 = m[8]
         val img = images[b.id]!!
@@ -167,6 +178,8 @@ class Balls {
             var r: Int; var g: Int; var bl: Int
             if (cue) {
                 if (max(max(abs(bx), abs(by)), abs(bz)) > 0.975) { r = dr; g = dg; bl = db } else { r = wr; g = wg; bl = wb }
+            } else if (marked) {
+                if (max(max(abs(bx), abs(by)), abs(bz)) > 0.93) { r = sr; g = sg; bl = sb } else { r = br; g = bg; bl = bb }
             } else {
                 val disc = numbered && abs(bz) > 0.86
                 val colored = if (stripe) abs(bx) < 0.52 && !disc else !disc
@@ -188,7 +201,7 @@ class Balls {
         ctx.globalAlpha = alphaMul
         ctx.drawImage(cv, sx - sz / 2, sy - sz / 2, sz, sz)
         ctx.globalAlpha = 1.0
-        if (b.id == 0 || plain || scale * radius < 6) return
+        if (b.id == 0 || plain || bumper || scale * radius < 6) return
         matrix(b)
         val v = view
         val ax = m[2]; val ay = m[5]; val az = m[8]
@@ -239,10 +252,13 @@ class Balls {
     fun icon(ctx: Ctx2D, id: Int, cx: Double, cy: Double, r: Double, dim: Boolean) {
         val base = colorOf(id)
         ctx.globalAlpha = if (dim) 0.22 else 1.0
-        val striped = !plain && isStripe(id)
+        val striped = !plain && !bumper && isStripe(id)
         ctx.fillStyle = col(if (striped) WHITE else base)
         ctx.circle(cx, cy, r); ctx.fill()
-        if (!plain) {
+        if (bumper) {
+            if (isMarked(id)) { ctx.fillStyle = col(if (id == 1) WHITE else BUMPER_RED); ctx.circle(cx, cy, r * 0.32); ctx.fill() }
+            if (id in 6..10) { ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1.0; ctx.circle(cx, cy, r - 0.5); ctx.stroke() }
+        } else if (!plain) {
             if (striped) {
                 ctx.save()
                 ctx.beginPath(); ctx.rect(cx - r, cy - r * 0.55, 2 * r, r * 1.1); ctx.clip()

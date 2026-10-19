@@ -170,6 +170,13 @@ class PovScene {
         const val POCKET = 0xFF050505.toInt()
         const val SHADOW = 0x5A000000
         const val DIAMOND = 0xFFEDE3C8.toInt()
+        // Bumper pool: the bumpers' rubber rings and caps, and the rings round the cups in the colour
+        // of the player who shoots into them.
+        const val POST_RUBBER = 0xFF1C1C1C.toInt()
+        const val POST_BAND = 0xFF8E1A1A.toInt()
+        const val POST_TOP = 0xFFB9BFC5.toInt()
+        const val RING_RED = 0xFFC62828.toInt()
+        const val RING_WHITE = 0xFFEDE6D2.toInt()
 
         const val NOSE_H = 0.036     // cushion nose height
         const val RAIL_H = 0.044     // top of the rails
@@ -315,13 +322,15 @@ class PovScene {
         clothR = cam.focal * L * 0.75 / q[2].coerceAtLeast(0.3)
 
         // ---- layer 1: pockets and holes in the cloth, and the balls' shadows.
+        if (Table.bumper) for ((i, pk) in Table.pockets.withIndex())
+            disc(pk.cx, pk.cy, 0.0003, pk.capR + 0.009, if (i == 1) RING_RED else RING_WHITE, 1, 24)
         for (pk in Table.pockets) {
             if (Table.gap && Table.overGap(pk.cx)) continue
             disc(pk.cx, pk.cy, 0.0005, pk.capR, POCKET, 1)
         }
         for (b in w.balls) {
             if (!b.onTable || b.z < 0.0) continue
-            val x = if (b.id == 0) cueX else b.x; val y = if (b.id == 0) cueY else b.y
+            val x = if (b.id == w.cue) cueX else b.x; val y = if (b.id == w.cue) cueY else b.y
             val up = (b.z / 0.12).coerceIn(0.0, 1.0)
             disc(x + 0.006, y + 0.008, 0.001, P.R * (0.95 - 0.3 * up), SHADOW, 1, 14)
         }
@@ -372,10 +381,12 @@ class PovScene {
             disc(-dOff, y, RAIL_H + 0.001, 0.007, DIAMOND, 2, 6)
             disc(L + dOff, y, RAIL_H + 0.001, 0.007, DIAMOND, 2, 6)
         }
+        // Bumpers.
+        for (pt in Table.posts) post(pt)
         // Balls.
         for (b in w.balls) {
             if (!b.onTable) continue
-            val x = if (b.id == 0) cueX else b.x; val y = if (b.id == 0) cueY else b.y
+            val x = if (b.id == w.cue) cueX else b.x; val y = if (b.id == w.cue) cueY else b.y
             if (!cam.project(x, y, P.R + b.z, q)) continue
             val r = cam.ballRadius(q[2])
             if (q[0] + r < cam.left || q[0] - r > cam.right || q[1] + r < cam.top || q[1] - r > cam.bottom) continue
@@ -391,6 +402,21 @@ class PovScene {
         // Insertion sort is fine: a few hundred items, mostly in order frame to frame.
         val tail = order.copyOfRange(l2, n).sortedByDescending { depth[it] }
         for (i in tail.indices) order[l2 + i] = tail[i]
+    }
+
+    /** A bumper: a short round post, black rubber with a red band, and a metal cap. */
+    private fun post(pt: Post) {
+        val segs = 14
+        val h1 = Table.POST_H * 0.45; val h2 = Table.POST_H * 0.78; val h3 = Table.POST_H
+        for (i in 0 until segs) {
+            val a0 = 2 * PI * i / segs; val a1 = 2 * PI * (i + 1) / segs; val am = (a0 + a1) / 2
+            val x0 = pt.x + pt.r * cos(a0); val y0 = pt.y + pt.r * sin(a0)
+            val x1 = pt.x + pt.r * cos(a1); val y1 = pt.y + pt.r * sin(a1)
+            faceToward(x0, y0, x1, y1, cos(am), sin(am), 0.0, h1, POST_RUBBER)
+            faceToward(x0, y0, x1, y1, cos(am), sin(am), h1, h2, POST_BAND)
+            faceToward(x0, y0, x1, y1, cos(am), sin(am), h2, h3, POST_RUBBER)
+        }
+        disc(pt.x, pt.y, h3, pt.r, POST_TOP, 2, segs)
     }
 
     private fun railHole(pk: Pocket) {
