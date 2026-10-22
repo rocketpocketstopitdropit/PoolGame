@@ -39,6 +39,7 @@ class GameActivity : Activity(), GameView.Host {
             val size = if (s.mode == GameMode.BUMPER) "" else " · ${s.tableSize.label}"
             return when {
                 s.practice && s.mode == GameMode.TRICK -> "Trick-shot practice"
+                s.practice && s.mode == GameMode.BUMPER -> "Bumper practice"
                 s.mode == GameMode.TRICK -> if (s.vsCpu) "$name vs CPU level ${s.level}" else "$name pass & play"
                 s.practice -> "Practice$size"
                 s.vsCpu -> "$name vs CPU level ${s.level}$size"
@@ -87,8 +88,9 @@ class GameActivity : Activity(), GameView.Host {
         } else {
             prefs.edit().remove(KEY_SAVED).apply()   // starting fresh replaces any paused game
         }
-        if (practice) { if (mode != GameMode.TRICK) mode = GameMode.EIGHT_BALL; vsCpu = false; clock = 0 }
-        if (mode == GameMode.TRICK || mode == GameMode.BUMPER) call = CallMode.OFF
+        // Practice: the free table (8-ball's), one trick shot, or the bumper table.
+        if (practice) { if (mode != GameMode.TRICK && mode != GameMode.BUMPER) mode = GameMode.EIGHT_BALL; vsCpu = false; clock = 0 }
+        if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT) call = CallMode.OFF
 
         game = GameView(
             this, mode, vsCpu, level,

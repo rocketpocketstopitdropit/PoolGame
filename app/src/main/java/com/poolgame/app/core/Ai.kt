@@ -58,9 +58,11 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         started = TimeSource.Monotonic.markNow()
         budget = budgetMs
         simulations = 0
+        belief = null
         val ideal = when (m.mode) {
             GameMode.TRICK -> trickShot(m)
             GameMode.BUMPER -> bumperShot(m)
+            GameMode.CIRCUIT -> choose(circuitView(m))
             else -> choose(m)
         }
         return Plan(
@@ -73,6 +75,80 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
     }
 
     private fun timeUp() = started.elapsedNow().inWholeMilliseconds > budget
+
+    // ------------------------------------------------------------------ circuit pool
+
+    /** Circuit Pool: what the computer knows about the opponent's targets (worked out from public counts only). */
+    private var belief: CircuitBelief? = null
+
+    /**
+     * The table as the computer sees it in Circuit Pool: its own targets, and in place of the opponent's
+     * real ones a guess drawn from [CircuitBelief] — so nothing it does can depend on what it can't see.
+     */
+    private fun circuitView(m: Match): Match {
+        val me = m.current
+        val b = CircuitBelief(m.circuit, me)
+        belief = b
+        val v = Match(m.mode, m.names).also { it.copyFrom(m) }
+        val guess = if (b.sets.isNotEmpty()) b.sets[rng.nextInt(b.sets.size)] else 0
+        val ids = (1..15).filter { (guess and (1 shl it)) != 0 }
+        v.circuit.targets[1 - me] = if (ids.size == 3) ids.toIntArray() else (1..15).filter { it !in b.mine }.take(3).toIntArray()
+        return v
+    }
+
+    /**
+     * How much the computer wants ball [id] to go in: its own target is the point; a ball that's probably
+     * neutral keeps its turn going; one that may be the opponent's helps them (and loses outright when
+     * they're on their last one).
+     */
+    private fun desire(id: Int): Double {
+        val b = belief ?: return 1.0
+        if (id in b.mine) return 1.0
+        val p = b.pOpp[id]
+        return (1 - p) * 0.45 - p * (if (b.oppSunk >= 2) 4.0 else 1.0)
+    }
+
+    /**
+     * Scores a Circuit Pool shot the computer has run on its copy of the table, averaged over every set of
+     * targets the opponent could have. [potted] is whether [target] went in without a foul.
+     */
+    private fun circuitEval(s: Match, me: Int, target: Int): Eval {
+        val b = belief!!
+        val log = s.world.log
+        val foul = s.circuitFoul(log).isNotEmpty()
+        val objects = log.pocketed.filter { it != 0 }
+        if (s.isBreak && !foul && objects.isEmpty() && s.railedObjectBalls(log) < 4) return Eval(-0.6, false, false)
+        var potMask = 0
+        for (id in objects) potMask = potMask or (1 shl id)
+        val myNew = objects.count { it in b.mine }
+        val myTotal = b.mine.count { !s.world.balls[it].onTable }
+        val brk = s.isBreak
+        // The follow-ups don't depend on whose balls they are: work them out once.
+        val afterFoul = if (foul) -0.9 else 0.0
+        var nextMine = Double.NaN
+        var nextTheirs = Double.NaN
+        var total = 0.0
+        val sets = if (b.sets.isNotEmpty()) b.sets else intArrayOf(0)
+        for (set in sets) {
+            val oppNew = (set and potMask).countOneBits()
+            val oppTotal = b.oppSunk + oppNew
+            total += when {
+                myTotal >= 3 && oppTotal >= 3 -> if (foul) -3.0 else 3.0
+                myTotal >= 3 -> 3.0
+                oppTotal >= 3 -> -3.0
+                else -> {
+                    val cont = !foul && objects.isNotEmpty() && (oppNew == 0 || brk)
+                    0.8 * myNew - 0.8 * oppNew + when {
+                        cont -> { if (nextMine.isNaN()) nextMine = bestP(s, me, aimSigma); 1.0 + posWeight * nextMine }
+                        foul -> afterFoul
+                        else -> { if (nextTheirs.isNaN()) nextTheirs = rawBestP(s, 1 - me); -0.5 * nextTheirs }
+                    }
+                }
+            }
+        }
+        val potted = !foul && target > 0 && target in objects
+        return Eval(total / sets.size, potted, foul)
+    }
     private fun gauss(): Double {
         val u1 = rng.nextDouble(1e-12, 1.0); val u2 = rng.nextDouble()
         return sqrt(-2 * kotlin.math.ln(u1)) * cos(2 * PI * u2)
@@ -353,7 +429,23 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
 
     private fun bestP(m: Match, player: Int, sigma: Double): Double {
         if (m.ballInHand) return 0.9
+        // Circuit Pool: the best shot at a ball worth sinking.
+        if (belief != null) return candidates(m, player, sigma).maxOfOrNull { it.p * desire(it.target).coerceIn(0.0, 1.0) } ?: 0.0
         return candidates(m, player, sigma).firstOrNull()?.p ?: 0.0
+    }
+
+    /** The opponent's best pot, any ball (Circuit Pool: they can sink anything to keep shooting). */
+    private fun rawBestP(m: Match, player: Int): Double {
+        if (m.ballInHand) return 0.9
+        return candidates(m, player, aimSigma).firstOrNull()?.p ?: 0.0
+    }
+
+    /** Balls worth getting position on with ball in hand: all legal ones, or in Circuit Pool those it wants down. */
+    private fun placementTargets(work: Match): List<Int> {
+        val legal = work.legalTargets(work.current).toList()
+        if (belief == null) return legal
+        val good = legal.filter { desire(it) > 0.2 }.sortedByDescending { desire(it) }
+        return good.ifEmpty { legal }
     }
 
     private fun baseSpeed(c: Cand): Double {
@@ -373,9 +465,10 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         var bx = Double.NaN; var by = Double.NaN
         val dists = doubleArrayOf(0.18, 0.3, 0.5)
         val cuts = if (level >= 6) doubleArrayOf(12.0, -12.0, 0.0, 22.0, -22.0) else doubleArrayOf(0.0, 15.0, -15.0)
-        for (t in work.legalTargets(me)) {
+        for (t in placementTargets(work)) {
             val tb = w.balls[t]
             if (!tb.onTable) continue
+            val want = if (belief != null) desire(t) else 1.0
             for (pk in Table.pockets) {
                 val ox = pk.aimX - tb.x; val oy = pk.aimY - tb.y
                 val d2 = hypot(ox, oy)
@@ -397,7 +490,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
                     val px = gx - cos(a) * d; val py = gy - sin(a) * d
                     if (!work.canPlaceCue(px, py)) continue
                     if (!w.pathClear(px, py, gx, gy, 0, t)) continue
-                    var s = prob(cos(toRad(cutDeg)), d, d2, min(pk.tolerance, margin), aimSigma)
+                    var s = prob(cos(toRad(cutDeg)), d, d2, min(pk.tolerance, margin), aimSigma) * want
                     if (level >= 6 && cutDeg != 0.0 && abs(cutDeg) < 15) s *= 1.04  // a little angle helps position
                     if (s > best) { best = s; bx = px; by = py }
                 }
@@ -426,7 +519,8 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
     private class Eval(val value: Double, val potted: Boolean, val foul: Boolean)
 
     /** Run the shot noiselessly and score the result from `me`'s point of view. */
-    private fun evaluate(work: Match, angle: Double, speed: Double, side: Double, vert: Double, elev: Double = 0.0, pocket: Int = -1): Eval {
+    private fun evaluate(work: Match, angle: Double, speed: Double, side: Double, vert: Double, elev: Double = 0.0, pocket: Int = -1,
+                         target: Int = -1): Eval {
         val s = sim!!
         s.copyFrom(work)
         s.calledPocket = pocket
@@ -434,6 +528,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         s.world.simulate()
         simulations++
         val me = work.current
+        if (belief != null) return circuitEval(s, me, target)
         val out = s.resolve()
         return when {
             out.winner == me -> Eval(3.0, true, false)
@@ -446,7 +541,9 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
 
     private fun chooseShot(work: Match): Plan {
         val me = work.current
-        val cands = candidates(work, me, aimSigma)
+        var cands = candidates(work, me, aimSigma)
+        // Circuit Pool: go for the balls worth sinking, best chance first (weighted by how much it wants each one).
+        if (belief != null) cands = ArrayList(cands.filter { desire(it.target) > 0.0 }.sortedByDescending { it.p * desire(it.target) })
         val k = if (level <= 3) 2 else min(2 + level, 10)
         val speedF = when {
             level <= 3 -> doubleArrayOf(1.25)
@@ -467,7 +564,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             for (f in speedF) for ((sd, vt) in spins) {
                 if (timeUp() && best != null) break@loop
                 val speed = (base * f * (if (vt < 0) 1.15 else 1.0)).coerceAtMost(7.0)
-                val e = evaluate(work, c.angle, speed, sd, vt, pocket = c.pocket)
+                val e = evaluate(work, c.angle, speed, sd, vt, pocket = c.pocket, target = c.target)
                 val score = if (e.potted) c.p * e.value - (1 - c.p) * 0.3 else e.value - 0.6
                 if (score > bestScore) {
                     bestScore = score
@@ -480,7 +577,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             for (c in candidates(work, me, aimSigma, blockedOnly = true).take(4)) {
                 for (el in doubleArrayOf(0.6, 0.8)) for (sp in doubleArrayOf(3.5, 4.5, 5.5)) {
                     if (timeUp() && best != null) break
-                    val e = evaluate(work, c.angle, sp, 0.0, 0.0, el, c.pocket)
+                    val e = evaluate(work, c.angle, sp, 0.0, 0.0, el, c.pocket, c.target)
                     if (!e.potted) continue
                     val p = c.p * 0.6     // jumps are harder to control
                     val score = p * e.value - (1 - p) * 0.3

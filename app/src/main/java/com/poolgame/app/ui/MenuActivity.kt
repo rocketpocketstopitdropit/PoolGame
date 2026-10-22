@@ -31,7 +31,7 @@ class MenuActivity : Activity() {
     private var level = 5
     private var sound = true
     private var practice = false
-    private var practiceTrick = false      // practice: a trick shot instead of the free table
+    private var practiceKind = 0           // practice: 0 the free table, 1 a trick shot, 2 the bumper table
     private var practiceLevel = 0
     private var aimSens = 5
     private var callMode = 0
@@ -67,7 +67,7 @@ class MenuActivity : Activity() {
         level = prefs.getInt("level", 5).coerceIn(1, 10)
         sound = prefs.getBoolean("sound", true)
         practice = prefs.getBoolean("practice", false)
-        practiceTrick = prefs.getBoolean("practiceTrick", false)
+        practiceKind = prefs.getInt("practiceKind", if (prefs.getBoolean("practiceTrick", false)) 1 else 0).coerceIn(0, 2)
         practiceLevel = prefs.getInt("practiceLevel", 0).coerceIn(0, com.poolgame.app.core.Trick.LEVELS.size - 1)
         aimSens = prefs.getInt("aimSens", 5).coerceIn(1, 10)
         callMode = prefs.getInt("callMode", 0).coerceIn(0, 2)
@@ -145,7 +145,7 @@ class MenuActivity : Activity() {
             .putInt("level", level).putBoolean("sound", sound)
             .putBoolean("clockOn", clockOn).putInt("clockSec", clockSec)
             .putBoolean("practice", practice)
-            .putBoolean("practiceTrick", practiceTrick).putInt("practiceLevel", practiceLevel)
+            .putInt("practiceKind", practiceKind).putInt("practiceLevel", practiceLevel)
             .putInt("aimSens", aimSens).putInt("callMode", callMode).putString("tableSize", tableSize.name)
             .putBoolean("prediction", prediction).apply()
         refreshRecord()
@@ -186,7 +186,7 @@ class MenuActivity : Activity() {
         col.addView(card, LinearLayout.LayoutParams(minOf(dpi(560f), resources.displayMetrics.widthPixels - dpi(48f)), ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL })
 
         card.addView(label("POOL", 38f, Color.WHITE, true).apply { letterSpacing = 0.25f; gravity = Gravity.CENTER })
-        card.addView(label("8-Ball · 9-Ball · bumper pool · trick shots · practice", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
+        card.addView(label("8-Ball · 9-Ball · Circuit Pool · bumper pool · trick shots · practice", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
 
         // Game type
         card.addView(section("GAME"))
@@ -202,14 +202,19 @@ class MenuActivity : Activity() {
             "first. Both marked balls go at once to open. Your ball in your own cup, a ball off the table or a jump " +
             "shot is a foul: your opponent drops two of theirs in. First to sink all five wins.",
             12.5f, 0xFF8A97A1.toInt()).apply { setPadding(0, dpi(8f), 0, 0); setLineSpacing(0f, 1.15f) }
-        // Practice: the free table, or one trick shot (pick which).
+        val circuitHelp = label("Circuit Pool: each player is secretly dealt three of the fifteen balls; the other nine " +
+            "are neutral. Hit any ball first. Sinking your own or a neutral ball keeps you shooting; sinking one of your " +
+            "opponent's counts for them and ends your turn. You see your own targets and how many your opponent has " +
+            "down, never which. First to sink all three wins.",
+            12.5f, 0xFF8A97A1.toInt()).apply { setPadding(0, dpi(8f), 0, 0); setLineSpacing(0f, 1.15f) }
+        // Practice: the free table, one trick shot (pick which), or the bumper table.
         val practiceBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val levelBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         practiceBlock.addView(section("PRACTICE"))
-        practiceBlock.addView(segmented(listOf("Free table", "Trick shot"), if (practiceTrick) 1 else 0) {
-            practiceTrick = it == 1
-            levelBlock.visibility = if (practiceTrick) View.VISIBLE else View.GONE
-            sizeBlockRef?.visibility = if (practiceTrick) View.GONE else View.VISIBLE
+        practiceBlock.addView(segmented(listOf("Free table", "Trick shot", "Bumper"), practiceKind) {
+            practiceKind = it
+            levelBlock.visibility = if (practiceKind == 1) View.VISIBLE else View.GONE
+            sizeBlockRef?.visibility = if (practiceKind == 0) View.VISIBLE else View.GONE
             save()
         })
         val names = com.poolgame.app.core.Trick.LEVELS.map { it.name }
@@ -243,28 +248,36 @@ class MenuActivity : Activity() {
             levelBlock.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (r > 0) topMargin = dpi(6f) })
         }
         paintLevels()
-        levelBlock.visibility = if (practiceTrick) View.VISIBLE else View.GONE
+        levelBlock.visibility = if (practiceKind == 1) View.VISIBLE else View.GONE
         practiceBlock.addView(levelBlock)
 
         fun refreshMode() {
             practiceBlock.visibility = if (practice) View.VISIBLE else View.GONE
             matchBlockRef?.visibility = if (practice) View.GONE else View.VISIBLE
-            callBlockRef?.visibility = if (mode == GameMode.TRICK || mode == GameMode.BUMPER) View.GONE else View.VISIBLE
+            callBlockRef?.visibility = if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT) View.GONE else View.VISIBLE
             trickHelp.visibility = if (mode == GameMode.TRICK && !practice) View.VISIBLE else View.GONE
             bumperHelp.visibility = if (mode == GameMode.BUMPER && !practice) View.VISIBLE else View.GONE
+            circuitHelp.visibility = if (mode == GameMode.CIRCUIT && !practice) View.VISIBLE else View.GONE
             // Trick shots are always on the 9 ft table (with its gap) and bumper pool on its own table,
             // so the size choice hides for them.
-            val ownTable = if (practice) practiceTrick else mode == GameMode.TRICK || mode == GameMode.BUMPER
+            val ownTable = if (practice) practiceKind != 0 else mode == GameMode.TRICK || mode == GameMode.BUMPER
             sizeBlockRef?.visibility = if (ownTable) View.GONE else View.VISIBLE
         }
-        val modeSel = when { practice -> 4; mode == GameMode.TRICK -> 3; mode == GameMode.BUMPER -> 2; mode == GameMode.NINE_BALL -> 1; else -> 0 }
-        val modeRow = segmented(listOf("8-Ball", "9-Ball", "Bumper", "Trick", "Practice"), modeSel) {
-            practice = it == 4
-            if (it < 4) mode = when (it) { 0 -> GameMode.EIGHT_BALL; 1 -> GameMode.NINE_BALL; 2 -> GameMode.BUMPER; else -> GameMode.TRICK }
+        // Two rows of three, one selection across both.
+        val modeSel = when {
+            practice -> 5; mode == GameMode.TRICK -> 4; mode == GameMode.BUMPER -> 3; mode == GameMode.CIRCUIT -> 2
+            mode == GameMode.NINE_BALL -> 1; else -> 0
+        }
+        val modeRow = segmentedGrid(listOf("8-Ball", "9-Ball", "Circuit", "Bumper", "Trick", "Practice"), 3, modeSel) {
+            practice = it == 5
+            if (it < 5) mode = when (it) {
+                0 -> GameMode.EIGHT_BALL; 1 -> GameMode.NINE_BALL; 2 -> GameMode.CIRCUIT; 3 -> GameMode.BUMPER; else -> GameMode.TRICK
+            }
             refreshMode()
             save()
         }
         card.addView(modeRow)
+        card.addView(circuitHelp)
         card.addView(trickHelp)
         card.addView(bumperHelp)
         card.addView(practiceBlock)
@@ -560,6 +573,38 @@ class MenuActivity : Activity() {
         setPadding(0, dpi(14f), 0, dpi(6f))
     }
 
+    /** Like [segmented], in rows of [cols]: one selection across all the rows. */
+    private fun segmentedGrid(options: List<String>, cols: Int, selected: Int, onPick: (Int) -> Unit): LinearLayout {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(0xFF0E1215.toInt(), dp(12f))
+            setPadding(dpi(4f), dpi(4f), dpi(4f), dpi(4f))
+        }
+        val views = ArrayList<TextView>()
+        fun paint(sel: Int) {
+            views.forEachIndexed { i, v ->
+                v.background = if (i == sel) rounded(0xFF2F8F5B.toInt(), dp(9f)) else null
+                v.setTextColor(if (i == sel) Color.WHITE else 0xFF9AA7B1.toInt())
+            }
+        }
+        for (r in 0 until (options.size + cols - 1) / cols) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            for (c in 0 until cols) {
+                val i = r * cols + c
+                if (i >= options.size) break
+                val v = label(options[i], 15f, Color.WHITE, true).apply {
+                    gravity = Gravity.CENTER
+                    setOnClickListener { paint(i); onPick(i) }
+                }
+                views += v
+                row.addView(v, LinearLayout.LayoutParams(0, dpi(42f), 1f))
+            }
+            col.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        paint(selected)
+        return col
+    }
+
     private fun segmented(options: List<String>, selected: Int, onPick: (Int) -> Unit): LinearLayout {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -589,7 +634,8 @@ class MenuActivity : Activity() {
         save()
         startActivity(Intent(this, GameActivity::class.java).apply {
             putExtra(GameActivity.EXTRA_MODE, when {
-                practice && practiceTrick -> GameMode.TRICK.name
+                practice && practiceKind == 1 -> GameMode.TRICK.name
+                practice && practiceKind == 2 -> GameMode.BUMPER.name
                 practice -> GameMode.EIGHT_BALL.name
                 else -> mode.name
             })

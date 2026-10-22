@@ -77,7 +77,7 @@ class GameView(
         fun onRpsFinished(winner: Int, rounds: Int)
     }
 
-    private enum class Phase { RPS, HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
+    private enum class Phase { RPS, HANDOFF, HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
     private enum class Rps { PICK, SHAKE, REVEAL }
     private enum class Touch { NONE, AIM, POWER, SPIN, WHEEL, MOVE_CUE, BUTTON, PENDING, MOVE_BALL, TAP_BALL, POV, CAM }
 
@@ -182,6 +182,15 @@ class GameView(
     private val trick = mode == GameMode.TRICK
     /** Bumper pool: no cue ball (you shoot your own balls), its own table, and an opening shot both players take at once. */
     private val bumper = mode == GameMode.BUMPER
+    /** Bumper pool practice: the bumper table on your own, any ball, no rules. */
+    private val bumperPractice = practice && bumper
+    /** Circuit Pool: three secret target balls each. */
+    private val circuit = mode == GameMode.CIRCUIT
+    /**
+     * Circuit Pool: whose targets are on show (-1 for nobody). Against the CPU it's always you; in pass & play
+     * they're hidden at each change of turn until the next player taps to see theirs.
+     */
+    private var revealTo = if (vsCpu) 0 else -1
     private var bannerLevel = -1
     private var bannerT = 0.0
 
@@ -284,7 +293,7 @@ class GameView(
 
     init {
         isFocusable = true
-        balls.plain = practice && !tutorialMode
+        balls.plain = practice && !tutorialMode && !bumper
         povBalls.plain = balls.plain
         balls.bumper = bumper
         povBalls.bumper = bumper
@@ -319,11 +328,14 @@ class GameView(
         match.world.listener = makeListener()
         match.rack(rng, breaker)
         match.callMode = if (practice) CallMode.OFF else callMode
+        revealTo = if (vsCpu) 0 else -1
         if (practice) {
             match.ballInHand = false
             match.kitchenOnly = false
-            match.message = "Practice · hold any ball to move it"
+            match.message = practiceHint()
             practiceSnapshot = null
+            // Bumper practice: no opening shot; start with red's marked ball.
+            if (bumperPractice) { match.isBreak = false; match.current = 0 }
         }
         if (tutorialMode) {
             Tutorial.setup(match)
@@ -415,8 +427,9 @@ class GameView(
         potN = 0
         spinX = 0f; spinY = 0f; power = 0f; elevDeg = 0f
         gameOverTitle = ""; recordLine = ""
+        revealTo = if (vsCpu) 0 else -1
         message = when {
-            practice -> "Practice · hold any ball to move it"
+            practice -> practiceHint()
             trickPractice -> "Practice · ${Trick.LEVELS[match.trick.level].name}"
             else -> "Game resumed · " + match.message
         }
@@ -437,6 +450,9 @@ class GameView(
             else -> turnSave ?: GameSave.write(match, settings())
         }
     }
+
+    private fun practiceHint() =
+        if (bumperPractice) "Bumper practice · tap a ball to shoot it, hold it to move it" else "Practice · hold any ball to move it"
 
     private fun startTurn() {
         match.prepareTurn()
@@ -475,15 +491,22 @@ class GameView(
                     if (wait > 0) postDelayed({ if (gen == generation) beginCpuAnim(plan) }, wait) else beginCpuAnim(plan)
                 }
             }.apply { isDaemon = true; priority = Thread.MIN_PRIORITY; start() }
-        } else {
-            phase = Phase.HUMAN
-            spinX = 0f; spinY = 0f
-            clockLeft = shotClock.toDouble()
-            // With ball in hand the clock waits until you start aiming or touch the power bar.
-            clockStarted = !match.ballInHand
-            lastBeep = 0
-            aimAtNearestTarget()
-        }
+        } else if (circuit && revealTo != match.current) {
+            // Circuit Pool, pass & play: hide the targets while the phone changes hands.
+            revealTo = -1
+            phase = Phase.HANDOFF
+            clearTouches()
+        } else beginHumanTurn()
+    }
+
+    private fun beginHumanTurn() {
+        phase = Phase.HUMAN
+        spinX = 0f; spinY = 0f
+        clockLeft = shotClock.toDouble()
+        // With ball in hand the clock waits until you start aiming or touch the power bar.
+        clockStarted = !match.ballInHand
+        lastBeep = 0
+        aimAtNearestTarget()
     }
 
     private fun aimAtNearestTarget() {
@@ -498,7 +521,9 @@ class GameView(
             val b = match.world.balls[Trick.TARGET]
             if (b.onTable) { aimAngle = atan2(b.y - c.y, b.x - c.x); return }
         }
-        val t = match.legalTargets().filter { match.world.balls[it].onTable }
+        // Circuit Pool: your nearest target, if you can see them.
+        val own = if (circuit && revealTo == match.current) match.circuit.targets[match.current].filter { match.world.balls[it].onTable } else emptyList()
+        val t = own.ifEmpty { match.legalTargets().filter { match.world.balls[it].onTable } }
             .minByOrNull { hypot(match.world.balls[it].x - c.x, match.world.balls[it].y - c.y) } ?: return
         val b = match.world.balls[t]
         aimAngle = atan2(b.y - c.y, b.x - c.x)
@@ -592,11 +617,25 @@ class GameView(
         } else dragInvalid = true
     }
 
+    /**
+     * Bumper practice: shoot ball [id] next (any ball, either colour), or with -1 the one nearest the
+     * middle of the table. The guide then shows the cup that ball's owner shoots for.
+     */
+    private fun bumperPracticePick(id: Int) {
+        val w = match.world
+        val pick = if (id >= 0) id else w.balls.filter { it.onTable }
+            .minByOrNull { hypot(it.x - P.L / 2, it.y - P.W / 2) }?.id ?: return
+        w.cue = pick
+        match.current = match.ownerOf(pick).coerceAtLeast(0)
+        aimAtNearestTarget()
+    }
+
     private fun practiceRetry() {
         val snap = practiceSnapshot ?: return
         if (phase != Phase.HUMAN && phase != Phase.RUNNING) return
         match.world.copyFrom(snap)
         for (b in match.world.balls) b.moving = false
+        if (bumperPractice) match.current = match.ownerOf(match.world.cue).coerceAtLeast(0)
         sinks.clear()
         phase = Phase.HUMAN
         power = 0f
@@ -621,7 +660,8 @@ class GameView(
     }
 
     private fun practiceClear() {
-        for (id in 1..15) { val b = match.world.balls[id]; b.onTable = false; b.stop() }
+        // (Bumper practice keeps the ball you're shooting.)
+        for (id in 1..15) if (id != match.world.cue) { val b = match.world.balls[id]; b.onTable = false; b.stop() }
         message = "Table cleared · tap a ball in the tray to bring it back"
     }
 
@@ -637,6 +677,7 @@ class GameView(
                     val b = w.balls[id]
                     b.x = x; b.y = y; b.stop(); b.onTable = true
                     message = "Hold the ball to move it"
+                    if (bumperPractice && !w.cueBall.onTable) bumperPracticePick(id)
                     return
                 }
             }
@@ -726,7 +767,16 @@ class GameView(
                 match.world.advance(dt)
                 if (!match.world.anyMoving() && practice) {
                     tut?.onShotDone(!match.world.balls[Tutorial.TARGET_BALL].onTable)
-                    if (!match.world.cueBall.onTable) {
+                    if (bumperPractice) {
+                        val jumped = (match.world.log.air and (1 shl match.world.cue)) != 0
+                        // The ball you shot went down: carry on with the nearest one left.
+                        if (!match.world.cueBall.onTable) bumperPracticePick(-1)
+                        message = when {
+                            match.world.balls.none { it.onTable } -> "All in! Re-rack, or tap a ball in the tray"
+                            jumped -> "That one left the cloth — in a game, a jump is a foul"
+                            else -> ""
+                        }
+                    } else if (!match.world.cueBall.onTable) {
                         match.respawnCue()
                         message = "Cue ball respotted · hold it to move it"
                     } else message = if (match.world.log.scooped) "Scoop shot — in a game that's a foul" else ""
@@ -1357,7 +1407,16 @@ class GameView(
         }
 
         drawPocketCall(canvas)
-        if (bumper && humanTurn) {
+        if (circuit && humanTurn && revealTo == match.current) {
+            // Your secret targets still on the table.
+            guide.pathEffect = dash; guide.strokeWidth = 1.6f * dp; guide.color = 0xB3FFD640.toInt()
+            for (id in match.circuit.targets[revealTo]) {
+                val b = w.balls[id]
+                if (b.onTable) canvas.drawCircle(sx(b.x), sy(b.y), rpx * 1.5f, guide)
+            }
+            guide.pathEffect = null
+        }
+        if (bumper && humanTurn && !practice) {
             // The other balls you could shoot instead: tap one to pick it.
             guide.pathEffect = dash; guide.strokeWidth = 1.5f * dp; guide.color = 0x99FFD640.toInt()
             for (id in match.shootable()) if (id != w.cue) {
@@ -1372,7 +1431,7 @@ class GameView(
         if (showCue && cue.onTable) drawCueStick(canvas, sx(cueX), sy(cueY))
 
         if (bannerT > 0 && trick) drawBanner(canvas)
-        if (phase != Phase.RPS && phase != Phase.OVER && povAllowed()) {
+        if (phase != Phase.RPS && phase != Phase.OVER && phase != Phase.HANDOFF && povAllowed()) {
             paint.style = Paint.Style.FILL; paint.shader = null; paint.color = 0xE61E252B.toInt()
             canvas.drawRoundRect(view3dBtn, 10 * dp, 10 * dp, paint)
             guide.pathEffect = null; guide.strokeWidth = 1.5f * dp; guide.color = 0xFFF2C94C.toInt()
@@ -1391,6 +1450,7 @@ class GameView(
         drawSpin(canvas)
         drawWheel(canvas)
         if (phase == Phase.RPS) drawRps(canvas)
+        if (phase == Phase.HANDOFF) drawHandoff(canvas)
         if (phase == Phase.OVER) drawGameOver(canvas)
         drawTutorial(canvas)
     }
@@ -1495,6 +1555,13 @@ class GameView(
     private fun drawPovMarks(canvas: Canvas, cueX: Double, cueY: Double) {
         if (phase != Phase.HUMAN) return
         guide.pathEffect = null
+        if (circuit && revealTo == match.current) {
+            guide.strokeWidth = 2f * dp; guide.color = 0xB3FFD640.toInt()
+            for (id in match.circuit.targets[revealTo]) {
+                val b = match.world.balls[id]
+                if (b.onTable) povRing(canvas, b.x, b.y, P.R * 1.45)
+            }
+        }
         if (match.ballInHand) {
             val pulse = (0.5 + 0.5 * sin(System.nanoTime() / 2.5e8)).toFloat()
             guide.strokeWidth = 2.5f * dp
@@ -1854,6 +1921,7 @@ class GameView(
         text.color = 0xFFE8ECEF.toInt()
         text.textSize = min(15 * dp, hudH * 0.26f)
         var msg = when (phase) {
+            Phase.HANDOFF -> "${names[match.current]}'s turn — pass it over"
             Phase.CPU_THINK, Phase.CPU_ANIM -> if (message.isNotEmpty()) message else "CPU is thinking…"
             Phase.HUMAN -> when {
                 pov && match.ballInHand -> "${names[match.current]}: ball in hand — tap Top view to move the cue ball"
@@ -1881,6 +1949,9 @@ class GameView(
         } else if (bumper && phase == Phase.HUMAN) {
             text.textSize = min(12 * dp, hudH * 0.2f); text.color = 0xFFF2C94C.toInt()
             canvas.drawText(ellipsize(match.bumperHint(), midR - midL), (midL + midR) / 2, subY, text)
+        } else if (circuit && phase == Phase.HUMAN) {
+            text.textSize = min(12 * dp, hudH * 0.2f); text.color = 0xFFF2C94C.toInt()
+            canvas.drawText(ellipsize("Sink your 3 secret balls · any ball first · theirs ends your turn", midR - midL), (midL + midR) / 2, subY, text)
         } else if (mode == GameMode.NINE_BALL) {
             val r = min(hudH * 0.13f, 9 * dp)
             val total = 9 * r * 2.4f
@@ -1899,9 +1970,9 @@ class GameView(
         canvas.drawRoundRect(rightCard, 10 * dp, 10 * dp, paint)
         text.textAlign = Paint.Align.LEFT; text.typeface = bold
         text.textSize = min(16 * dp, leftCard.height() * 0.32f); text.color = Color.WHITE
-        canvas.drawText("PRACTICE", leftCard.left + 12 * dp, leftCard.top + leftCard.height() * 0.42f, text)
+        canvas.drawText(if (bumperPractice) "BUMPER PRACTICE" else "PRACTICE", leftCard.left + 12 * dp, leftCard.top + leftCard.height() * 0.42f, text)
         text.typeface = regular; text.textSize = min(11 * dp, leftCard.height() * 0.22f); text.color = 0xFF9AA7B1.toInt()
-        val sub = if (message.isNotEmpty()) message else "Hold any ball to move it"
+        val sub = if (message.isNotEmpty()) message else if (bumperPractice) "Tap a ball to shoot it · hold it to move it" else "Hold any ball to move it"
         canvas.drawText(ellipsize(sub, leftCard.width() - 20 * dp), leftCard.left + 12 * dp, leftCard.top + leftCard.height() * 0.78f, text)
 
         fun button(r: RectF, label: String, enabled: Boolean) {
@@ -2010,6 +2081,33 @@ class GameView(
                 if (t.made[player] > 0) sb.append(" = ${t.score(player)}")
             }
             canvas.drawText(sb.toString(), r.left + 12 * dp, iy + iconR * 0.4f, text)
+        } else if (circuit) {
+            // Your own targets (dim once they're down) when they're on show; otherwise just how many are down.
+            val sunk = match.circuitSunk(player)
+            var x = r.left + 12 * dp + iconR
+            if (player == revealTo || phase == Phase.OVER) {
+                for (id in match.circuit.targets[player]) {
+                    balls.drawIcon(canvas, id, x, iy, iconR, !match.world.balls[id].onTable, paint)
+                    x += iconR * 2.3f
+                }
+                canvas.drawText(ellipsize("$sunk/3 sunk", r.right - x - 4 * dp), x, iy + iconR * 0.4f, text)
+            } else {
+                // Three hidden balls: filled in as they go down.
+                for (i in 0 until 3) {
+                    paint.style = Paint.Style.FILL
+                    paint.color = if (i < sunk) 0xFFF2C94C.toInt() else 0xFF3A444C.toInt()
+                    canvas.drawCircle(x, iy, iconR, paint)
+                    if (i >= sunk) {
+                        text.textAlign = Paint.Align.CENTER; text.color = 0xFF9AA7B1.toInt()
+                        canvas.drawText("?", x, iy + iconR * 0.45f, text)
+                        text.textAlign = Paint.Align.LEFT
+                    }
+                    x += iconR * 2.3f
+                }
+                text.color = 0xFF9AA7B1.toInt()
+                val hidden = if (phase == Phase.HANDOFF && player == match.current) "tap to see your targets" else "$sunk/3 sunk · hidden"
+                canvas.drawText(ellipsize(hidden, r.right - x - 4 * dp), x, iy + iconR * 0.4f, text)
+            }
         } else if (bumper) {
             // Five balls each (dim once they're down), and which way this player shoots.
             var x = r.left + 12 * dp + iconR
@@ -2302,6 +2400,29 @@ class GameView(
         }
     }
 
+    /** Circuit Pool, pass & play: the next player's targets stay hidden until they tap. */
+    private fun drawHandoff(canvas: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        paint.style = Paint.Style.FILL; paint.shader = null
+        paint.color = 0xB3000000.toInt()
+        canvas.drawRect(0f, 0f, w, h, paint)
+        val pw = min(w * 0.5f, 420 * dp); val ph = min(h * 0.5f, 190 * dp)
+        overPanel.set(w / 2 - pw / 2, h / 2 - ph / 2, w / 2 + pw / 2, h / 2 + ph / 2)
+        paint.color = 0xFF1E252B.toInt()
+        canvas.drawRoundRect(overPanel, 16 * dp, 16 * dp, paint)
+        guide.color = 0xFFF2C94C.toInt(); guide.strokeWidth = 2 * dp; guide.pathEffect = null
+        canvas.drawRoundRect(overPanel, 16 * dp, 16 * dp, guide)
+        val p = match.current
+        text.textAlign = Paint.Align.CENTER
+        text.typeface = bold; text.textSize = 24 * dp; text.color = Color.WHITE
+        canvas.drawText("${names[p]}'s turn", overPanel.centerX(), overPanel.top + ph * 0.3f, text)
+        text.typeface = regular; text.textSize = 13 * dp; text.color = 0xFFB8C2CA.toInt()
+        canvas.drawText(ellipsize("Hand it to ${names[p]} — ${names[1 - p]}, no peeking", pw - 24 * dp), overPanel.centerX(), overPanel.top + ph * 0.5f, text)
+        if (message.isNotEmpty()) canvas.drawText(ellipsize(message, pw - 24 * dp), overPanel.centerX(), overPanel.top + ph * 0.64f, text)
+        text.typeface = bold; text.textSize = 15 * dp; text.color = 0xFFF2C94C.toInt()
+        canvas.drawText("Tap to see your targets", overPanel.centerX(), overPanel.bottom - 18 * dp, text)
+    }
+
     private fun drawGameOver(canvas: Canvas) {
         val w = width.toFloat(); val h = height.toFloat()
         paint.style = Paint.Style.FILL; paint.shader = null
@@ -2319,9 +2440,19 @@ class GameView(
         text.typeface = regular; text.textSize = 13 * dp; text.color = 0xFFB8C2CA.toInt()
         val detail = match.message.substringAfter("(", "").removeSuffix(")")
         if (detail.isNotEmpty()) canvas.drawText(ellipsize(detail, pw - 24 * dp), overPanel.centerX(), overPanel.top + ph * 0.38f, text)
+        var recY = 0.52f
+        if (circuit) {
+            // Everyone's targets, now it's over.
+            text.color = 0xFFDDE3E8.toInt(); text.textSize = 13 * dp
+            val t = (0..1).joinToString("  ·  ") { p ->
+                "${names[p]} had ${match.circuit.targets[p].joinToString(", ")}"
+            }
+            canvas.drawText(ellipsize(t, pw - 24 * dp), overPanel.centerX(), overPanel.top + ph * 0.49f, text)
+            recY = 0.6f
+        }
         if (recordLine.isNotEmpty()) {
             text.color = 0xFFF2C94C.toInt(); text.textSize = 14 * dp
-            canvas.drawText(ellipsize(recordLine, pw - 24 * dp), overPanel.centerX(), overPanel.top + ph * 0.52f, text)
+            canvas.drawText(ellipsize(recordLine, pw - 24 * dp), overPanel.centerX(), overPanel.top + ph * recY, text)
         }
         val bw = pw * 0.38f; val bh = 46 * dp
         val by = overPanel.bottom - bh - 20 * dp
@@ -2364,6 +2495,11 @@ class GameView(
                 else if (menuExitBtn.contains(x, y)) host.onExitToMenu()
             }
             ptrMode[id] = Touch.BUTTON
+            return
+        }
+        if (phase == Phase.HANDOFF) {
+            ptrMode[id] = Touch.BUTTON
+            if (first) { revealTo = match.current; beginHumanTurn() }
             return
         }
         if (phase == Phase.RPS) {
@@ -2582,7 +2718,10 @@ class GameView(
         if (mode == Touch.TAP_BALL && !pickBumperBall(ptrBall[id])) { aimAtBall(ptrBall[id]); setPov(true) }
         if (mode == Touch.POV && ptrAxis[id] == 0) povTap(ptrDownX[id], ptrDownY[id])
         if (mode == Touch.PENDING) {
-            if (ptrBall[id] > 0 && povAllowed()) { aimAtBall(ptrBall[id]); setPov(true) }
+            if (bumperPractice) {
+                // Bumper practice: a tap on another ball shoots that one; on the one you're shooting, opens the 3D view.
+                if (ptrBall[id] != match.world.cue) { bumperPracticePick(ptrBall[id]); sfx.ball(0.6) } else setPov(true)
+            } else if (ptrBall[id] > 0 && povAllowed()) { aimAtBall(ptrBall[id]); setPov(true) }
             else if (!pov) aimAt(ptrDownX[id], ptrDownY[id])
         }
         if (mode == Touch.MOVE_BALL) { movingBall = -1; dragInvalid = false }

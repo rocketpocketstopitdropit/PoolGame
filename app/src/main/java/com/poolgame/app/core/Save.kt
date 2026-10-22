@@ -38,6 +38,10 @@ object GameSave {
                 "${if (t.done[0]) 1 else 0},${if (t.done[1]) 1 else 0},${t.levelWins[0]},${t.levelWins[1]},${if (t.resetPending) 1 else 0}")
             kv("tr", t.results.joinToString(";"))
         }
+        if (m.mode == GameMode.CIRCUIT) {
+            kv("ct", m.circuit.writeTargets())
+            kv("co", m.circuit.writeObs())
+        }
         for (b in m.world.balls) {
             kv("b${b.id}", "${b.x},${b.y},${if (b.onTable) 1 else 0},${b.qw},${b.qx},${b.qy},${b.qz}")
         }
@@ -86,6 +90,7 @@ object GameSave {
             p["tr"]?.split(';')?.filter { it.isNotEmpty() }?.forEach { t.results += it.toInt() }
             m.applyTrickLayout()
         }
+        if (m.mode == GameMode.CIRCUIT) m.circuit.read(p.getValue("ct"), p["co"])
         for (b in m.world.balls) {
             val f = p.getValue("b${b.id}").split(',')
             b.stop()

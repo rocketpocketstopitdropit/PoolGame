@@ -867,4 +867,165 @@ class EngineTest {
             assertTrue("seed $seed unfinished", m.winner >= 0)
         }
     }
+
+    // ------------------------------------------------------------------ circuit pool
+
+    private fun circuit(): Match {
+        val m = Match(GameMode.CIRCUIT, arrayOf("You", "CPU")); m.rack(Random(4), 0)
+        m.circuit.targets[0] = intArrayOf(3, 4, 5); m.circuit.targets[1] = intArrayOf(6, 7, 8)
+        return m
+    }
+
+    /** Circuit Pool: ball [id] straight into corner pocket 0; balls in [down] are already pocketed, the rest parked out of the way. */
+    private fun circuitPot(m: Match, id: Int, down: List<Int> = emptyList()): ShotOutcome {
+        var x = 1.3
+        for (b in 1..15) {
+            if (b == id) continue
+            if (b in down) { m.world.balls[b].onTable = false; continue }
+            m.world.put(b, x, P.W - 0.1); x += 0.07
+        }
+        m.world.put(id, 0.6, 0.3); m.world.put(0, 1.0, 0.5)
+        val pk = Table.pockets[0]
+        val d = hypot(pk.aimX - 0.6, pk.aimY - 0.3)
+        val gx = 0.6 - (pk.aimX - 0.6) / d * 2 * P.R; val gy = 0.3 - (pk.aimY - 0.3) / d * 2 * P.R
+        m.isBreak = false; m.ballInHand = false
+        m.shoot(atan2(gy - 0.5, gx - 1.0), 2.0, 0.0, 0.0); m.world.simulate()
+        assertEquals(listOf(id), m.world.log.pocketed)
+        return m.resolve()
+    }
+
+    @Test fun circuitDealsThreeSecretBallsEach() {
+        for (seed in 0 until 20) {
+            val m = Match(GameMode.CIRCUIT); m.rack(Random(seed), 0)
+            val all = (m.circuit.targets[0] + m.circuit.targets[1]).toList()
+            assertEquals(6, all.toSet().size)
+            assertTrue(all.all { it in 1..15 })
+            assertTrue((1..15).all { m.world.balls[it].onTable })
+            assertTrue(m.isBreak && m.ballInHand && m.kitchenOnly)
+        }
+    }
+
+    @Test fun circuitOwnTargetKeepsTheTurn() {
+        val m = circuit()
+        val out = circuitPot(m, 3)
+        assertTrue(out.keepTurn); assertFalse(out.foul)
+        assertEquals(0, m.current); assertEquals(1, m.circuitSunk(0))
+    }
+
+    @Test fun circuitNeutralBallKeepsTheTurn() {
+        val m = circuit()
+        val out = circuitPot(m, 10)
+        assertTrue(out.keepTurn); assertEquals(0, m.circuitSunk(0)); assertEquals(0, m.circuitSunk(1))
+    }
+
+    @Test fun circuitOpponentsTargetCountsForThemAndEndsTheTurn() {
+        val m = circuit()
+        val out = circuitPot(m, 7)
+        assertFalse(out.keepTurn); assertFalse(out.foul)
+        assertEquals(1, m.current); assertEquals(1, m.circuitSunk(1))
+        assertFalse(m.ballInHand)
+        assertEquals(listOf(1 shl 7, 0, 1), m.circuit.obs.last().toList())
+    }
+
+    @Test fun circuitThirdTargetWins() {
+        val m = circuit()
+        val out = circuitPot(m, 3, listOf(4, 5))
+        assertEquals(0, out.winner); assertEquals(0, m.winner)
+        // ...and sinking the opponent's last one makes them the winner.
+        val m2 = circuit()
+        circuitPot(m2, 8, listOf(6, 7))
+        assertEquals(1, m2.winner)
+    }
+
+    @Test fun circuitDoubleDropGoesToTheShooterUnlessItsAFoul() {
+        for (foul in listOf(false, true)) {
+            val m = circuit()
+            m.isBreak = false; m.ballInHand = false
+            for (id in listOf(3, 4, 5, 6, 7, 8)) m.world.balls[id].onTable = false
+            m.beginShot()
+            val log = m.world.log
+            log.reset(); log.firstHit = 3; log.pocketed += 3; log.pocketed += 6
+            if (foul) { log.pocketed += 0; m.world.balls[0].onTable = false }
+            m.resolve()
+            assertEquals(if (foul) 1 else 0, m.winner)
+        }
+    }
+
+    @Test fun circuitFoulGivesBallInHandAndSunkBallsStillCount() {
+        val m = circuit()
+        m.isBreak = false; m.ballInHand = false
+        m.beginShot()
+        val log = m.world.log
+        log.reset(); log.firstHit = 3; log.pocketed += 3; log.pocketed += 0
+        m.world.balls[3].onTable = false; m.world.balls[0].onTable = false
+        val out = m.resolve()
+        assertTrue(out.foul); assertEquals(1, m.current); assertTrue(m.ballInHand); assertFalse(m.kitchenOnly)
+        assertEquals(1, m.circuitSunk(0)); assertTrue(m.world.balls[0].onTable)
+    }
+
+    @Test fun circuitSoftBreakIsReRackedForTheOtherPlayer() {
+        val m = circuit()
+        m.placeCue(P.HEAD_X - 0.05, P.FOOT_Y)
+        m.shoot(0.0, 1.6, 0.0, 0.0); m.world.simulate()
+        val out = m.resolve()
+        assertTrue(m.world.log.pocketed.isEmpty())
+        assertTrue(m.railedObjectBalls(m.world.log) < 4)
+        assertFalse(out.foul)
+        assertEquals(1, m.current); assertTrue(m.isBreak); assertTrue(m.ballInHand && m.kitchenOnly)
+        assertTrue((1..15).all { m.world.balls[it].onTable })
+        assertEquals(listOf(3, 4, 5), m.circuit.targets[0].toList())   // same targets, new rack
+    }
+
+    @Test fun circuitHardBreakIsLegal() {
+        var legal = 0
+        for (seed in 0 until 6) {
+            val m = Match(GameMode.CIRCUIT); m.rack(Random(seed), 0)
+            m.shoot(0.0, 7.0, 0.0, -0.1); m.world.simulate()
+            m.resolve()
+            if (!m.isBreak) legal++
+        }
+        assertTrue("legal breaks: $legal", legal >= 5)
+    }
+
+    @Test fun circuitBeliefOnlyUsesWhatsPublic() {
+        val m = circuit()
+        // CPU (player 1) watches: the 3 went down and the count for player 0 went up; the 10 went down and it didn't.
+        m.world.balls[3].onTable = false; m.circuit.obs += intArrayOf(m.downMask(), 1, 0)
+        m.world.balls[10].onTable = false; m.circuit.obs += intArrayOf(m.downMask(), 1, 0)
+        val b = CircuitBelief(m.circuit, 1)
+        assertEquals(1.0, b.pOpp[3], 1e-9)
+        assertEquals(0.0, b.pOpp[10], 1e-9)
+        assertEquals(0.0, b.pOpp[6], 1e-9)       // its own target
+        assertTrue((1 shl 3) or (1 shl 4) or (1 shl 5) in b.sets.toList())
+        assertEquals(1, b.oppSunk)
+        // Changing player 0's real targets (consistent with what was seen) changes nothing the CPU knows.
+        m.circuit.targets[0] = intArrayOf(3, 11, 12)
+        val b2 = CircuitBelief(m.circuit, 1)
+        assertEquals(b.sets.toList(), b2.sets.toList())
+    }
+
+    @Test fun circuitGameSurvivesSaving() {
+        val m = circuit()
+        circuitPot(m, 7)
+        val text = GameSave.write(m, GameSettings(GameMode.CIRCUIT, false, 5, 0, false, 0))
+        val r = Match(GameMode.CIRCUIT, arrayOf("You", "CPU"))
+        assertTrue(GameSave.restore(text, r))
+        assertEquals(listOf(3, 4, 5), r.circuit.targets[0].toList())
+        assertEquals(listOf(6, 7, 8), r.circuit.targets[1].toList())
+        assertEquals(1, r.circuit.obs.size); assertEquals(1, r.circuitSunk(1)); assertEquals(1, r.current)
+    }
+
+    @Test fun cpuFinishesCircuitGames() {
+        for (seed in 0 until 4) {
+            val m = Match(GameMode.CIRCUIT, arrayOf("A", "B")); m.rack(Random(seed), seed % 2)
+            val ai = arrayOf(Ai(8, seed.toLong()), Ai(3, seed + 99L))
+            var shots = 0
+            while (m.winner < 0 && shots < 300) {
+                val p = ai[m.current].plan(Match(m.mode, m.names).also { it.copyFrom(m) }, 500)
+                if (m.ballInHand && p.hasPlacement) assertTrue(m.placeCue(p.placeX, p.placeY))
+                m.shoot(p.angle, p.speed, p.side, p.vert, p.elevation); m.world.simulate(); m.resolve(); shots++
+            }
+            assertTrue("seed $seed unfinished", m.winner >= 0)
+        }
+    }
 }

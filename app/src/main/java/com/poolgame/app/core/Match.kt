@@ -10,8 +10,9 @@ import kotlin.random.Random
 /**
  * TRICK: trick shots on the gap table (jump the gap, sink the 1), head to head.
  * BUMPER: bumper pool on its own small table (two cups, twelve bumpers, five balls each, no cue ball).
+ * CIRCUIT: Circuit Pool — each player is secretly dealt three of the fifteen balls; first to sink all three wins.
  */
-enum class GameMode { EIGHT_BALL, NINE_BALL, TRICK, BUMPER }
+enum class GameMode { EIGHT_BALL, NINE_BALL, TRICK, BUMPER, CIRCUIT }
 enum class Group { OPEN, SOLIDS, STRIPES }
 
 /** Called-pocket rule: off, only for the money ball (the 8 in 8-ball, the 9 in 9-ball), or every shot. */
@@ -52,6 +53,9 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     /** Trick-shot match state (only used in GameMode.TRICK). */
     val trick = TrickState()
 
+    /** Circuit Pool: each player's secret targets and what both players have seen (only used in GameMode.CIRCUIT). */
+    val circuit = CircuitState()
+
     /**
      * Bumper pool's opening: both players shoot their marked ball at the same moment. Each sets a
      * shot ([angle, speed, side, vert, elevation]) in turn; it waits here, unseen, until both are in.
@@ -89,6 +93,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         preCue = o.preCue; preMarked[0] = o.preMarked[0]; preMarked[1] = o.preMarked[1]
         for (p in 0..1) { opening[p] = o.opening[p]?.copyOf(); openIds[p] = o.openIds[p] }
         trick.copyFrom(o.trick)
+        circuit.copyFrom(o.circuit)
     }
 
     // "You win" / "CPU wins" — the player named "You" takes the plural verb form.
@@ -98,7 +103,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     private fun continues(p: Int) = if (you(p)) "You continue" else "${names[p]} continues"
 
     fun ballIds(): List<Int> = when (mode) {
-        GameMode.EIGHT_BALL -> IDS_8
+        GameMode.EIGHT_BALL, GameMode.CIRCUIT -> IDS_8
         GameMode.NINE_BALL -> IDS_9
         GameMode.TRICK -> Trick.LEVELS[trick.level].ids
         GameMode.BUMPER -> IDS_BUMPER
@@ -109,12 +114,31 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     fun rack(rng: Random, breaker: Int) {
         if (mode == GameMode.TRICK) { startTrick(breaker); return }
         if (mode == GameMode.BUMPER) { startBumper(rng); return }
+        if (mode == GameMode.CIRCUIT) circuit.deal(rng)
+        rackBalls(rng)
+        val c = world.balls[0]
+        c.x = P.HEAD_X; c.y = P.FOOT_Y; c.onTable = true
+        current = breaker
+        groups[0] = Group.OPEN; groups[1] = Group.OPEN
+        ballInHand = true; kitchenOnly = true; isBreak = true
+        winner = -1
+        consecutiveFouls[0] = 0; consecutiveFouls[1] = 0
+        message = "${names[breaker]} to break"
+    }
+
+    /** Racks the object balls on the foot spot (8-ball's and Circuit Pool's triangle, 9-ball's diamond) and takes the cue ball off. */
+    private fun rackBalls(rng: Random) {
         for (b in world.balls) { b.onTable = false; b.stop() }
         val r = P.R + 0.0002
         val dx = sqrt(3.0) * r
         val positions = ArrayList<Pair<Double, Double>>()
         val order: List<Int>
-        if (mode == GameMode.EIGHT_BALL) {
+        if (mode == GameMode.CIRCUIT) {
+            // Circuit Pool: the full triangle, every ball anywhere.
+            for (row in 0..4) for (k in 0..row)
+                positions += (P.FOOT_X + row * dx) to (P.FOOT_Y + (k - row / 2.0) * 2 * r)
+            order = (1..15).shuffled(rng)
+        } else if (mode == GameMode.EIGHT_BALL) {
             for (row in 0..4) for (k in 0..row)
                 positions += (P.FOOT_X + row * dx) to (P.FOOT_Y + (k - row / 2.0) * 2 * r)
             // index 4 = row 2 middle (8-ball); 10 and 14 = back corners
@@ -145,14 +169,6 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             b.onTable = true
             randomOrientation(b, rng)
         }
-        val c = world.balls[0]
-        c.x = P.HEAD_X; c.y = P.FOOT_Y; c.onTable = true
-        current = breaker
-        groups[0] = Group.OPEN; groups[1] = Group.OPEN
-        ballInHand = true; kitchenOnly = true; isBreak = true
-        winner = -1
-        consecutiveFouls[0] = 0; consecutiveFouls[1] = 0
-        message = "${names[breaker]} to break"
     }
 
     /** Rock, paper, scissors decided who goes first. */
@@ -194,6 +210,8 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         if (mode == GameMode.TRICK) return (1..15).filter { world.balls[it].onTable }.toIntArray()
         // Bumper pool: your ball may hit anything first.
         if (mode == GameMode.BUMPER) return IDS_BUMPER.filter { it != world.cue && world.balls[it].onTable }.toIntArray()
+        // Circuit Pool: any ball may be hit first.
+        if (mode == GameMode.CIRCUIT) return (1..15).filter { world.balls[it].onTable }.toIntArray()
         if (mode == GameMode.NINE_BALL) return intArrayOf(lowestBall())
         if (isBreak) return (1..15).filter { world.balls[it].onTable }.toIntArray()
         val g = groups[player]
@@ -222,14 +240,15 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     // ------------------------------------------------------------------ shooting
 
     /** Whether the shooter must call a pocket before this shot. */
-    fun callRequired(): Boolean = !isBreak && mode != GameMode.TRICK && mode != GameMode.BUMPER && when (callMode) {
+    fun callRequired(): Boolean = !isBreak && mode != GameMode.TRICK && mode != GameMode.BUMPER && mode != GameMode.CIRCUIT && when (callMode) {
         CallMode.OFF -> false
         CallMode.MONEY_BALL -> if (mode == GameMode.EIGHT_BALL) onEight(current) else lowestBall() == 9
         CallMode.EVERY_SHOT -> true
     }
 
     /** Calling is allowed whenever the rule is on (e.g. to call a 9-ball combo). */
-    fun callAllowed(): Boolean = callMode != CallMode.OFF && !isBreak && mode != GameMode.TRICK && mode != GameMode.BUMPER
+    fun callAllowed(): Boolean = callMode != CallMode.OFF && !isBreak && mode != GameMode.TRICK && mode != GameMode.BUMPER &&
+        mode != GameMode.CIRCUIT
 
     fun beginShot() {
         preTargets = legalTargets(current)
@@ -252,6 +271,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     fun timeFoul(): ShotOutcome {
         if (mode == GameMode.TRICK) return trickAttempt(false, "the shot clock ran out")
         if (mode == GameMode.BUMPER) return bumperTimeFoul()
+        if (mode == GameMode.CIRCUIT) return circuitTimeFoul()
         val shooter = current
         val opp = 1 - shooter
         isBreak = false
@@ -273,6 +293,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     fun resolve(): ShotOutcome {
         if (mode == GameMode.TRICK) return resolveTrick()
         if (mode == GameMode.BUMPER) return resolveBumper()
+        if (mode == GameMode.CIRCUIT) return resolveCircuit()
         val log = world.log
         val shooter = current
         val opp = 1 - shooter
@@ -863,6 +884,140 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             }
             r += 0.02
         }
+    }
+
+    // ------------------------------------------------------------------ circuit pool
+
+    /** The player whose secret target ball [id] is, or -1 (a neutral ball, dealt to nobody). */
+    fun targetOwner(id: Int): Int = when (id) {
+        in circuit.targets[0] -> 0
+        in circuit.targets[1] -> 1
+        else -> -1
+    }
+
+    /** How many of player [p]'s targets are down. (Public: both players see each other's count.) */
+    fun circuitSunk(p: Int): Int = circuit.targets[p].count { it in 1..15 && !world.balls[it].onTable }
+
+    /** The object balls in the pockets, as a bit mask (bit n = ball n). */
+    fun downMask(): Int {
+        var m = 0
+        for (id in 1..15) if (!world.balls[id].onTable) m = m or (1 shl id)
+        return m
+    }
+
+    /** Circuit Pool's fouls (the same for the real game and for the computer looking ahead): a reason, or "" for none. */
+    fun circuitFoul(log: ShotLog): String = when {
+        0 in log.pocketed -> "Scratch"
+        0 in log.jumpedOff -> "Cue ball jumped off the table"
+        log.scooped -> "Scoop shot — the cue ball was dug under and lifted"
+        log.firstHit < 0 -> "No ball hit"
+        log.jumpedOff.isNotEmpty() -> "Ball jumped off the table"
+        else -> ""
+    }
+
+    /** Numbered balls that touched a cushion this shot (a legal break needs four, if nothing went in). */
+    fun railedObjectBalls(log: ShotLog): Int = (1..15).count { (log.railed and (1 shl it)) != 0 }
+
+    private fun circuitTimeFoul(): ShotOutcome {
+        val opp = 1 - current
+        current = opp
+        ballInHand = true
+        if (!world.balls[0].onTable) restoreCue()
+        message = if (isBreak) {
+            // Nothing has been hit yet: the opponent breaks instead.
+            kitchenOnly = true
+            "Foul: shot clock expired · ${names[opp]} to break"
+        } else {
+            kitchenOnly = false
+            "Foul: shot clock expired · ${has(opp)} ball in hand"
+        }
+        return ShotOutcome(true, "Shot clock", false, -1, message)
+    }
+
+    /**
+     * Circuit Pool (from the rules sheet):
+     *  - Each player has three secret target balls; the other nine are neutral. Any ball may be hit first, any order.
+     *  - Pocketed balls stay down. Your target counts for you; the opponent's counts for them and ends your turn;
+     *    a neutral ball keeps your turn going (so does your own target).
+     *  - Fouls (scratch, cue ball off the table, scoop, no ball hit, an object ball off the table — it's spotted on
+     *    the foot spot) give the opponent ball in hand anywhere. Balls sunk on a foul still count for their owner.
+     *  - Break: legal if a ball goes in or four numbered balls reach a cushion. On a legal break any ball that goes
+     *    in keeps the breaker shooting. Nothing in: the opponent shoots from where the cue ball stopped. A foul on
+     *    the break: ball in hand behind the head string. An illegal break is re-racked and the opponent breaks.
+     *  - Three down wins at once. If one shot finishes both players, the shooter wins — unless it was a foul.
+     */
+    private fun resolveCircuit(): ShotOutcome {
+        val log = world.log
+        val shooter = current
+        val opp = 1 - shooter
+        val brk = isBreak
+        val objects = log.pocketed.filter { it != 0 }
+        val reason = circuitFoul(log)
+        val foul = reason.isNotEmpty()
+        val railed = railedObjectBalls(log)
+        for (id in log.jumpedOff) if (id != 0) respot(id)
+
+        // Illegal break (no foul, nothing in, fewer than four balls to a cushion): rack again, the other player breaks.
+        if (brk && !foul && objects.isEmpty() && railed < 4) {
+            rackBalls(Random(log.railed + 17 * circuit.targets[0][0]))
+            val c = world.balls[0]
+            c.x = P.HEAD_X; c.y = P.FOOT_Y; c.onTable = true
+            current = opp
+            ballInHand = true; kitchenOnly = true; isBreak = true
+            message = "Illegal break: only $railed ${if (railed == 1) "ball" else "balls"} reached a cushion (4 needed) · " +
+                "re-racked · ${names[opp]} to break"
+            return ShotOutcome(false, "Illegal break", false, -1, message)
+        }
+
+        val mine = objects.count { targetOwner(it) == shooter }
+        val theirs = objects.count { targetOwner(it) == opp }
+        val sDone = circuitSunk(shooter) >= 3
+        val oDone = circuitSunk(opp) >= 3
+        val win = when {
+            sDone && oDone -> if (foul) opp else shooter   // a double drop: the shooter, unless it was a foul
+            sDone -> shooter
+            oDone -> opp
+            else -> -1
+        }
+        circuit.obs += intArrayOf(downMask(), circuitSunk(0), circuitSunk(1))
+        isBreak = false
+
+        val notes = ArrayList<String>()
+        if (mine > 0) notes += (if (you(shooter)) "You sank " else "${names[shooter]} sank ") +
+            (if (mine == 1) "a target" else "$mine targets") + " (${circuitSunk(shooter)}/3)"
+        if (theirs > 0) notes += (if (you(opp)) "that was " + (if (theirs == 1) "one of your targets" else "$theirs of your targets")
+            else (if (theirs == 1) "one of ${names[opp]}'s targets" else "$theirs of ${names[opp]}'s targets") + " went down") +
+            " (${circuitSunk(opp)}/3)"
+        val neutral = objects.size - mine - theirs
+        if (neutral > 0 && mine == 0 && theirs == 0 && !foul) notes += if (neutral == 1) "a neutral ball" else "$neutral neutral balls"
+
+        winner = win
+        if (win >= 0) {
+            if (sDone && oDone) notes += if (foul) "both finished on a foul" else "both finished on the same shot"
+            message = winsText(win) + if (notes.isNotEmpty()) " (${notes.joinToString(", ")})" else ""
+            return ShotOutcome(foul, reason, false, win, message)
+        }
+
+        var keep = false
+        if (foul) {
+            current = opp
+            ballInHand = true
+            kitchenOnly = brk
+            if (!world.balls[0].onTable) restoreCue()
+            notes.add(0, "Foul: $reason")
+            notes += "${has(opp)} ball in hand" + if (brk) " behind the line" else ""
+        } else if (theirs > 0 && !brk) {
+            current = opp
+            notes += "${names[opp]} to shoot"
+        } else if (objects.isNotEmpty()) {
+            keep = true
+            notes += continues(shooter)
+        } else {
+            current = opp
+            notes += "${names[opp]} to shoot"
+        }
+        message = notes.joinToString(" · ")
+        return ShotOutcome(foul, reason, keep, -1, message, heckle = foul && log.firstHit < 0 && reason == "No ball hit")
     }
 
     private companion object {

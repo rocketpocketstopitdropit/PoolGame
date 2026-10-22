@@ -1,7 +1,7 @@
 # Pool — 8-Ball, 9-Ball & Trick Shots for Android
 
 A landscape pool game on a 7, 8 or 9 ft table, with real cue-ball spin, a 3D view down the cue, physically real jump shots (and
-illegal scoops), 8-ball and 9-ball rules, bumper pool on its own table, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
+illegal scoops), 8-ball and 9-ball rules, Circuit Pool (three secret target balls each), bumper pool on its own table, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
 no image or sound assets (balls are rendered per-pixel and sounds are synthesized).
 
 ## Build & run
@@ -114,7 +114,7 @@ apps or close it. A shot that was still rolling is replayed from the start of th
 **Shot clock** (menu): optional 10–120 s per shot for human players; running out is a foul. With
 ball in hand the clock waits until you aim (table or fine-aim wheel) or touch the power bar.
 
-**Practice** (menu → Game → Practice): just you, a cue ball and red/yellow balls (plus the black), no
+**Practice** (menu → Game → Practice → Free table; *Trick shot* and *Bumper* are covered below): just you, a cue ball and red/yellow balls (plus the black), no
 numbers, no rules. Tap a ball to aim at it; hold a ball for a moment to pick it up and drag it
 anywhere — including the cue ball — to set up trick shots. *Retry shot* puts every ball back where
 it was before your last shot, *Re-rack* starts over, *Clear table* removes the object balls, and
@@ -162,6 +162,33 @@ who shoots into it, and the player cards show who has what left.
 - **Winning**: first to get all five down. Sinking your last ball in your own cup loses.
 - The shot clock works as in the other games (running out is a foul; in the opening it just means no shot).
 - The aim guide rings a ball dropping into your cup in gold and into your own cup in red.
+
+**Bumper practice**: menu → Game → Practice → Bumper. The bumper table on your own, no rules and no opening. Tap any
+ball (red or white) to shoot it; the guide then shows the cup that ball's colour shoots for. Hold a ball to pick it
+up and drag it anywhere. *Retry shot*, *Re-rack* and *Clear table* work as on the free table (Clear keeps the ball
+you're shooting), and tapping a ball in the tray puts it back. When the ball you shot goes in, the nearest one left
+is picked for you.
+
+## Circuit Pool (menu → Game → Circuit)
+
+A hidden-objective game on the regulation table with all fifteen balls, racked in any order. At the start each player
+is secretly dealt three of the fifteen numbers; the other nine are neutral. You see your own targets on your player
+card (and dashed gold rings round them on the table); for your opponent you only see how many are down.
+
+- **Any ball, any order**: you may hit any ball first. Sinking one of your targets or a neutral ball keeps you
+  shooting. Sinking one of your opponent's counts for them and ends your turn (they shoot from where the cue ball
+  stopped). Pocketed balls stay down.
+- **Break**: from behind the head string. Legal if a ball goes in or four numbered balls reach a cushion. On a
+  legal break any ball going in keeps you shooting; nothing in passes the turn. A soft (illegal) break is re-racked
+  and the other player breaks. A scratch on the break gives ball in hand behind the line.
+- **Fouls** — scratch, cue ball off the table, no ball hit, an object ball off the table (it's spotted on the foot
+  spot) or a scoop jump: ball in hand anywhere for your opponent. Balls sunk on a foul still count for their owner.
+- **Winning**: the moment your third target goes down — whoever sinks it. If one shot finishes both players, the
+  shooter wins, unless it was a foul. The end-of-game panel shows everyone's targets.
+- **Pass & play** keeps the targets secret: at every change of turn the table goes dark and says whose turn it is;
+  that player taps to see their targets. Against the CPU yours are always on show.
+- No called pockets (the menu's Call pocket setting doesn't apply). Rules from a sheet written for this app by
+  Gemini; where it was silent (an illegal break, a time foul on the break) the app re-racks for the other player.
 
 ## Trick shots (menu → Game → Trick)
 
@@ -246,12 +273,20 @@ and picks the one that still goes in most often with its own aim and speed error
 
 Head-to-head (headless, 10 games each): L10 beat L1 20/20; L7 beat L4 16/20.
 
+Circuit Pool: it never looks at your targets. From the counts both players can see after every shot it works out
+every set of three balls you could have (`core/Circuit.kt`, `CircuitBelief`), and scores each shot it simulates
+averaged over all of them: its own targets are worth the most, a probably-neutral ball keeps its turn, and a ball
+that may be yours is avoided (strongly once you're on your last one). Its copy of the table holds a guess drawn from
+those sets in place of your real targets. Games are short and luck plays a part (neutral balls keep a good player
+running): headless, L10 beat L1 9/10 and L7 beat L4 5/10.
+
 ## Layout
 
 ```
 app/src/main/java/com/poolgame/app/
   core/   Table.kt (constants, sizes, rails)    World.kt (physics)
-          Match.kt (racks + rules, bumper pool)  Ai.kt (computer player)
+          Match.kt (racks + rules, bumper pool, Circuit Pool)  Ai.kt (computer player)
+          Circuit.kt (Circuit Pool's secret targets, and what a player can work out about the opponent's)
           Crowd.kt (synthesized crowd "aww", shared with the web version)
           Trick.kt (trick-shot levels, match state, known shots)
           Cough.kt (synthesized cough, the foul sound until you record one)
