@@ -1,7 +1,7 @@
 # Pool — 8-Ball, 9-Ball & Trick Shots for Android
 
 A landscape pool game on a 7, 8 or 9 ft table, with real cue-ball spin, a 3D view down the cue, physically real jump shots (and
-illegal scoops), 8-ball and 9-ball rules, Circuit Pool (three secret target balls each), bumper pool on its own table, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
+illegal scoops), 8-ball and 9-ball rules, Circuit Pool (three secret target balls each), Pocket Wars (a fight over the six pockets), bumper pool on its own table, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
 no image or sound assets (balls are rendered per-pixel and sounds are synthesized).
 
 ## Build & run
@@ -104,7 +104,7 @@ A table foul — hitting nothing, hitting the wrong ball first, or no rail and n
 It's trimmed and levelled automatically and kept on that device. Until you record one, a synthesized cough plays.
 
 **Table size** (menu → TABLE SIZE): 7 ft (bar box, 78″ × 39″, the default), 8 ft (88″ × 44″) or 9 ft (tournament,
-100″ × 50″) for 8-ball, 9-ball and free-table practice. Balls and pockets are the same size on all three, so a smaller
+100″ × 50″) for 8-ball, 9-ball, Circuit Pool, Pocket Wars and their practice. Balls and pockets are the same size on all three, so a smaller
 table means shorter shots and bigger balls on screen. Trick shots and the tutorial always use the 9 ft table. A paused
 game keeps the table it was started on.
 
@@ -114,11 +114,22 @@ apps or close it. A shot that was still rolling is replayed from the start of th
 **Shot clock** (menu): optional 10–120 s per shot for human players; running out is a foul. With
 ball in hand the clock waits until you aim (table or fine-aim wheel) or touch the power bar.
 
-**Practice** (menu → Game → Practice → Free table; *Trick shot* and *Bumper* are covered below): just you, a cue ball and red/yellow balls (plus the black), no
-numbers, no rules. Tap a ball to aim at it; hold a ball for a moment to pick it up and drag it
-anywhere — including the cue ball — to set up trick shots. *Retry shot* puts every ball back where
-it was before your last shot, *Re-rack* starts over, *Clear table* removes the object balls, and
-tapping a ball in the ball tray (left) brings it back.
+**Every game three ways**: pick the game (8-Ball, 9-Ball, Circuit, Pocket Wars, Bumper, Trick), then the
+**Opponent**: *Computer* (ten levels), *Pass & Play*, or *Practice* on your own.
+
+**Practice** (Opponent → Practice). For 8-ball, 9-ball, Circuit Pool and Pocket Wars:
+- *With the rules* (the default): the game's own rack and rules, but you take every shot. Each shot is judged as in a
+  match — fouls give you ball in hand, groups are assigned, Circuit Pool deals you three targets and hides three for an
+  absent opponent (sink theirs and they count against you), Pocket Wars claims pockets for you. The card on the right
+  shows where the rack stands and your shots and fouls; the rack ends as it would in a game (*Rack won!* or *Rack lost*,
+  with your shot count), and *Re-rack* starts again. *Retry shot* undoes your last shot, rules and all, and you can hold
+  any ball to move it. (Clear table and the tray are off, since they'd change the score.)
+- *Free table*: just you, a cue ball and red/yellow balls (plus the black), no numbers, no rules. Tap a ball to aim at
+  it; hold a ball for a moment to pick it up and drag it anywhere — including the cue ball — to set up trick shots.
+  *Retry shot* puts every ball back where it was before your last shot, *Re-rack* starts over, *Clear table* removes
+  the object balls, and tapping a ball in the ball tray (left) brings it back.
+
+Bumper and Trick have their own practice, below.
 **Record**: wins and losses are saved per game type and CPU level (and for pass & play), shown on
 the menu and after each game.
 
@@ -163,7 +174,7 @@ who shoots into it, and the player cards show who has what left.
 - The shot clock works as in the other games (running out is a foul; in the opening it just means no shot).
 - The aim guide rings a ball dropping into your cup in gold and into your own cup in red.
 
-**Bumper practice**: menu → Game → Practice → Bumper. The bumper table on your own, no rules and no opening. Tap any
+**Bumper practice**: Bumper, Opponent → Practice. The bumper table on your own, no rules and no opening. Tap any
 ball (red or white) to shoot it; the guide then shows the cup that ball's colour shoots for. Hold a ball to pick it
 up and drag it anywhere. *Retry shot*, *Re-rack* and *Clear table* work as on the free table (Clear keeps the ball
 you're shooting), and tapping a ball in the tray puts it back. When the ball you shot goes in, the nearest one left
@@ -190,6 +201,24 @@ card (and dashed gold rings round them on the table); for your opponent you only
 - No called pockets (the menu's Call pocket setting doesn't apply). Rules from a sheet written for this app by
   Gemini; where it was silent (an illegal break, a time foul on the break) the app re-racks for the other player.
 
+## Pocket Wars (menu → Game → Pocket Wars)
+
+A fight over the six pockets, on the regulation table with all fifteen balls racked in any order. Every ball is worth
+its number (120 points in all). Player 1 (you) is blue, player 2 (the CPU) orange; claimed pockets are ringed in their
+owner's colour, and each player's card shows points, pockets and how many to go.
+
+- **Claiming**: all six pockets start open, and any ball may be hit first. Sink a ball in an open pocket and you claim
+  it; you score the ball and keep shooting. Sinking into one of your own pockets scores and keeps you shooting too.
+- **Their pockets**: a ball you sink into your opponent's pocket scores for them, and your turn ends.
+- **Bank to steal**: if that ball hit a rail before it dropped (a pocket's jaws don't count), you steal the pocket
+  instead: it's yours, you score the ball and keep shooting.
+- **Break**: balls sunk on the break score for the breaker but claim nothing; anything in keeps the breaker shooting.
+- **Fouls** (scratch, cue ball off the table, no ball hit, an object ball off the table, no rail after contact, a scoop
+  jump): the balls sunk on that shot are spotted back and your opponent gets ball in hand anywhere. Scratching into one
+  of your own pockets also gives it up (it's open again).
+- **Winning**: first to 61 points. If the table empties at 60–60, whoever owns more pockets wins; still level, whoever
+  sank the last ball.
+
 ## Trick shots (menu → Game → Trick)
 
 The table's second quarter — from the head string to the side pockets — is cut away. The cue ball starts in
@@ -214,7 +243,7 @@ extra ball counts as 3. Lower score wins the level; an equal score goes to whoev
 goes to the runner). A player who can no longer catch up stops early. Most levels won takes the match; a tie
 goes to sudden death. The balls reset after every attempt.
 
-**Practice a trick shot**: menu → Game → Practice → Trick shot, then pick the level. Unlimited attempts on your
+**Practice a trick shot**: Trick, Opponent → Practice, then pick the level. Unlimited attempts on your
 own, with a made/attempts count; ◀ Level / Level ▶ switch levels and Reset puts the balls back. Every level was checked with the physics engine
 (`core/Trick.kt` holds known working shots, found by a search with the physics engine and redone when the strike
 model changed, and a unit test makes sure each level still has one).
@@ -273,6 +302,10 @@ and picks the one that still goes in most often with its own aim and speed error
 
 Head-to-head (headless, 10 games each): L10 beat L1 20/20; L7 beat L4 16/20.
 
+Pocket Wars: it scores each shot it simulates on the points it gains and gives away and the pockets that change hands
+(points count for more once either player is near 61), and only goes for balls into its own or open pockets. From
+level 5 it also looks at banks into your pockets to steal them. Headless: L10 beat L1 10/10, L7 beat L4 9/10.
+
 Circuit Pool: it never looks at your targets. From the counts both players can see after every shot it works out
 every set of three balls you could have (`core/Circuit.kt`, `CircuitBelief`), and scores each shot it simulates
 averaged over all of them: its own targets are worth the most, a probably-neutral ball keeps its turn, and a ball
@@ -285,8 +318,9 @@ running): headless, L10 beat L1 9/10 and L7 beat L4 5/10.
 ```
 app/src/main/java/com/poolgame/app/
   core/   Table.kt (constants, sizes, rails)    World.kt (physics)
-          Match.kt (racks + rules, bumper pool, Circuit Pool)  Ai.kt (computer player)
+          Match.kt (racks + rules, bumper pool, Circuit Pool, Pocket Wars)  Ai.kt (computer player)
           Circuit.kt (Circuit Pool's secret targets, and what a player can work out about the opponent's)
+          PocketWars.kt (Pocket Wars: who owns each pocket, and the points)
           Crowd.kt (synthesized crowd "aww", shared with the web version)
           Trick.kt (trick-shot levels, match state, known shots)
           Cough.kt (synthesized cough, the foul sound until you record one)

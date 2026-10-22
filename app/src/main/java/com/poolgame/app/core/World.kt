@@ -61,6 +61,8 @@ class ShotLog {
     var air = 0
     /** Balls that touched a cushion this shot (bit n = ball n). */
     var railed = 0
+    /** Balls that touched a rail this shot, not counting the pockets' jaws (bit n = ball n). */
+    var banked = 0
 
     fun reset() {
         firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0; jumpedOff.clear()
@@ -68,7 +70,7 @@ class ShotLog {
         pocketIn.fill(-1)
         touched.fill(0); cueLanded = false; cueAirTouched = 0; cutDeg = Double.NaN
         cueLandX = Double.NaN; cueLandY = Double.NaN
-        miscue = false; scooped = false; air = 0; railed = 0
+        miscue = false; scooped = false; air = 0; railed = 0; banked = 0
     }
 
     fun copyFrom(o: ShotLog) {
@@ -80,7 +82,7 @@ class ShotLog {
         o.pocketIn.copyInto(pocketIn)
         o.touched.copyInto(touched); cueLanded = o.cueLanded; cueAirTouched = o.cueAirTouched; cutDeg = o.cutDeg
         cueLandX = o.cueLandX; cueLandY = o.cueLandY
-        miscue = o.miscue; scooped = o.scooped; air = o.air; railed = o.railed
+        miscue = o.miscue; scooped = o.scooped; air = o.air; railed = o.railed; banked = o.banked
     }
 }
 
@@ -551,6 +553,7 @@ class World {
                 }
                 b.x += b.vx * s; b.y += b.vy * s
                 log.railed = log.railed or (1 shl b.id)
+                if (!sg.jaw) log.banked = log.banked or (1 shl b.id)
                 if (log.firstHit >= 0) log.railAfterHit = true
                 else if (b.id == cue) log.cueCushionsBeforeHit++
                 listener?.onCushion(-vn)

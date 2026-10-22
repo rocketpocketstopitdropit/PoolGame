@@ -63,8 +63,9 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             GameMode.TRICK -> trickShot(m)
             GameMode.BUMPER -> bumperShot(m)
             GameMode.CIRCUIT -> choose(circuitView(m))
-            else -> choose(m)
+            else -> { pocketWars = m.mode == GameMode.POCKET_WARS; choose(m) }
         }
+        pocketWars = false
         return Plan(
             ideal.angle + gauss() * aimSigma,
             (ideal.speed * (1 + gauss() * speedSigma)).coerceIn(0.2, P.MAX_CUE_SPEED),
@@ -80,6 +81,85 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
 
     /** Circuit Pool: what the computer knows about the opponent's targets (worked out from public counts only). */
     private var belief: CircuitBelief? = null
+
+    // ------------------------------------------------------------------ pocket wars
+
+    private var pocketWars = false
+
+    /**
+     * Pocket Wars: how much potting ball [id] in pocket [pk] is worth to player [me] — its number, plus a little
+     * for claiming an open pocket; into the opponent's pocket it's a gift (unless it's a bank, which steals it).
+     */
+    private fun pocketValue(m: Match, me: Int, id: Int, pk: Int, bank: Boolean = false): Double {
+        val o = m.pockets.owner.getOrElse(pk) { -1 }
+        return when {
+            o == 1 - me && !bank -> -id / 15.0
+            o == 1 - me -> id / 15.0 + 0.6
+            o == -1 && !m.isBreak -> id / 15.0 + 0.35
+            else -> id / 15.0
+        }.let { if (it > 0) 0.4 + it else it }
+    }
+
+    /**
+     * Pocket Wars bank shots into the opponent's pockets (to steal them): the pocket mirrored across each rail
+     * gives the line the object ball must take. Only straightforward ones, and harder to make than a direct pot.
+     */
+    private fun bankCandidates(m: Match, me: Int): List<Cand> {
+        val out = ArrayList<Cand>()
+        val w = m.world
+        val c = w.balls[0]
+        if (!c.onTable) return out
+        val r = P.R
+        val minCos = cos(toRad(65.0))
+        for ((pi, pk) in Table.pockets.withIndex()) {
+            if (m.pockets.owner.getOrElse(pi) { -1 } != 1 - me) continue
+            for (t in 1..15) {
+                val tb = w.balls[t]
+                if (!tb.onTable) continue
+                // Mirror the pocket across each rail's line (a ball's centre runs along it a radius from the cushion).
+                val mirrors = arrayOf(
+                    doubleArrayOf(pk.cx, 2 * r - pk.cy), doubleArrayOf(pk.cx, 2 * (P.W - r) - pk.cy),
+                    doubleArrayOf(2 * r - pk.cx, pk.cy), doubleArrayOf(2 * (P.L - r) - pk.cx, pk.cy))
+                for (mp in mirrors) {
+                    val ox = mp[0] - tb.x; val oy = mp[1] - tb.y
+                    val d2 = hypot(ox, oy)
+                    if (d2 < 0.2) continue
+                    val ux = ox / d2; val uy = oy / d2
+                    val gx = tb.x - ux * 2 * r; val gy = tb.y - uy * 2 * r
+                    if (gx < r || gx > P.L - r || gy < r || gy > P.W - r) continue
+                    val vx = gx - c.x; val vy = gy - c.y
+                    val d1 = hypot(vx, vy)
+                    if (d1 < 1e-6) continue
+                    val cosCut = (vx * ux + vy * uy) / d1
+                    if (cosCut < minCos) continue
+                    if (!w.pathClear(c.x, c.y, gx, gy, 0, t, 2 * r - 0.0005)) continue
+                    val p = prob(cosCut, d1, d2 * 1.3, pk.tolerance * 0.6, aimSigma) * 0.7
+                    out += Cand(t, pi, atan2(vy, vx), cosCut, d1, d2, p)
+                }
+            }
+        }
+        out.sortByDescending { it.p }
+        return out
+    }
+
+    /** Pocket Wars: scores a shot the computer has run, from [me]'s side: points, pockets, and who shoots next. */
+    private fun pocketWarsEval(work: Match, s: Match, out: ShotOutcome, me: Int, target: Int): Eval {
+        val opp = 1 - me
+        val potted = !out.foul && target > 0 && target in s.world.log.pocketed
+        if (out.winner == me) return Eval(3.0, true, false)
+        if (out.winner >= 0) return Eval(-3.0, false, true)
+        val a = work.pockets; val b = s.pockets
+        val points = ((b.score[me] - a.score[me]) - (b.score[opp] - a.score[opp])) / 15.0
+        val pocketsGained = (b.pocketsOf(me) - b.pocketsOf(opp)) - (a.pocketsOf(me) - a.pocketsOf(opp))
+        // Close to 61, every point counts for more.
+        val urgency = if (b.score[opp] >= 45 || b.score[me] >= 45) 1.6 else 1.0
+        val next = when {
+            out.foul -> -0.9
+            out.keepTurn -> 0.6 + posWeight * bestP(s, me, aimSigma)
+            else -> -0.5 * bestP(s, opp, aimSigma)
+        }
+        return Eval(points * urgency + 0.3 * pocketsGained + next, potted, out.foul)
+    }
 
     /**
      * The table as the computer sees it in Circuit Pool: its own targets, and in place of the opponent's
@@ -429,6 +509,10 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
 
     private fun bestP(m: Match, player: Int, sigma: Double): Double {
         if (m.ballInHand) return 0.9
+        // Pocket Wars: the best pot that doesn't go in the other player's pocket.
+        if (pocketWars) return candidates(m, player, sigma).maxOfOrNull { c ->
+            if (m.pockets.owner.getOrElse(c.pocket) { -1 } == 1 - player) 0.0 else c.p * (0.6 + c.target / 37.5)
+        } ?: 0.0
         // Circuit Pool: the best shot at a ball worth sinking.
         if (belief != null) return candidates(m, player, sigma).maxOfOrNull { it.p * desire(it.target).coerceIn(0.0, 1.0) } ?: 0.0
         return candidates(m, player, sigma).firstOrNull()?.p ?: 0.0
@@ -469,7 +553,10 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             val tb = w.balls[t]
             if (!tb.onTable) continue
             val want = if (belief != null) desire(t) else 1.0
-            for (pk in Table.pockets) {
+            for ((pi, pk) in Table.pockets.withIndex()) {
+                // Pocket Wars: set up a pot into your own or an open pocket, the bigger the ball the better.
+                val pwWant = if (pocketWars) pocketValue(work, me, t, pi) else 1.0
+                if (pwWant <= 0.0) continue
                 val ox = pk.aimX - tb.x; val oy = pk.aimY - tb.y
                 val d2 = hypot(ox, oy)
                 val ux = ox / d2; val uy = oy / d2
@@ -490,7 +577,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
                     val px = gx - cos(a) * d; val py = gy - sin(a) * d
                     if (!work.canPlaceCue(px, py)) continue
                     if (!w.pathClear(px, py, gx, gy, 0, t)) continue
-                    var s = prob(cos(toRad(cutDeg)), d, d2, min(pk.tolerance, margin), aimSigma) * want
+                    var s = prob(cos(toRad(cutDeg)), d, d2, min(pk.tolerance, margin), aimSigma) * want * pwWant
                     if (level >= 6 && cutDeg != 0.0 && abs(cutDeg) < 15) s *= 1.04  // a little angle helps position
                     if (s > best) { best = s; bx = px; by = py }
                 }
@@ -530,6 +617,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         val me = work.current
         if (belief != null) return circuitEval(s, me, target)
         val out = s.resolve()
+        if (pocketWars) return pocketWarsEval(work, s, out, me, target)
         return when {
             out.winner == me -> Eval(3.0, true, false)
             out.winner >= 0 -> Eval(-3.0, false, true)
@@ -544,6 +632,15 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         var cands = candidates(work, me, aimSigma)
         // Circuit Pool: go for the balls worth sinking, best chance first (weighted by how much it wants each one).
         if (belief != null) cands = ArrayList(cands.filter { desire(it.target) > 0.0 }.sortedByDescending { it.p * desire(it.target) })
+        // Pocket Wars: big balls into your own or open pockets first; from level 5 it also looks at banks to steal a pocket.
+        if (pocketWars) {
+            val pool = ArrayList(cands.filter { pocketValue(work, me, it.target, it.pocket) > 0.0 })
+            if (level >= 5) pool += bankCandidates(work, me).take(4)
+            val bank = pool.toSet() - cands.toSet()
+            cands = ArrayList(pool.sortedByDescending {
+                it.p * pocketValue(work, me, it.target, it.pocket, it in bank)
+            })
+        }
         val k = if (level <= 3) 2 else min(2 + level, 10)
         val speedF = when {
             level <= 3 -> doubleArrayOf(1.25)

@@ -71,6 +71,7 @@ class Stats(context: Context) {
             GameMode.TRICK -> "Trick shots"
             GameMode.BUMPER -> "Bumper pool"
             GameMode.CIRCUIT -> "Circuit Pool"
+            GameMode.POCKET_WARS -> "Pocket Wars"
         }
     }
 }

@@ -75,6 +75,8 @@ object P {
 class Post(val x: Double, val y: Double, val r: Double)
 
 class Seg(val ax: Double, val ay: Double, val bx: Double, val by: Double) {
+    /** Part of a pocket's jaws rather than a rail (Pocket Wars: hitting a jaw isn't a bank). */
+    var jaw = false
     val dx = bx - ax
     val dy = by - ay
     val len2 = dx * dx + dy * dy
@@ -158,6 +160,8 @@ object Table {
                 true, doubleArrayOf(x1, y0, x2, y0), 0.022
             )
         }
+        // The first six are the rails; the rest are the pockets' jaws.
+        for (i in 6 until s.size) s[i].jaw = true
         segs = s.toTypedArray()
         pockets = p.toTypedArray()
         posts = emptyArray()

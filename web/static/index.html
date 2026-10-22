@@ -91,14 +91,18 @@
 <div id="menu">
   <div class="card">
     <h1>POOL</h1>
-    <p class="sub">8-Ball · 9-Ball · Circuit Pool · bumper pool · trick shots · practice</p>
+    <p class="sub">8-Ball · 9-Ball · Circuit Pool · Pocket Wars · bumper pool · trick shots</p>
 
     <div class="sec">GAME</div>
-    <div class="seg wrap" id="seg-mode"><button>8-Ball</button><button>9-Ball</button><button>Circuit</button><button>Bumper</button><button>Trick</button><button>Practice</button></div>
+    <div class="seg wrap" id="seg-mode"><button>8-Ball</button><button>9-Ball</button><button>Circuit</button><button>Pocket Wars</button><button>Bumper</button><button>Trick</button></div>
     <p class="help" id="circuitHelp" style="display:none">Circuit Pool: each player is secretly dealt three of the fifteen
       balls; the other nine are neutral. Hit any ball first. Sinking your own or a neutral ball keeps you shooting;
       sinking one of your opponent's counts for them and ends your turn. You see your own targets and how many your
       opponent has down, never which. First to sink all three wins.</p>
+    <p class="help" id="warsHelp" style="display:none">Pocket Wars: all six pockets start open. Sink a ball in an open
+      pocket to claim it (it's ringed in your colour); every ball scores its number. Your own pockets keep you shooting;
+      a ball in your opponent's pocket scores for them and ends your turn, unless you banked it in off a rail, which
+      steals the pocket. A foul spots the balls back. First to 61 points wins.</p>
     <p class="help" id="bumperHelp" style="display:none">Bumper pool: a small table with a cup at each end and twelve
       bumpers in the way. No cue ball: you shoot your own five balls (red, or white) into the far cup, your marked
       (spotted) ball first. Both marked balls go at once to open. Your ball in your own cup, a ball off the table or a
@@ -107,9 +111,16 @@
       far end. Jump the cue ball across the gap and sink the 1. Five levels, taking turns with the computer or a friend:
       whoever makes it in fewer shots wins the level, and most levels wins the match.</p>
 
+    <div class="sec">OPPONENT</div>
+    <div class="seg" id="seg-opp"><button>Computer</button><button>Pass &amp; Play</button><button>Practice</button></div>
+
     <div id="practiceOpts" style="display:none">
       <div class="sec">PRACTICE</div>
-      <div class="seg" id="seg-ptype"><button>Free table</button><button>Trick shot</button><button>Bumper</button></div>
+      <div id="prulesBlock">
+        <div class="seg" id="seg-prules"><button>With the rules</button><button>Free table</button></div>
+        <p class="help" id="prulesHelp" style="margin-top:6px"></p>
+      </div>
+      <p class="help" id="pbumperHelp">The bumper table on your own, no rules: tap any ball to shoot it, hold one to move it.</p>
       <div id="plevelBlock">
         <div class="sec">WHICH TRICK SHOT</div>
         <div class="seg wrap" id="seg-plevel"></div>
@@ -121,9 +132,6 @@
       <p class="help" id="sizeHelp" style="margin-top:6px"></p>
     </div>
     <div id="matchOpts">
-      <div class="sec">OPPONENT</div>
-      <div class="seg" id="seg-opp"><button>Computer</button><button>Pass &amp; Play</button></div>
-
       <div id="skillBlock">
         <div class="sec">COMPUTER SKILL</div>
         <div class="val" id="skillLabel"></div>

@@ -10,7 +10,9 @@ class GameSettings(
     val breaker: Int,
     val callMode: CallMode = CallMode.OFF,
     /** Table played on (8-ball, 9-ball, practice). Saves from before sizes existed were on the 9 ft table. */
-    val tableSize: TableSize = TableSize.NINE
+    val tableSize: TableSize = TableSize.NINE,
+    /** Practice with the game's own rules (on your own); false for the free table or a trick shot. */
+    val practiceRules: Boolean = false
 )
 
 /**
@@ -26,6 +28,7 @@ object GameSave {
         kv("clock", s.shotClock); kv("practice", s.practice); kv("breaker", s.breaker)
         kv("call", s.callMode.name)
         kv("table", s.tableSize.name)
+        kv("prules", s.practiceRules)
         kv("current", m.current)
         kv("g0", m.groups[0].name); kv("g1", m.groups[1].name)
         kv("bih", m.ballInHand); kv("kitchen", m.kitchenOnly); kv("brk", m.isBreak)
@@ -42,6 +45,7 @@ object GameSave {
             kv("ct", m.circuit.writeTargets())
             kv("co", m.circuit.writeObs())
         }
+        if (m.mode == GameMode.POCKET_WARS) kv("pw", m.pockets.write())
         for (b in m.world.balls) {
             kv("b${b.id}", "${b.x},${b.y},${if (b.onTable) 1 else 0},${b.qw},${b.qx},${b.qy},${b.qz}")
         }
@@ -58,7 +62,8 @@ object GameSave {
             p.getValue("practice").toBoolean(),
             p.getValue("breaker").toInt(),
             p["call"]?.let { CallMode.valueOf(it) } ?: CallMode.OFF,
-            TableSize.fromName(p["table"]) ?: TableSize.NINE
+            TableSize.fromName(p["table"]) ?: TableSize.NINE,
+            p["prules"]?.toBoolean() ?: false
         )
     } catch (e: Throwable) { null }
 
@@ -91,6 +96,7 @@ object GameSave {
             m.applyTrickLayout()
         }
         if (m.mode == GameMode.CIRCUIT) m.circuit.read(p.getValue("ct"), p["co"])
+        if (m.mode == GameMode.POCKET_WARS) m.pockets.read(p.getValue("pw"))
         for (b in m.world.balls) {
             val f = p.getValue("b${b.id}").split(',')
             b.stop()

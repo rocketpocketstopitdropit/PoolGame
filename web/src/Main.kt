@@ -24,8 +24,10 @@ class App : GameHost {
     private var mediaRec: dynamic = null
 
     // Menu state (same keys and meaning as the Android app)
-    private var modeIdx = Store.getInt("modeIdx", 0)      // 0 = 8-ball, 1 = 9-ball, 2 = practice, 3 = trick shots, 4 = bumper pool, 5 = Circuit Pool
+    // The game, and who it's against: 0 the computer, 1 pass & play, 2 practice on your own.
+    private var gameMode = GameMode.EIGHT_BALL
     private var vsCpu = Store.getBool("vsCpu", true)
+    private var opp = 0
     private var level = Store.getInt("level", 5).coerceIn(1, 10)
     private var clockOn = Store.getBool("clockOn", false)
     private var clockSec = Store.getInt("clockSec", 30).coerceIn(10, 120)
@@ -33,8 +35,8 @@ class App : GameHost {
     private var aimSens = Store.getInt("aimSens", 5).coerceIn(1, 10)
     private var callIdx = Store.getInt("callMode", 0).coerceIn(0, 2)
     private var prediction = Store.getBool("prediction", true)
-    // Practice: 0 the free table, 1 a trick shot, 2 the bumper table (older saves only knew trick shot or not).
-    private var practiceKind = Store.getInt("practiceKind", if (Store.getBool("practiceTrick", false)) 1 else 0).coerceIn(0, 2)
+    /** Practice a pool game with its rules (false: the free table). */
+    private var practiceRules = Store.getBool("practiceRules", true)
     private var practiceLevel = Store.getInt("practiceLevel", 0).coerceIn(0, com.poolgame.app.core.Trick.LEVELS.size - 1)
     private var askTutorial = Store.getBool("askTutorial", true)
     private var tableSize = TableSize.fromName(Store.get("tableSize", "")) ?: TableSize.DEFAULT
@@ -50,6 +52,32 @@ class App : GameHost {
         "Skilled", "Advanced", "Expert", "Master", "Pro")
 
     private fun el(id: String): dynamic = document.getElementById(id)
+
+    init {
+        val stored = GameMode.values().firstOrNull { it.name == Store.get("game", "") }
+        if (stored != null) {
+            gameMode = stored
+            opp = Store.getInt("opp", if (vsCpu) 0 else 1).coerceIn(0, 2)
+        } else {
+            // From before practice was an opponent choice: one number for the game type, with Practice as one of them.
+            when (Store.getInt("modeIdx", 0)) {
+                1 -> gameMode = GameMode.NINE_BALL
+                3 -> gameMode = GameMode.TRICK
+                4 -> gameMode = GameMode.BUMPER
+                5 -> gameMode = GameMode.CIRCUIT
+                2 -> {
+                    opp = 2
+                    when (Store.getInt("practiceKind", if (Store.getBool("practiceTrick", false)) 1 else 0)) {
+                        1 -> gameMode = GameMode.TRICK
+                        2 -> gameMode = GameMode.BUMPER
+                        else -> practiceRules = false
+                    }
+                }
+            }
+            if (opp != 2) opp = if (vsCpu) 0 else 1
+        }
+        vsCpu = opp == 0
+    }
 
     fun start() {
         wireMenu()
@@ -142,12 +170,11 @@ class App : GameHost {
     // ------------------------------------------------------------------ menu
 
     private fun wireMenu() {
-        // Buttons in order: 8-Ball, 9-Ball, Circuit, Bumper, Trick, Practice (the stored numbers keep their old meanings).
-        segment("seg-mode") { modeIdx = MODE_OF_BUTTON[it]; save(); refreshMenu() }
-        segment("seg-opp") { vsCpu = it == 0; save(); refreshMenu() }
+        segment("seg-mode") { gameMode = GAMES[it]; save(); refreshMenu() }
+        segment("seg-opp") { opp = it; vsCpu = it == 0; save(); refreshMenu() }
+        segment("seg-prules") { practiceRules = it == 0; save(); refreshMenu() }
         segment("seg-call") { callIdx = it; save(); refreshMenu() }
         segment("seg-size") { tableSize = TableSize.values()[it]; save(); refreshMenu() }
-        segment("seg-ptype") { practiceKind = it; save(); refreshMenu() }
         val pl = el("seg-plevel")
         for ((i, lv) in com.poolgame.app.core.Trick.LEVELS.withIndex()) {
             val b = document.createElement("button")
@@ -265,31 +292,36 @@ class App : GameHost {
         for (i in 0 until n) buttons[i].className = if (i == sel) "on" else ""
     }
 
-    private fun menuMode() = when (modeIdx) {
-        1 -> GameMode.NINE_BALL; 3 -> GameMode.TRICK; 4 -> GameMode.BUMPER; 5 -> GameMode.CIRCUIT; else -> GameMode.EIGHT_BALL
-    }
+    private fun menuMode() = gameMode
     private fun modeName() = menuMode().name
     private fun nameOf(m: GameMode) = when (m) {
         GameMode.EIGHT_BALL -> "8-Ball"; GameMode.NINE_BALL -> "9-Ball"; GameMode.TRICK -> "Trick shots"; GameMode.BUMPER -> "Bumper pool"
-        GameMode.CIRCUIT -> "Circuit Pool"
+        GameMode.CIRCUIT -> "Circuit Pool"; GameMode.POCKET_WARS -> "Pocket Wars"
     }
 
     private fun refreshMenu() {
-        setSegment("seg-mode", MODE_OF_BUTTON.indexOf(modeIdx).coerceAtLeast(0))
-        setSegment("seg-opp", if (vsCpu) 0 else 1)
+        val practice = opp == 2
+        val poolTable = gameMode != GameMode.TRICK && gameMode != GameMode.BUMPER
+        setSegment("seg-mode", GAMES.indexOf(gameMode))
+        setSegment("seg-opp", opp)
         setSegment("seg-call", callIdx)
-        el("matchOpts").style.display = if (modeIdx == 2) "none" else "block"
-        el("practiceOpts").style.display = if (modeIdx == 2) "block" else "none"
-        setSegment("seg-ptype", practiceKind)
-        el("plevelBlock").style.display = if (practiceKind == 1) "block" else "none"
+        el("matchOpts").style.display = if (practice) "none" else "block"
+        el("practiceOpts").style.display = if (practice) "block" else "none"
+        el("prulesBlock").style.display = if (poolTable) "block" else "none"
+        setSegment("seg-prules", if (practiceRules) 0 else 1)
+        el("prulesHelp").textContent = if (practiceRules) "On your own with the ${nameOf(gameMode)} rules: you take every shot, " +
+            "and each one is judged as in a game (fouls give you ball in hand). Retry a shot, re-rack, or hold a ball to move it."
+            else "No rules: plain red and yellow balls (and the black). Hold any ball to move it anywhere."
+        el("pbumperHelp").style.display = if (gameMode == GameMode.BUMPER) "block" else "none"
+        el("plevelBlock").style.display = if (gameMode == GameMode.TRICK) "block" else "none"
         setSegment("seg-plevel", practiceLevel)
-        el("callBlock").style.display = if (modeIdx == 3 || modeIdx == 4 || modeIdx == 5) "none" else "block"
-        el("trickHelp").style.display = if (modeIdx == 3) "block" else "none"
-        el("bumperHelp").style.display = if (modeIdx == 4) "block" else "none"
-        el("circuitHelp").style.display = if (modeIdx == 5) "block" else "none"
+        el("callBlock").style.display = if (gameMode == GameMode.EIGHT_BALL || gameMode == GameMode.NINE_BALL) "block" else "none"
+        el("trickHelp").style.display = if (gameMode == GameMode.TRICK) "block" else "none"
+        el("bumperHelp").style.display = if (gameMode == GameMode.BUMPER) "block" else "none"
+        el("circuitHelp").style.display = if (gameMode == GameMode.CIRCUIT) "block" else "none"
+        el("warsHelp").style.display = if (gameMode == GameMode.POCKET_WARS) "block" else "none"
         // Trick shots are always on the 9 ft table (with its gap) and bumper pool on its own table, so the size choice hides for them.
-        val ownTable = if (modeIdx == 2) practiceKind != 0 else modeIdx == 3 || modeIdx == 4
-        el("sizeBlock").style.display = if (ownTable) "none" else "block"
+        el("sizeBlock").style.display = if (poolTable) "block" else "none"
         setSegment("seg-size", tableSize.ordinal)
         el("sizeHelp").textContent = tableSize.description
         el("skillBlock").style.display = if (vsCpu) "block" else "none"
@@ -319,11 +351,11 @@ class App : GameHost {
     }
 
     private fun save() {
-        Store.set("modeIdx", modeIdx.toString()); Store.set("vsCpu", vsCpu.toString())
+        Store.set("game", gameMode.name); Store.set("opp", opp.toString()); Store.set("vsCpu", vsCpu.toString())
         Store.set("level", level.toString()); Store.set("clockOn", clockOn.toString())
         Store.set("clockSec", clockSec.toString()); Store.set("sound", sound.toString())
         Store.set("aimSens", aimSens.toString()); Store.set("callMode", callIdx.toString()); Store.set("prediction", prediction.toString())
-        Store.set("practiceKind", practiceKind.toString()); Store.set("practiceLevel", practiceLevel.toString())
+        Store.set("practiceRules", practiceRules.toString()); Store.set("practiceLevel", practiceLevel.toString())
         Store.set("tableSize", tableSize.name)
     }
 
@@ -334,8 +366,9 @@ class App : GameHost {
         return when {
             s.practice && s.mode == GameMode.TRICK -> "Trick-shot practice"
             s.practice && s.mode == GameMode.BUMPER -> "Bumper practice"
+            s.practice && s.practiceRules -> "$name practice$size"
             s.mode == GameMode.TRICK -> if (s.vsCpu) "$name vs CPU level ${s.level}" else "$name pass & play"
-            s.practice -> "Practice$size"
+            s.practice -> "Free-table practice$size"
             s.vsCpu -> "$name vs CPU level ${s.level}$size"
             else -> "$name pass & play$size"
         }
@@ -348,8 +381,9 @@ class App : GameHost {
     }
 
     private fun startGame(resume: Boolean) {
-        var practice = modeIdx == 2
-        var mode = if (practice) (when (practiceKind) { 1 -> GameMode.TRICK; 2 -> GameMode.BUMPER; else -> GameMode.EIGHT_BALL }) else menuMode()
+        var practice = opp == 2
+        var mode = gameMode
+        var rules = practiceRules
         var cpu = vsCpu && !practice
         var lvl = level
         var clock = if (clockOn && !practice) clockSec else 0
@@ -362,17 +396,24 @@ class App : GameHost {
             if (s != null) {
                 text = saved
                 practice = s.practice; mode = s.mode; cpu = s.vsCpu; lvl = s.level; clock = s.shotClock
+                rules = s.practiceRules
                 call = s.callMode
                 size = s.tableSize   // a paused game keeps the table it was started on
             }
         } else Store.set("savedGame", "")
-        if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT) call = CallMode.OFF
+        // Practice: a game with its own rules on your own, the free table (8-ball's balls), one trick shot, or the bumper table.
+        if (practice) {
+            if (mode == GameMode.TRICK || mode == GameMode.BUMPER) rules = false
+            else if (!rules) mode = GameMode.EIGHT_BALL
+            cpu = false; clock = 0
+        }
+        if (practice || mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS) call = CallMode.OFF
         sounds.enabled = sound
         playingCpu = cpu; playingLevel = lvl; playingMode = mode; playingPractice = practice
         el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
         el("restart").textContent = if (mode == GameMode.TRICK) "Restart match" else "Restart rack"
         el("quit").textContent = "Main menu (game is saved)"
-        game = Game(mode, cpu, lvl, clock, practice, practiceLevel, aimSens, prediction, text, call, sounds, this, tableSize = size)
+        game = Game(mode, cpu, lvl, clock, practice, practiceLevel, aimSens, prediction, text, call, sounds, this, tableSize = size, practiceRules = rules)
         showGame()
     }
 
@@ -431,7 +472,7 @@ class App : GameHost {
     }
 
     private companion object {
-        /** The mode buttons (8-Ball, 9-Ball, Circuit, Bumper, Trick, Practice) and the stored mode number each one sets. */
-        val MODE_OF_BUTTON = intArrayOf(0, 1, 5, 4, 3, 2)
+        /** The game buttons, in order. */
+        val GAMES = listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS, GameMode.BUMPER, GameMode.TRICK)
     }
 }

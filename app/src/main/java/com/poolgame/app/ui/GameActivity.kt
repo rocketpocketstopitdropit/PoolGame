@@ -27,6 +27,7 @@ class GameActivity : Activity(), GameView.Host {
         const val EXTRA_TRICK_LEVEL = "trickLevel"
         const val EXTRA_TUTORIAL = "tutorial"
         const val EXTRA_TABLE = "tableSize"
+        const val EXTRA_PRACTICE_RULES = "practiceRules"
 
         const val PREFS = "pool"
         const val KEY_SAVED = "savedGame"
@@ -40,8 +41,9 @@ class GameActivity : Activity(), GameView.Host {
             return when {
                 s.practice && s.mode == GameMode.TRICK -> "Trick-shot practice"
                 s.practice && s.mode == GameMode.BUMPER -> "Bumper practice"
+                s.practice && s.practiceRules -> "$name practice$size"
                 s.mode == GameMode.TRICK -> if (s.vsCpu) "$name vs CPU level ${s.level}" else "$name pass & play"
-                s.practice -> "Practice$size"
+                s.practice -> "Free-table practice$size"
                 s.vsCpu -> "$name vs CPU level ${s.level}$size"
                 else -> "$name pass & play$size"
             }
@@ -65,6 +67,7 @@ class GameActivity : Activity(), GameView.Host {
         vsCpu = intent.getBooleanExtra(EXTRA_VS_CPU, true)
         level = intent.getIntExtra(EXTRA_LEVEL, 5).coerceIn(1, 10)
         var practice = intent.getBooleanExtra(EXTRA_PRACTICE, false)
+        var practiceRules = intent.getBooleanExtra(EXTRA_PRACTICE_RULES, false)
         var clock = intent.getIntExtra(EXTRA_CLOCK, 0).coerceIn(0, 300)
         var call = CallMode.values()[prefs.getInt("callMode", 0).coerceIn(0, 2)]
         tutorial = intent.getBooleanExtra(EXTRA_TUTORIAL, false)
@@ -82,15 +85,20 @@ class GameActivity : Activity(), GameView.Host {
             if (s != null) {
                 resume = text
                 mode = s.mode; vsCpu = s.vsCpu; level = s.level; practice = s.practice; clock = s.shotClock
+                practiceRules = s.practiceRules
                 call = s.callMode
                 tableSize = s.tableSize   // a paused game keeps the table it was started on
             }
         } else {
             prefs.edit().remove(KEY_SAVED).apply()   // starting fresh replaces any paused game
         }
-        // Practice: the free table (8-ball's), one trick shot, or the bumper table.
-        if (practice) { if (mode != GameMode.TRICK && mode != GameMode.BUMPER) mode = GameMode.EIGHT_BALL; vsCpu = false; clock = 0 }
-        if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT) call = CallMode.OFF
+        // Practice: a game with its own rules on your own, the free table (8-ball's balls), one trick shot, or the bumper table.
+        if (practice) {
+            if (mode == GameMode.TRICK || mode == GameMode.BUMPER) practiceRules = false
+            else if (!practiceRules) mode = GameMode.EIGHT_BALL
+            vsCpu = false; clock = 0; call = CallMode.OFF
+        }
+        if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS) call = CallMode.OFF
 
         game = GameView(
             this, mode, vsCpu, level,
@@ -104,7 +112,8 @@ class GameActivity : Activity(), GameView.Host {
             call,
             this,
             tutorial,
-            tableSize
+            tableSize,
+            practiceRules
         )
         setContentView(game)
         hideSystemBars()

@@ -65,7 +65,8 @@ class GameView(
     private val callMode: CallMode,      // called-pocket rule
     private val host: Host,
     private val tutorialMode: Boolean = false,  // the hands-on tutorial (a practice table with a guide)
-    private val tableSize: TableSize = TableSize.DEFAULT   // table for 8-ball, 9-ball and practice
+    private val tableSize: TableSize = TableSize.DEFAULT,  // table for 8-ball, 9-ball and practice
+    private val practiceRules: Boolean = false   // practice: play the game's own rules on your own (not the free table)
 ) : View(context), Choreographer.FrameCallback {
 
     interface Host {
@@ -83,6 +84,14 @@ class GameView(
 
     /** Free-table practice: no rules, move any ball. (The tutorial runs on the practice table too.) */
     private val practice = practiceMode && mode != GameMode.TRICK
+    /**
+     * Practising a game on your own with its rules: every shot is judged as in a match (fouls, groups, targets,
+     * pockets), but you take every turn. The practice tools (move balls, retry, re-rack) still work.
+     */
+    private val rulesPractice = practice && practiceRules && !tutorialMode && mode in RULES_PRACTICE
+    private var rpShots = 0
+    private var rpFouls = 0
+    private var practiceMatch: Match? = null
 
     // The tutorial: one control at a time is highlighted, with a card saying what to do.
     private var tut: Tutorial? = null
@@ -107,6 +116,7 @@ class GameView(
     private val names = when {
         vsCpu -> arrayOf("You", "CPU")
         trickPractice -> arrayOf("You", "You")
+        rulesPractice -> arrayOf("You", "Opponent")
         else -> arrayOf("Player 1", "Player 2")
     }
     private val rng = Random(System.nanoTime())
@@ -190,7 +200,9 @@ class GameView(
      * Circuit Pool: whose targets are on show (-1 for nobody). Against the CPU it's always you; in pass & play
      * they're hidden at each change of turn until the next player taps to see theirs.
      */
-    private var revealTo = if (vsCpu) 0 else -1
+    private var revealTo = if (vsCpu || practiceMode) 0 else -1
+    /** Pocket Wars: whose colour (and each player's colour on the cards and pocket rings). */
+    private val pocketWars = mode == GameMode.POCKET_WARS
     private var bannerLevel = -1
     private var bannerT = 0.0
 
@@ -293,7 +305,7 @@ class GameView(
 
     init {
         isFocusable = true
-        balls.plain = practice && !tutorialMode && !bumper
+        balls.plain = practice && !tutorialMode && !bumper && !rulesPractice
         povBalls.plain = balls.plain
         balls.bumper = bumper
         povBalls.bumper = bumper
@@ -328,8 +340,10 @@ class GameView(
         match.world.listener = makeListener()
         match.rack(rng, breaker)
         match.callMode = if (practice) CallMode.OFF else callMode
-        revealTo = if (vsCpu) 0 else -1
-        if (practice) {
+        revealTo = if (vsCpu || practiceMode) 0 else -1
+        rpShots = 0; rpFouls = 0; practiceMatch = null; practiceSnapshot = null
+        if (rulesPractice) match.message = "${Stats.modeName(mode)} practice · you take every shot · place the cue ball and break"
+        else if (practice) {
             match.ballInHand = false
             match.kitchenOnly = false
             match.message = practiceHint()
@@ -403,7 +417,7 @@ class GameView(
 
     fun isPractice() = practiceMode
 
-    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practiceMode, breaker, match.callMode, tableSize)
+    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practiceMode, breaker, match.callMode, tableSize, rulesPractice)
 
     private fun useTable() {
         when (mode) {
@@ -427,8 +441,9 @@ class GameView(
         potN = 0
         spinX = 0f; spinY = 0f; power = 0f; elevDeg = 0f
         gameOverTitle = ""; recordLine = ""
-        revealTo = if (vsCpu) 0 else -1
+        revealTo = if (vsCpu || practiceMode) 0 else -1
         message = when {
+            rulesPractice -> "Practice resumed · " + match.message
             practice -> practiceHint()
             trickPractice -> "Practice · ${Trick.LEVELS[match.trick.level].name}"
             else -> "Game resumed · " + match.message
@@ -451,6 +466,12 @@ class GameView(
         }
     }
 
+    /** Practice with the rules: the game's verdict, worded for someone playing on their own. */
+    private fun practiceText(msg: String) = msg
+        .replace("Opponent has ball in hand", "you take ball in hand")
+        .replace("Opponent to shoot", "in a game your turn would end here")
+        .replace("Opponent to break", "break again")
+
     private fun practiceHint() =
         if (bumperPractice) "Bumper practice · tap a ball to shoot it, hold it to move it" else "Practice · hold any ball to move it"
 
@@ -465,12 +486,14 @@ class GameView(
             phase = Phase.OVER
             val w = match.winner
             gameOverTitle = when {
+                rulesPractice -> if (w == 0) "Rack won!" else "Rack lost"
                 vsCpu && w == 0 -> "You win!"
                 vsCpu -> "CPU wins"
                 else -> "${names[w]} wins!"
             }
             message = match.message
             recordLine = host.onGameFinished(w)
+            if (rulesPractice) recordLine = "$rpShots ${if (rpShots == 1) "shot" else "shots"} · $rpFouls ${if (rpFouls == 1) "foul" else "fouls"}"
             return
         }
         power = 0f
@@ -564,6 +587,7 @@ class GameView(
     private fun shoot(angle: Double, speed: Double, side: Double, vert: Double, elev: Double) {
         if (match.openingPending()) { openingShot(angle, speed, side, vert, elev); return }
         if (practice) practiceSnapshot = World().also { it.copyFrom(match.world) }
+        if (rulesPractice) practiceMatch = Match(mode, names).also { it.copyFrom(match) }
         turnSave = GameSave.write(match, settings())
         sfx.strike(speed)
         match.shoot(angle, speed, side, vert, elev)
@@ -633,7 +657,8 @@ class GameView(
     private fun practiceRetry() {
         val snap = practiceSnapshot ?: return
         if (phase != Phase.HUMAN && phase != Phase.RUNNING) return
-        match.world.copyFrom(snap)
+        val ms = practiceMatch
+        if (rulesPractice && ms != null) match.copyFrom(ms) else match.world.copyFrom(snap)
         for (b in match.world.balls) b.moving = false
         if (bumperPractice) match.current = match.ownerOf(match.world.cue).coerceAtLeast(0)
         sinks.clear()
@@ -765,7 +790,17 @@ class GameView(
             }
             Phase.RUNNING -> {
                 match.world.advance(dt)
-                if (!match.world.anyMoving() && practice) {
+                if (!match.world.anyMoving() && rulesPractice) {
+                    // Judged as in a game, but the next shot is yours whatever happened.
+                    val out = match.resolve()
+                    rpShots++
+                    if (out.foul) rpFouls++
+                    match.current = 0
+                    message = practiceText(out.message)
+                    phase = Phase.PAUSE
+                    pauseT = if (out.foul || out.winner >= 0) 0.9 else 0.45
+                    if (out.heckle) postDelayed({ sfx.heckle() }, 260)
+                } else if (!match.world.anyMoving() && practice) {
                     tut?.onShotDone(!match.world.balls[Tutorial.TARGET_BALL].onTable)
                     if (bumperPractice) {
                         val jumped = (match.world.log.air and (1 shl match.world.cue)) != 0
@@ -1407,6 +1442,7 @@ class GameView(
         }
 
         drawPocketCall(canvas)
+        if (pocketWars) drawPocketOwners(canvas)
         if (circuit && humanTurn && revealTo == match.current) {
             // Your secret targets still on the table.
             guide.pathEffect = dash; guide.strokeWidth = 1.6f * dp; guide.color = 0xB3FFD640.toInt()
@@ -1653,6 +1689,13 @@ class GameView(
 
     /** The called pocket (or, when a call is needed, every pocket) ringed in gold. */
     private fun drawPovCalled(canvas: Canvas) {
+        if (pocketWars) {
+            guide.pathEffect = null; guide.strokeWidth = 4 * dp
+            for ((i, pk) in Table.pockets.withIndex()) {
+                val o = match.pockets.owner.getOrElse(i) { -1 }
+                if (o >= 0) { guide.color = PW_COLORS[o]; povRing(canvas, pk.cx, pk.cy, pk.capR + 0.012) }
+            }
+        }
         val called = match.calledPocket
         val pulse = (0.5 + 0.5 * sin(System.nanoTime() / 2.0e8)).toFloat()
         guide.pathEffect = null
@@ -1758,6 +1801,17 @@ class GameView(
             guide.strokeWidth = (if (flash) 3f else 1.5f) * dp
             guide.color = if (flash) Color.argb((150 + 100 * pulse).toInt(), 255, 90, 90) else Color.argb((60 + 80 * pulse).toInt(), 255, 214, 64)
             for (pk in Table.pockets) canvas.drawCircle(sx(pk.cx), sy(pk.cy), (pk.capR * scale).toFloat() + 5 * dp, guide)
+        }
+    }
+
+    /** Pocket Wars: each claimed pocket ringed in its owner's colour. */
+    private fun drawPocketOwners(canvas: Canvas) {
+        guide.pathEffect = null; guide.strokeWidth = 4 * dp
+        for ((i, pk) in Table.pockets.withIndex()) {
+            val o = match.pockets.owner.getOrElse(i) { -1 }
+            if (o < 0) continue
+            guide.color = PW_COLORS[o]
+            canvas.drawCircle(sx(pk.cx), sy(pk.cy), (pk.capR * scale).toFloat() + 3 * dp, guide)
         }
     }
 
@@ -1949,6 +2003,10 @@ class GameView(
         } else if (bumper && phase == Phase.HUMAN) {
             text.textSize = min(12 * dp, hudH * 0.2f); text.color = 0xFFF2C94C.toInt()
             canvas.drawText(ellipsize(match.bumperHint(), midR - midL), (midL + midR) / 2, subY, text)
+        } else if (pocketWars && phase == Phase.HUMAN) {
+            text.textSize = min(12 * dp, hudH * 0.2f); text.color = 0xFFF2C94C.toInt()
+            canvas.drawText(ellipsize(if (match.isBreak) "The break scores but claims no pockets · first to 61 wins"
+                else "Open pockets are yours to claim · bank into theirs to steal", midR - midL), (midL + midR) / 2, subY, text)
         } else if (circuit && phase == Phase.HUMAN) {
             text.textSize = min(12 * dp, hudH * 0.2f); text.color = 0xFFF2C94C.toInt()
             canvas.drawText(ellipsize("Sink your 3 secret balls · any ball first · theirs ends your turn", midR - midL), (midL + midR) / 2, subY, text)
@@ -1970,9 +2028,20 @@ class GameView(
         canvas.drawRoundRect(rightCard, 10 * dp, 10 * dp, paint)
         text.textAlign = Paint.Align.LEFT; text.typeface = bold
         text.textSize = min(16 * dp, leftCard.height() * 0.32f); text.color = Color.WHITE
-        canvas.drawText(if (bumperPractice) "BUMPER PRACTICE" else "PRACTICE", leftCard.left + 12 * dp, leftCard.top + leftCard.height() * 0.42f, text)
+        val title = when {
+            rulesPractice -> "${Stats.modeName(mode).uppercase()} PRACTICE"
+            bumperPractice -> "BUMPER PRACTICE"
+            else -> "PRACTICE"
+        }
+        canvas.drawText(ellipsize(title, leftCard.width() - 20 * dp), leftCard.left + 12 * dp, leftCard.top + leftCard.height() * 0.42f, text)
         text.typeface = regular; text.textSize = min(11 * dp, leftCard.height() * 0.22f); text.color = 0xFF9AA7B1.toInt()
-        val sub = if (message.isNotEmpty()) message else if (bumperPractice) "Tap a ball to shoot it · hold it to move it" else "Hold any ball to move it"
+        val sub = when {
+            rulesPractice && phase == Phase.HUMAN && match.ballInHand && match.isBreak -> "Place the cue ball behind the line, then break"
+            rulesPractice && phase == Phase.HUMAN && match.ballInHand -> "Ball in hand — drag the cue ball" + if (message.isNotEmpty()) " · $message" else ""
+            message.isNotEmpty() -> message
+            bumperPractice -> "Tap a ball to shoot it · hold it to move it"
+            else -> "Hold any ball to move it"
+        }
         canvas.drawText(ellipsize(sub, leftCard.width() - 20 * dp), leftCard.left + 12 * dp, leftCard.top + leftCard.height() * 0.78f, text)
 
         fun button(r: RectF, label: String, enabled: Boolean) {
@@ -1985,13 +2054,38 @@ class GameView(
         }
         button(retryBtn, "Retry shot", practiceSnapshot != null)
         button(rackBtn, "Re-rack", true)
-        button(clearBtn, "Clear table", true)
+        button(clearBtn, "Clear table", !rulesPractice)
 
-        // Balls off the table sit in the tray on the left: tap one there to bring it back.
         text.textAlign = Paint.Align.LEFT; text.typeface = regular
         text.textSize = min(11 * dp, rightCard.height() * 0.22f); text.color = 0xFF9AA7B1.toInt()
+        if (rulesPractice) {
+            // How the rack is going, and how many shots it's taken.
+            text.typeface = bold; text.color = Color.WHITE; text.textSize = min(13 * dp, rightCard.height() * 0.26f)
+            canvas.drawText(ellipsize(practiceStatus(), rightCard.width() - 20 * dp), rightCard.left + 12 * dp, rightCard.top + rightCard.height() * 0.42f, text)
+            text.typeface = regular; text.color = 0xFF9AA7B1.toInt(); text.textSize = min(11 * dp, rightCard.height() * 0.22f)
+            canvas.drawText("$rpShots ${if (rpShots == 1) "shot" else "shots"} · $rpFouls ${if (rpFouls == 1) "foul" else "fouls"}",
+                rightCard.left + 12 * dp, rightCard.top + rightCard.height() * 0.78f, text)
+            return
+        }
+        // Balls off the table sit in the tray on the left: tap one there to bring it back.
         canvas.drawText(if (potN == 0) "All balls on the table" else "Tap a ball in the tray (left) to put it back",
             rightCard.left + 12 * dp, rightCard.top + rightCard.height() * 0.42f, text)
+    }
+
+    /** Practice with the rules: one line on where the rack stands. */
+    private fun practiceStatus(): String = when (mode) {
+        GameMode.EIGHT_BALL -> when {
+            match.isBreak -> "Break the rack"
+            match.groups[0] == Group.OPEN -> "Open table · sink any ball but the 8"
+            match.onEight(0) -> "Your group's down · now the 8"
+            else -> "${if (match.groups[0] == Group.SOLIDS) "Solids" else "Stripes"} · ${match.remaining(match.groups[0])} left, then the 8"
+        }
+        GameMode.NINE_BALL -> if (match.isBreak) "Break the rack" else "Shoot the ${match.lowestBall()}" +
+            if (match.consecutiveFouls[0] > 0) " · ${match.consecutiveFouls[0]} foul${if (match.consecutiveFouls[0] > 1) "s" else ""} in a row" else ""
+        GameMode.CIRCUIT -> "Yours: ${match.circuit.targets[0].joinToString(" · ")} (${match.circuitSunk(0)}/3) · 3 hidden: ${match.circuitSunk(1)}/3"
+        GameMode.POCKET_WARS -> "${match.pockets.score[0]} points · ${match.pockets.pocketsOf(0)} " +
+            "pocket${if (match.pockets.pocketsOf(0) == 1) "" else "s"} · ${maxOf(0, 61 - match.pockets.score[0])} to go"
+        else -> ""
     }
 
     /** Trick-shot practice: the level and how it's going, with buttons to change level or reset. */
@@ -2081,6 +2175,13 @@ class GameView(
                 if (t.made[player] > 0) sb.append(" = ${t.score(player)}")
             }
             canvas.drawText(sb.toString(), r.left + 12 * dp, iy + iconR * 0.4f, text)
+        } else if (pocketWars) {
+            // This player's colour, points and pockets.
+            paint.style = Paint.Style.FILL; paint.color = PW_COLORS[player]
+            canvas.drawCircle(r.left + 12 * dp + iconR, iy, iconR, paint)
+            val pts = match.pockets.score[player]; val n = match.pockets.pocketsOf(player)
+            canvas.drawText(ellipsize("$pts pts · $n pocket${if (n == 1) "" else "s"} · ${maxOf(0, 61 - pts)} to go",
+                r.right - r.left - 30 * dp - 2 * iconR), r.left + 18 * dp + 2 * iconR, iy + iconR * 0.4f, text)
         } else if (circuit) {
             // Your own targets (dim once they're down) when they're on show; otherwise just how many are down.
             val sunk = match.circuitSunk(player)
@@ -2464,7 +2565,7 @@ class GameView(
         canvas.drawRoundRect(menuExitBtn, 12 * dp, 12 * dp, paint)
         text.typeface = bold; text.textSize = 16 * dp
         text.color = 0xFF1A1A1A.toInt()
-        canvas.drawText("Rematch", rematchBtn.centerX(), rematchBtn.centerY() + 6 * dp, text)
+        canvas.drawText(if (practiceMode) "Re-rack" else "Rematch", rematchBtn.centerX(), rematchBtn.centerY() + 6 * dp, text)
         text.color = Color.WHITE
         canvas.drawText("Menu", menuExitBtn.centerX(), menuExitBtn.centerY() + 6 * dp, text)
     }
@@ -2491,7 +2592,7 @@ class GameView(
         if (first && menuBtn.contains(x, y) && phase != Phase.OVER) { ptrMode[id] = Touch.BUTTON; host.onMenuRequested(); return }
         if (phase == Phase.OVER) {
             if (first) {
-                if (rematchBtn.contains(x, y)) newGame(1 - breaker)
+                if (rematchBtn.contains(x, y)) newGame(if (practiceMode) 0 else 1 - breaker)
                 else if (menuExitBtn.contains(x, y)) host.onExitToMenu()
             }
             ptrMode[id] = Touch.BUTTON
@@ -2532,8 +2633,9 @@ class GameView(
             when {
                 retryBtn.contains(x, y) -> { practiceRetry(); ptrMode[id] = Touch.BUTTON; return }
                 rackBtn.contains(x, y) -> { newGame(0); ptrMode[id] = Touch.BUTTON; return }
-                clearBtn.contains(x, y) && phase == Phase.HUMAN -> { practiceClear(); ptrMode[id] = Touch.BUTTON; return }
-                phase == Phase.HUMAN && x >= trayRect.left - 8 * dp && x <= trayRect.right + 8 * dp &&
+                clearBtn.contains(x, y) && phase == Phase.HUMAN && !rulesPractice -> { practiceClear(); ptrMode[id] = Touch.BUTTON; return }
+                clearBtn.contains(x, y) -> { ptrMode[id] = Touch.BUTTON; return }
+                phase == Phase.HUMAN && !rulesPractice && x >= trayRect.left - 8 * dp && x <= trayRect.right + 8 * dp &&
                     y >= trayRect.top && y <= trayRect.bottom -> {
                     // Tap a ball in the tray to put it back on the table.
                     for (i in 0 until potN) if (abs(y - potY[i]) < max(potR * 1.1f, 10 * dp)) { returnBall(potIds[i]); break }
@@ -2910,6 +3012,10 @@ class GameView(
         val GESTURES = arrayOf("\u270A", "\u270B", "\u270C\uFE0F")   // fist, flat hand, peace sign
         val GESTURE_NAMES = arrayOf("Rock", "Paper", "Scissors")
         val SHAKE_WORDS = arrayOf("Rock…", "Paper…", "Scissors…")
+        /** Games that can be practised with their own rules. */
+        val RULES_PRACTICE = setOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS)
+        /** Pocket Wars colours: player 1 / you blue, player 2 / the CPU orange. */
+        val PW_COLORS = intArrayOf(0xFF4DA3FF.toInt(), 0xFFFF8A3D.toInt())
         val SPIN_LABELS = arrayOf(
             "center", "right", "left",
             "follow", "follow right", "follow left",

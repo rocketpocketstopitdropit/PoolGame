@@ -11,8 +11,9 @@ import kotlin.random.Random
  * TRICK: trick shots on the gap table (jump the gap, sink the 1), head to head.
  * BUMPER: bumper pool on its own small table (two cups, twelve bumpers, five balls each, no cue ball).
  * CIRCUIT: Circuit Pool — each player is secretly dealt three of the fifteen balls; first to sink all three wins.
+ * POCKET_WARS: claim pockets by sinking balls in them; balls score their number; bank into a rival's pocket to steal it.
  */
-enum class GameMode { EIGHT_BALL, NINE_BALL, TRICK, BUMPER, CIRCUIT }
+enum class GameMode { EIGHT_BALL, NINE_BALL, TRICK, BUMPER, CIRCUIT, POCKET_WARS }
 enum class Group { OPEN, SOLIDS, STRIPES }
 
 /** Called-pocket rule: off, only for the money ball (the 8 in 8-ball, the 9 in 9-ball), or every shot. */
@@ -56,6 +57,9 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     /** Circuit Pool: each player's secret targets and what both players have seen (only used in GameMode.CIRCUIT). */
     val circuit = CircuitState()
 
+    /** Pocket Wars: who owns each pocket, and the points (only used in GameMode.POCKET_WARS). */
+    val pockets = PocketWarsState()
+
     /**
      * Bumper pool's opening: both players shoot their marked ball at the same moment. Each sets a
      * shot ([angle, speed, side, vert, elevation]) in turn; it waits here, unseen, until both are in.
@@ -94,6 +98,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         for (p in 0..1) { opening[p] = o.opening[p]?.copyOf(); openIds[p] = o.openIds[p] }
         trick.copyFrom(o.trick)
         circuit.copyFrom(o.circuit)
+        pockets.copyFrom(o.pockets)
     }
 
     // "You win" / "CPU wins" — the player named "You" takes the plural verb form.
@@ -103,7 +108,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     private fun continues(p: Int) = if (you(p)) "You continue" else "${names[p]} continues"
 
     fun ballIds(): List<Int> = when (mode) {
-        GameMode.EIGHT_BALL, GameMode.CIRCUIT -> IDS_8
+        GameMode.EIGHT_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS -> IDS_8
         GameMode.NINE_BALL -> IDS_9
         GameMode.TRICK -> Trick.LEVELS[trick.level].ids
         GameMode.BUMPER -> IDS_BUMPER
@@ -115,6 +120,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         if (mode == GameMode.TRICK) { startTrick(breaker); return }
         if (mode == GameMode.BUMPER) { startBumper(rng); return }
         if (mode == GameMode.CIRCUIT) circuit.deal(rng)
+        pockets.reset()
         rackBalls(rng)
         val c = world.balls[0]
         c.x = P.HEAD_X; c.y = P.FOOT_Y; c.onTable = true
@@ -133,8 +139,8 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         val dx = sqrt(3.0) * r
         val positions = ArrayList<Pair<Double, Double>>()
         val order: List<Int>
-        if (mode == GameMode.CIRCUIT) {
-            // Circuit Pool: the full triangle, every ball anywhere.
+        if (mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS) {
+            // Circuit Pool and Pocket Wars: the full triangle, every ball anywhere.
             for (row in 0..4) for (k in 0..row)
                 positions += (P.FOOT_X + row * dx) to (P.FOOT_Y + (k - row / 2.0) * 2 * r)
             order = (1..15).shuffled(rng)
@@ -211,7 +217,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         // Bumper pool: your ball may hit anything first.
         if (mode == GameMode.BUMPER) return IDS_BUMPER.filter { it != world.cue && world.balls[it].onTable }.toIntArray()
         // Circuit Pool: any ball may be hit first.
-        if (mode == GameMode.CIRCUIT) return (1..15).filter { world.balls[it].onTable }.toIntArray()
+        if (mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS) return (1..15).filter { world.balls[it].onTable }.toIntArray()
         if (mode == GameMode.NINE_BALL) return intArrayOf(lowestBall())
         if (isBreak) return (1..15).filter { world.balls[it].onTable }.toIntArray()
         val g = groups[player]
@@ -240,7 +246,8 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     // ------------------------------------------------------------------ shooting
 
     /** Whether the shooter must call a pocket before this shot. */
-    fun callRequired(): Boolean = !isBreak && mode != GameMode.TRICK && mode != GameMode.BUMPER && mode != GameMode.CIRCUIT && when (callMode) {
+    fun callRequired(): Boolean = !isBreak && mode != GameMode.TRICK && mode != GameMode.BUMPER && mode != GameMode.CIRCUIT &&
+        mode != GameMode.POCKET_WARS && when (callMode) {
         CallMode.OFF -> false
         CallMode.MONEY_BALL -> if (mode == GameMode.EIGHT_BALL) onEight(current) else lowestBall() == 9
         CallMode.EVERY_SHOT -> true
@@ -248,7 +255,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     /** Calling is allowed whenever the rule is on (e.g. to call a 9-ball combo). */
     fun callAllowed(): Boolean = callMode != CallMode.OFF && !isBreak && mode != GameMode.TRICK && mode != GameMode.BUMPER &&
-        mode != GameMode.CIRCUIT
+        mode != GameMode.CIRCUIT && mode != GameMode.POCKET_WARS
 
     fun beginShot() {
         preTargets = legalTargets(current)
@@ -294,6 +301,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         if (mode == GameMode.TRICK) return resolveTrick()
         if (mode == GameMode.BUMPER) return resolveBumper()
         if (mode == GameMode.CIRCUIT) return resolveCircuit()
+        if (mode == GameMode.POCKET_WARS) return resolvePocketWars()
         val log = world.log
         val shooter = current
         val opp = 1 - shooter
@@ -1020,7 +1028,125 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         return ShotOutcome(foul, reason, keep, -1, message, heckle = foul && log.firstHit < 0 && reason == "No ball hit")
     }
 
+    // ------------------------------------------------------------------ pocket wars
+
+    /** A pocket's name as players would say it (top = the rail at the top of the screen). */
+    fun pocketName(i: Int) = POCKET_NAMES.getOrElse(i) { "pocket" }
+
+    private fun poss(p: Int) = if (you(p)) "your" else "${names[p]}'s"
+
+    /** Pocket Wars' fouls (shared with the computer's look-ahead): a reason, or "" for none. */
+    fun pocketWarsFoul(log: ShotLog, brk: Boolean): String {
+        val objects = log.pocketed.any { it != 0 }
+        return when {
+            0 in log.pocketed -> "Scratch"
+            0 in log.jumpedOff -> "Cue ball jumped off the table"
+            log.scooped -> "Scoop shot — the cue ball was dug under and lifted"
+            log.firstHit < 0 -> "No ball hit"
+            log.jumpedOff.isNotEmpty() -> "Ball jumped off the table"
+            !brk && !objects && !log.railAfterHit -> "No rail after contact"
+            else -> ""
+        }
+    }
+
+    /**
+     * Pocket Wars:
+     *  - Every ball is worth its number. All six pockets start open; any ball may be hit first.
+     *  - A ball in an open pocket claims it for you and scores; in your own pocket it scores. Either way you keep shooting.
+     *  - A ball in your opponent's pocket scores for them and ends your turn — unless it hit a rail (not just the
+     *    jaws) before dropping: then you steal the pocket, score the ball and keep shooting.
+     *  - The break scores for the breaker but claims nothing; anything in keeps the breaker shooting.
+     *  - Fouls (scratch, cue ball off, scoop, no ball hit, an object ball off the table, no rail after contact):
+     *    balls sunk on that shot are spotted back, and the opponent gets ball in hand anywhere. Scratching into one
+     *    of your own pockets also gives it up (it's open again).
+     *  - First to 61 wins. If the table empties at 60–60, more pockets wins; still level, whoever sank the last ball.
+     */
+    private fun resolvePocketWars(): ShotOutcome {
+        val log = world.log
+        val pw = pockets
+        val shooter = current
+        val opp = 1 - shooter
+        val brk = isBreak
+        val objects = log.pocketed.filter { it != 0 }
+        val reason = pocketWarsFoul(log, brk)
+        val foul = reason.isNotEmpty()
+        for (id in log.jumpedOff) if (id != 0) respot(id)
+        val notes = ArrayList<String>()
+
+        // Scratching into one of your own pockets gives it up.
+        if (0 in log.pocketed) {
+            val pk = log.pocketIn[0]
+            if (pk in pw.owner.indices && pw.owner[pk] == shooter) {
+                pw.owner[pk] = -1
+                notes += "the ${pocketName(pk)} is open again"
+            }
+        }
+        var gift = false
+        var scored = 0
+        if (foul) {
+            for (id in objects) respot(id)
+            if (objects.isNotEmpty()) notes += if (objects.size == 1) "the ${objects[0]} is spotted" else "${objects.size} balls spotted"
+        } else for (id in objects) {
+            val pk = log.pocketIn[id]
+            val o = if (pk in pw.owner.indices) pw.owner[pk] else -1
+            when {
+                brk -> scored += id
+                o == -1 -> { pw.owner[pk] = shooter; scored += id; notes += (if (you(shooter)) "you claim" else "${names[shooter]} claims") + " the ${pocketName(pk)}" }
+                o == shooter -> scored += id
+                (log.banked and (1 shl id)) != 0 -> {
+                    pw.owner[pk] = shooter; scored += id
+                    notes += (if (you(shooter)) "you steal" else "${names[shooter]} steals") + " the ${pocketName(pk)}!"
+                }
+                else -> { pw.score[opp] += id; gift = true; notes += "the $id went in ${poss(opp)} pocket (+$id to ${if (you(opp)) "you" else names[opp]})" }
+            }
+        }
+        pw.score[shooter] += scored
+        if (scored > 0) notes.add(0, "+$scored")
+        isBreak = false
+
+        val left = (1..15).count { world.balls[it].onTable }
+        val win = when {
+            pw.score[shooter] >= PocketWarsState.WIN -> shooter
+            pw.score[opp] >= PocketWarsState.WIN -> opp
+            left == 0 -> when {
+                pw.score[0] != pw.score[1] -> if (pw.score[0] > pw.score[1]) 0 else 1
+                pw.pocketsOf(0) != pw.pocketsOf(1) -> if (pw.pocketsOf(0) > pw.pocketsOf(1)) 0 else 1
+                else -> shooter
+            }
+            else -> -1
+        }
+        winner = win
+        val tally = "${pw.score[0]}–${pw.score[1]}"
+        if (win >= 0) {
+            message = "${winsText(win)} ($tally" + (if (notes.isNotEmpty()) ", ${notes.joinToString(", ")}" else "") + ")"
+            return ShotOutcome(foul, reason, false, win, message)
+        }
+        var keep = false
+        if (foul) {
+            current = opp
+            ballInHand = true
+            kitchenOnly = false
+            if (!world.balls[0].onTable) restoreCue()
+            notes.add(0, "Foul: $reason")
+            notes += "${has(opp)} ball in hand"
+        } else if (gift) {
+            current = opp
+            notes += "${names[opp]} to shoot"
+        } else if (objects.isNotEmpty()) {
+            keep = true
+            notes += continues(shooter)
+        } else {
+            current = opp
+            notes += "${names[opp]} to shoot"
+        }
+        message = notes.joinToString(" · ")
+        val heckle = foul && (reason == "No ball hit" || reason == "No rail after contact")
+        return ShotOutcome(foul, reason, keep, -1, message, heckle)
+    }
+
     private companion object {
+        val POCKET_NAMES = arrayOf("top-left corner", "top-right corner", "bottom-left corner", "bottom-right corner",
+            "top side pocket", "bottom side pocket")
         val IDS_8 = (1..15).toList()
         val IDS_9 = (1..9).toList()
         val IDS_BUMPER = (1..10).toList()

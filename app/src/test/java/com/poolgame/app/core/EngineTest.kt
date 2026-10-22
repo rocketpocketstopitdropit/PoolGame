@@ -1028,4 +1028,128 @@ class EngineTest {
             assertTrue("seed $seed unfinished", m.winner >= 0)
         }
     }
+
+    // ------------------------------------------------------------------ pocket wars
+
+    private fun wars(): Match {
+        val m = Match(GameMode.POCKET_WARS, arrayOf("You", "CPU")); m.rack(Random(6), 0)
+        m.isBreak = false; m.ballInHand = false
+        return m
+    }
+
+    /** Pocket Wars: as if ball [id] went into pocket [pk] (a rail first if [bank], only the jaws if [jaw]); [cueIn] scratches into [cueIn]. */
+    private fun warsFake(m: Match, id: Int, pk: Int, bank: Boolean = false, jaw: Boolean = false, cueIn: Int = -1): ShotOutcome {
+        m.beginShot()
+        val log = m.world.log
+        log.reset(); log.firstHit = id; log.railAfterHit = true
+        if (id > 0) { log.pocketed += id; log.pocketIn[id] = pk; m.world.balls[id].onTable = false }
+        if (bank || jaw) log.railed = 1 shl id
+        if (bank) log.banked = 1 shl id
+        if (cueIn >= 0) { log.pocketed += 0; log.pocketIn[0] = cueIn; m.world.balls[0].onTable = false }
+        return m.resolve()
+    }
+
+    @Test fun pocketWarsTableKnowsRailsFromJaws() {
+        Table.useStandard(TableSize.SEVEN)
+        assertEquals(6, Table.segs.count { !it.jaw })
+        assertTrue(Table.segs.count { it.jaw } >= 8)
+        assertEquals(6, Table.pockets.size)
+    }
+
+    @Test fun pocketWarsOpenPocketIsClaimed() {
+        val m = wars()
+        val out = circuitPot(m, 12)   // straight into pocket 0
+        assertTrue(out.keepTurn); assertFalse(out.foul)
+        assertEquals(0, m.pockets.owner[0]); assertEquals(12, m.pockets.score[0]); assertEquals(0, m.current)
+    }
+
+    @Test fun pocketWarsOwnPocketScoresAndOpponentsIsAGift() {
+        val m = wars()
+        m.pockets.owner[2] = 0; m.pockets.owner[3] = 1
+        assertTrue(warsFake(m, 5, 2).keepTurn)
+        assertEquals(5, m.pockets.score[0])
+        val out = warsFake(m, 9, 3)
+        assertFalse(out.keepTurn); assertFalse(out.foul)
+        assertEquals(9, m.pockets.score[1]); assertEquals(1, m.pockets.owner[3]); assertEquals(1, m.current)
+    }
+
+    @Test fun pocketWarsBankStealsButTheJawsDont() {
+        val m = wars()
+        m.pockets.owner[4] = 1
+        val jaw = warsFake(m, 7, 4, jaw = true)
+        assertFalse(jaw.keepTurn); assertEquals(1, m.pockets.owner[4]); assertEquals(7, m.pockets.score[1])
+        m.current = 0
+        val bank = warsFake(m, 11, 4, bank = true)
+        assertTrue(bank.keepTurn); assertEquals(0, m.pockets.owner[4]); assertEquals(11, m.pockets.score[0])
+        assertTrue(m.message.contains("steal"))
+    }
+
+    @Test fun pocketWarsFoulSpotsTheBallsAndScratchingGivesUpYourPocket() {
+        val m = wars()
+        m.pockets.owner[1] = 0
+        val out = warsFake(m, 10, 2, cueIn = 1)
+        assertTrue(out.foul); assertEquals(1, m.current); assertTrue(m.ballInHand)
+        assertTrue(m.world.balls[10].onTable); assertTrue(m.world.balls[0].onTable)
+        assertEquals(0, m.pockets.score[0]); assertEquals(-1, m.pockets.owner[2]); assertEquals(-1, m.pockets.owner[1])
+    }
+
+    @Test fun pocketWarsBreakScoresButClaimsNothing() {
+        val m = wars(); m.isBreak = true
+        val out = warsFake(m, 3, 0)
+        assertTrue(out.keepTurn); assertEquals(3, m.pockets.score[0]); assertEquals(-1, m.pockets.owner[0])
+        assertFalse(m.isBreak)
+    }
+
+    @Test fun pocketWarsFirstTo61Wins() {
+        val m = wars()
+        m.pockets.score[0] = 50; m.pockets.owner[0] = 0
+        warsFake(m, 11, 0)
+        assertEquals(0, m.winner)
+        // A gift can win it for the other player.
+        val m2 = wars()
+        m2.pockets.score[1] = 55; m2.pockets.owner[0] = 1
+        warsFake(m2, 6, 0)
+        assertEquals(1, m2.winner)
+    }
+
+    @Test fun pocketWarsTieGoesToMorePockets() {
+        val m = wars()
+        for (id in 1..15) if (id != 8) m.world.balls[id].onTable = false
+        m.pockets.score[0] = 52; m.pockets.score[1] = 60
+        m.pockets.owner[0] = 0; m.pockets.owner[1] = 0; m.pockets.owner[2] = 1
+        warsFake(m, 8, 0)
+        assertEquals(60, m.pockets.score[0]); assertEquals(0, m.winner)
+    }
+
+    @Test fun pocketWarsSurvivesSaving() {
+        val m = wars()
+        m.pockets.owner[3] = 1; m.pockets.owner[5] = 0; m.pockets.score[0] = 17; m.pockets.score[1] = 9
+        val text = GameSave.write(m, GameSettings(GameMode.POCKET_WARS, true, 6, 0, false, 0))
+        val r = Match(GameMode.POCKET_WARS, arrayOf("You", "CPU"))
+        assertTrue(GameSave.restore(text, r))
+        assertEquals(m.pockets.owner.toList(), r.pockets.owner.toList())
+        assertEquals(m.pockets.score.toList(), r.pockets.score.toList())
+    }
+
+    @Test fun cpuFinishesPocketWarsGames() {
+        for (seed in 0 until 3) {
+            val m = Match(GameMode.POCKET_WARS, arrayOf("A", "B")); m.rack(Random(seed), seed % 2)
+            val ai = arrayOf(Ai(8, seed.toLong()), Ai(3, seed + 99L))
+            var shots = 0
+            while (m.winner < 0 && shots < 300) {
+                val p = ai[m.current].plan(Match(m.mode, m.names).also { it.copyFrom(m) }, 500)
+                if (m.ballInHand && p.hasPlacement) assertTrue(m.placeCue(p.placeX, p.placeY))
+                m.shoot(p.angle, p.speed, p.side, p.vert, p.elevation); m.world.simulate(); m.resolve(); shots++
+            }
+            assertTrue("seed $seed unfinished", m.winner >= 0)
+            assertTrue(m.pockets.score[m.winner] >= m.pockets.score[1 - m.winner])
+        }
+    }
+
+    @Test fun practiceRulesSurviveSaving() {
+        val m = wars()
+        val s = GameSave.readSettings(GameSave.write(m, GameSettings(GameMode.POCKET_WARS, false, 5, 0, true, 0, practiceRules = true)))!!
+        assertTrue(s.practice && s.practiceRules)
+        assertFalse(GameSave.readSettings(GameSave.write(m, GameSettings(GameMode.POCKET_WARS, false, 5, 0, true, 0)))!!.practiceRules)
+    }
 }
