@@ -42,6 +42,10 @@ class MenuActivity : Activity() {
     private var clockOn = false
     private var clockSec = 30
     private var askTutorial = true
+    // The octagon table: 2, 3 or 4 players, two teams of two (with 4), and which bumper layout.
+    private var octPlayers = 4
+    private var octTeams = false
+    private var octLayout = 0
     private val stats by lazy { Stats(this) }
     private var recordText: TextView? = null
 
@@ -88,6 +92,9 @@ class MenuActivity : Activity() {
         clockOn = prefs.getBoolean("clockOn", false)
         clockSec = prefs.getInt("clockSec", 30).coerceIn(10, 120)
         askTutorial = prefs.getBoolean("askTutorial", true)
+        octPlayers = prefs.getInt("octPlayers", 4).coerceIn(2, 4)
+        octTeams = prefs.getBoolean("octTeams", false) && octPlayers == 4
+        octLayout = prefs.getInt("octLayout", 0).coerceIn(0, com.poolgame.app.core.Table.OCT_LAYOUTS.size - 1)
         build()
         // Each time the app is opened (not when the screen is merely recreated), offer the tutorial.
         if (savedInstanceState == null && askTutorial) offerTutorial()
@@ -144,7 +151,9 @@ class MenuActivity : Activity() {
     private fun refreshRecord() {
         val t = recordText ?: return
         val name = Stats.modeName(mode)
-        t.text = (if (mode == GameMode.CUTTHROAT && !vsCpu) {
+        t.text = (if (mode == GameMode.OCTAGON) {
+            stats.octSummary(Stats.octVariant(octPlayers, octTeams), vsCpu, level)
+        } else if (mode == GameMode.CUTTHROAT && !vsCpu) {
             "$name pass & play wins:  Player 1  ${stats.cutthroatWins(0)} · Player 2  ${stats.cutthroatWins(1)} · Player 3  ${stats.cutthroatWins(2)}"
         } else if (mode == GameMode.CUTTHROAT) {
             "$name vs two level $level CPUs:  ${stats.wins(mode, true, level)} W – ${stats.losses(mode, true, level)} L\n" +
@@ -164,7 +173,8 @@ class MenuActivity : Activity() {
             .putBoolean("practice", practice)
             .putInt("opp", opp).putBoolean("practiceRules", practiceRules).putInt("practiceLevel", practiceLevel)
             .putInt("aimSens", aimSens).putInt("callMode", callMode).putString("tableSize", tableSize.name)
-            .putBoolean("prediction", prediction).apply()
+            .putBoolean("prediction", prediction)
+            .putInt("octPlayers", octPlayers).putBoolean("octTeams", octTeams).putInt("octLayout", octLayout).apply()
         refreshRecord()
     }
 
@@ -203,7 +213,7 @@ class MenuActivity : Activity() {
         col.addView(card, LinearLayout.LayoutParams(minOf(dpi(560f), resources.displayMetrics.widthPixels - dpi(48f)), ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL })
 
         card.addView(label("POOL", 38f, Color.WHITE, true).apply { letterSpacing = 0.25f; gravity = Gravity.CENTER })
-        card.addView(label("8-Ball · 9-Ball · Circuit Pool · Pocket Wars · Cutthroat · bumper pool · trick shots", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
+        card.addView(label("8-Ball · 9-Ball · Circuit Pool · Pocket Wars · Cutthroat · bumper pool · octagon bumper · trick shots", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
 
         // Game type
         card.addView(section("GAME"))
@@ -235,11 +245,49 @@ class MenuActivity : Activity() {
             "shooting. A foul gives the next player ball in hand and each opponent one of their balls back. The last " +
             "player with a ball on the table wins. Against the computer you play two CPUs, both at the level below; pass & " +
             "play is for three people sharing the phone.")
+        val octHelp = help("Octagon bumper: a big eight-sided bumper table with a cup on every side and ramps instead of " +
+            "cushions — 45°, 6″ high. Roll a ball up one and it curves back down; hit it too hard and it flies off the " +
+            "table. Two to four players (or two teams of two), five balls each: you shoot into the cup across from you, " +
+            "your marked ball first. Every marked ball goes at once to open, in any direction (no jump shots). Your ball " +
+            "in a cup that isn't yours, a ball off the table or a jump shot is a foul: everyone else (in teams, the other " +
+            "team) drops one in. First to sink all five wins; in teams, a player whose five are down shoots their " +
+            "partner's, and the team wins when all ten are down.")
         val modes = listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS,
-            GameMode.CUTTHROAT, GameMode.BUMPER, GameMode.TRICK)
-        card.addView(segmentedGrid(listOf("8-Ball", "9-Ball", "Circuit", "Pocket Wars", "Cutthroat", "Bumper", "Trick"), 4,
+            GameMode.CUTTHROAT, GameMode.BUMPER, GameMode.OCTAGON, GameMode.TRICK)
+        card.addView(segmentedGrid(listOf("8-Ball", "9-Ball", "Circuit", "Pocket Wars", "Cutthroat", "Bumper", "Octagon", "Trick"), 4,
             modes.indexOf(mode).coerceAtLeast(0)) { mode = modes[it]; refresh(); save() })
-        for (h in listOf(circuitHelp, warsHelp, cutHelp, trickHelp, bumperHelp)) card.addView(h)
+        for (h in listOf(circuitHelp, warsHelp, cutHelp, trickHelp, bumperHelp, octHelp)) card.addView(h)
+
+        // The octagon table: how many play, and which bumpers (with a picture of the table).
+        val octBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        octBlock.addView(section("PLAYERS"))
+        val playerOpts = listOf("2", "3", "4", "2 v 2")
+        val octPlayersHelp = help("")
+        val preview = OctPreview(this)
+        fun refreshOct() {
+            preview.layout = octLayout
+            preview.players = octPlayers
+            octPlayersHelp.text = when {
+                octTeams -> "Two teams: red & white against blue & yellow, partners across the table from each other. " +
+                    (if (vsCpu) "You're red, with CPU 1 as your partner." else "")
+                vsCpu -> "You against ${if (octPlayers == 2) "one CPU" else "${octPlayers - 1} CPUs"}, all at the skill below."
+                else -> "$octPlayers people sharing the phone."
+            } + " Turns go round the table: red, blue, white, yellow."
+        }
+        octBlock.addView(segmented(playerOpts, if (octTeams) 3 else octPlayers - 2) {
+            octTeams = it == 3; octPlayers = if (it == 3) 4 else it + 2; refreshOct(); save()
+        })
+        octBlock.addView(octPlayersHelp)
+        octBlock.addView(section("BUMPER LAYOUT"))
+        val layoutHelp = help("")
+        octBlock.addView(segmented(com.poolgame.app.core.Table.OCT_LAYOUTS.toList(), octLayout) {
+            octLayout = it; layoutHelp.text = com.poolgame.app.core.Table.OCT_LAYOUT_HELP[it]; refreshOct(); save()
+        })
+        layoutHelp.text = com.poolgame.app.core.Table.OCT_LAYOUT_HELP[octLayout]
+        octBlock.addView(layoutHelp)
+        octBlock.addView(preview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(190f)).apply { topMargin = dpi(8f) })
+        refreshOct()
+        card.addView(octBlock)
 
         // Opponent: the computer, a friend, or practice on your own.
         card.addView(section("OPPONENT"))
@@ -259,6 +307,8 @@ class MenuActivity : Activity() {
         rulesBlock.addView(rulesHelp)
         practiceBlock.addView(rulesBlock)
         val bumperPracticeHelp = help("The bumper table on your own, no rules: tap any ball to shoot it, hold one to move it.")
+        val octPracticeHelp = help("The octagon table on your own, with every colour's balls and the layout above, no rules: tap any ball to shoot it, hold one to move it.")
+        practiceBlock.addView(octPracticeHelp)
         practiceBlock.addView(bumperPracticeHelp)
         val names = com.poolgame.app.core.Trick.LEVELS.map { it.name }
         levelBlock.addView(section("WHICH TRICK SHOT"))
@@ -295,11 +345,15 @@ class MenuActivity : Activity() {
         card.addView(practiceBlock)
 
         refresh = {
-            val poolTable = mode != GameMode.TRICK && mode != GameMode.BUMPER
+            val poolTable = mode != GameMode.TRICK && mode != GameMode.BUMPER && mode != GameMode.OCTAGON
             practiceBlock.visibility = if (practice) View.VISIBLE else View.GONE
             rulesBlock.visibility = if (practice && poolTable) View.VISIBLE else View.GONE
             levelBlock.visibility = if (practice && mode == GameMode.TRICK) View.VISIBLE else View.GONE
             bumperPracticeHelp.visibility = if (practice && mode == GameMode.BUMPER) View.VISIBLE else View.GONE
+            octPracticeHelp.visibility = if (practice && mode == GameMode.OCTAGON) View.VISIBLE else View.GONE
+            octHelp.visibility = if (mode == GameMode.OCTAGON) View.VISIBLE else View.GONE
+            octBlock.visibility = if (mode == GameMode.OCTAGON) View.VISIBLE else View.GONE
+            refreshOct()
             rulesHelp.text = if (practiceRules) "On your own with the ${Stats.modeName(mode)} rules: you take every shot, and each " +
                 "one is judged as in a game (fouls give you ball in hand). Retry a shot, re-rack, or hold a ball to move it."
                 else "No rules: plain red and yellow balls (and the black). Hold any ball to move it anywhere."
@@ -311,7 +365,11 @@ class MenuActivity : Activity() {
             circuitHelp.visibility = if (mode == GameMode.CIRCUIT) View.VISIBLE else View.GONE
             warsHelp.visibility = if (mode == GameMode.POCKET_WARS) View.VISIBLE else View.GONE
             cutHelp.visibility = if (mode == GameMode.CUTTHROAT) View.VISIBLE else View.GONE
-            skillTitleRef?.text = if (mode == GameMode.CUTTHROAT) "COMPUTER SKILL (BOTH CPUs)" else "COMPUTER SKILL"
+            skillTitleRef?.text = when {
+                mode == GameMode.CUTTHROAT -> "COMPUTER SKILL (BOTH CPUs)"
+                mode == GameMode.OCTAGON && octPlayers > 2 -> "COMPUTER SKILL (ALL CPUs)"
+                else -> "COMPUTER SKILL"
+            }
             // Trick shots are always on the 9 ft table (with its gap) and bumper pool on its own table.
             sizeBlockRef?.visibility = if (poolTable) View.VISIBLE else View.GONE
         }
@@ -673,6 +731,9 @@ class MenuActivity : Activity() {
             putExtra(GameActivity.EXTRA_SOUND, sound)
             putExtra(GameActivity.EXTRA_CLOCK, if (clockOn && !practice) clockSec else 0)
             putExtra(GameActivity.EXTRA_PRACTICE, practice)
+            putExtra(GameActivity.EXTRA_OCT_PLAYERS, octPlayers)
+            putExtra(GameActivity.EXTRA_OCT_TEAMS, octTeams)
+            putExtra(GameActivity.EXTRA_OCT_LAYOUT, octLayout)
         })
     }
 

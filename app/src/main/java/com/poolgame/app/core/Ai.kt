@@ -62,6 +62,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         val ideal = when (m.mode) {
             GameMode.TRICK -> trickShot(m)
             GameMode.BUMPER -> bumperShot(m)
+            GameMode.OCTAGON -> octShot(m)
             GameMode.CIRCUIT -> choose(circuitView(m))
             else -> { pocketWars = m.mode == GameMode.POCKET_WARS; cutthroat = m.mode == GameMode.CUTTHROAT; choose(m) }
         }
@@ -445,6 +446,131 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         var best = scored.firstOrNull()?.first ?: doubleArrayOf(ids[0].toDouble(), atan2(cup.cy - work.world.balls[ids[0]].y, cup.cx - work.world.balls[ids[0]].x), 1.5)
         if (level >= 4) {
             // Pick the shot that holds up best with this player's own aim and speed error, then refine it.
+            var bestScore = -1e9
+            for ((c, _) in scored.take(if (level >= 7) 6 else 3)) {
+                if (timeUp() && bestScore > -1e9) break
+                val sc = robust(c)
+                if (sc > bestScore) { bestScore = sc; best = c }
+            }
+            while (!timeUp() && level >= 6) {
+                val t = best.copyOf()
+                t[1] += toRad(0.6) * gauss()
+                t[2] = (t[2] * (1 + 0.08 * gauss())).coerceIn(0.4, 6.0)
+                if (run(t[0].toInt(), t[1], t[2]) < -50) continue
+                val sc = robust(t)
+                if (sc > bestScore) { bestScore = sc; best = t }
+            }
+        }
+        return Plan(best[1], best[2], 0.0, 0.0, "bumper", ball = best[0].toInt())
+    }
+
+    // ------------------------------------------------------------------ octagon bumper table
+
+    /**
+     * Bumper pool on the octagon table: up to three opponents (or a partner and two opponents) and
+     * ramps where the cushions would be. For each ball it may shoot it tries straight at its cup, and
+     * at the cup's mirror image across each of the eight ramps (a ball rolling up a ramp and back comes
+     * off it roughly like a cushion), fanned out a little either side, at a few speeds — all run through
+     * the physics engine — and scores each on its own (and its partner's) balls down, everyone else's
+     * balls down (a foul hands every opponent a ball), and how the balls are left for it or for whoever
+     * shoots next. Stronger players then check their best few against their own aim and speed error,
+     * and keep refining the best while there's time.
+     */
+    private fun octShot(m: Match): Plan {
+        val me = m.current
+        val ids = m.shootable(me)
+        if (ids.isEmpty()) return Plan(0.0, 1.0, 0.0, 0.0, "bumper")
+        val work = Match(m.mode, m.names).also { it.copyFrom(m) }
+        // The opening is tried as an ordinary shot: the others' balls just stay where they are.
+        work.isBreak = false
+        val s = Match(m.mode, m.names)
+        val n = m.players
+        val mine = m.playsFor(me)
+        val cup = Table.pockets[m.targetCup(mine)]
+        val left0 = IntArray(n) { work.ballsLeft(it) }
+        val opps = (0 until n).count { !m.sameTeam(it, me) }.coerceAtLeast(1)
+
+        fun nearest(x: Match, p: Int): Double {
+            val o = x.playsFor(p)
+            val c = Table.pockets[x.targetCup(o)]
+            var best = 2.5
+            for (id in x.shootable(p)) {
+                val b = x.world.balls[id]
+                val d = hypot(b.x - c.cx, b.y - c.cy)
+                if (d < best) best = d
+            }
+            return best
+        }
+        fun run(ball: Int, angle: Double, speed: Double): Double {
+            s.copyFrom(work)
+            s.world.cue = ball
+            s.shoot(angle, speed.coerceIn(0.2, P.MAX_CUE_SPEED), 0.0, 0.0)
+            s.world.simulate()
+            simulations++
+            val out = s.resolve()
+            if (out.winner >= 0) return if (s.sameTeam(out.winner, me)) 100.0 else -100.0
+            var v = 0.0
+            for (p in 0 until n) {
+                // Balls down for this player: good for its side, bad for the other. An opponent close to
+                // finishing is the bigger threat.
+                val down = left0[p] - s.ballsLeft(p)
+                v += if (s.sameTeam(p, me)) 5.0 * down else -5.0 * down * (1.0 + (5 - left0[p]) * 0.15) / opps
+            }
+            if (out.foul) v -= 3.0
+            v += if (out.keepTurn) 2.0 - 1.5 * nearest(s, me) else 1.2 * nearest(s, s.current) - 0.8 * nearest(s, me)
+            return v
+        }
+        val samples = if (level >= 7) 8 else 5
+        fun robust(c: DoubleArray): Double {
+            var t = 0.0
+            repeat(samples) { t += run(c[0].toInt(), c[1] + gauss() * aimSigma, c[2] * (1 + gauss() * speedSigma)) }
+            return t / samples
+        }
+
+        // Aim points: the cup, and its mirror image across each ramp's foot.
+        val aims = ArrayList<DoubleArray>()
+        aims += doubleArrayOf(cup.cx, cup.cy)
+        if (level >= 3) for (i in 0 until 8) {
+            val d = Table.octSide(i, cup.cx, cup.cy) - Table.FLAT_D
+            aims += doubleArrayOf(cup.cx - 2 * d * Table.octNx(i), cup.cy - 2 * d * Table.octNy(i))
+        }
+        val offsets = if (level <= 3) doubleArrayOf(0.0, -2.0, 2.0) else doubleArrayOf(0.0, -1.5, 1.5, -3.5, 3.5, -7.0, 7.0)
+        val speedF = if (level <= 3) doubleArrayOf(1.2, 1.7) else doubleArrayOf(1.0, 1.3, 1.7, 2.3)
+        val cands = ArrayList<DoubleArray>()
+        for (off in offsets) for (id in ids) {
+            val b = work.world.balls[id]
+            for (a in aims) {
+                val d = hypot(a[0] - b.x, a[1] - b.y)
+                val v0 = 1.5 * sqrt(2 * P.MU_ROLL * P.G * (d + 0.1)) + 0.3
+                val ang = atan2(a[1] - b.y, a[0] - b.x) + toRad(off)
+                for (f in speedF) cands += doubleArrayOf(id.toDouble(), ang, v0 * f)
+            }
+        }
+        // Also nudge the others' balls around (a few shots straight at each), in case nothing goes.
+        if (level >= 4) for (id in ids) {
+            val b = work.world.balls[id]
+            for (p in 0 until n) {
+                if (m.sameTeam(p, me)) continue
+                for (o in work.bumperBalls(p)) {
+                    val t = work.world.balls[o]
+                    if (!t.onTable) continue
+                    cands += doubleArrayOf(id.toDouble(), atan2(t.y - b.y, t.x - b.x), 1.6)
+                }
+            }
+        }
+        // Straight shots first (they're the likeliest), the rest in a shuffled order so a short time
+        // budget still sees a spread of them.
+        val head = cands.filter { it[1] == atan2(cup.cy - work.world.balls[it[0].toInt()].y, cup.cx - work.world.balls[it[0].toInt()].x) }
+        val tail = (cands - head.toSet()).shuffled(rng)
+        val scored = ArrayList<Pair<DoubleArray, Double>>()
+        for (c in head + tail) {
+            if (timeUp() && scored.isNotEmpty()) break
+            scored += c to run(c[0].toInt(), c[1], c[2])
+        }
+        scored.sortByDescending { it.second }
+        var best = scored.firstOrNull()?.first ?: doubleArrayOf(ids[0].toDouble(),
+            atan2(cup.cy - work.world.balls[ids[0]].y, cup.cx - work.world.balls[ids[0]].x), 1.5)
+        if (level >= 4) {
             var bestScore = -1e9
             for ((c, _) in scored.take(if (level >= 7) 6 else 3)) {
                 if (timeUp() && bestScore > -1e9) break

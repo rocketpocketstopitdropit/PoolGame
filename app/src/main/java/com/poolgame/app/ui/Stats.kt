@@ -27,6 +27,31 @@ class Stats(context: Context) {
     fun totalWinsVsCpu(mode: GameMode) = (1..10).sumOf { wins(mode, true, it) }
     fun totalLossesVsCpu(mode: GameMode) = (1..10).sumOf { losses(mode, true, it) }
 
+    // ------------------------------------------------------------------ octagon table
+    // Kept per setup: 2, 3 or 4 players, or "T" for two teams of two.
+
+    private fun octKey(variant: String, vsCpu: Boolean, level: Int, slot: String) =
+        if (vsCpu) "OCTAGON${variant}_cpu${level}_$slot" else "OCTAGON${variant}_pp_$slot"
+
+    /** One octagon game: [youWon] against the CPUs; in pass & play, [seat] is the winner (in teams, 0 red & white, 1 blue & yellow). */
+    fun recordOctagon(variant: String, vsCpu: Boolean, level: Int, youWon: Boolean, seat: Int) {
+        val k = octKey(variant, vsCpu, level, if (vsCpu) (if (youWon) "w" else "l") else "p${seat + 1}")
+        prefs.edit().putInt(k, prefs.getInt(k, 0) + 1).apply()
+    }
+    fun octWins(variant: String, level: Int) = prefs.getInt(octKey(variant, true, level, "w"), 0)
+    fun octLosses(variant: String, level: Int) = prefs.getInt(octKey(variant, true, level, "l"), 0)
+    fun octSeatWins(variant: String, seat: Int) = prefs.getInt(octKey(variant, false, 0, "p${seat + 1}"), 0)
+
+    /** The octagon record for a setup, in a line or two. */
+    fun octSummary(variant: String, vsCpu: Boolean, level: Int): String {
+        val name = "Octagon ${octVariantName(variant)}"
+        if (vsCpu) return "$name vs level $level:  ${octWins(variant, level)} W – ${octLosses(variant, level)} L\n" +
+            "$name vs all levels:  ${(1..10).sumOf { octWins(variant, it) }} W – ${(1..10).sumOf { octLosses(variant, it) }} L"
+        if (variant == "T") return "$name pass & play wins:  Red & White  ${octSeatWins(variant, 0)} · Blue & Yellow  ${octSeatWins(variant, 1)}"
+        val n = variant.toIntOrNull() ?: 2
+        return "$name pass & play wins:  " + (0 until n).joinToString(" · ") { "Player ${it + 1}  ${octSeatWins(variant, it)}" }
+    }
+
     /** Short line for the end-of-game panel. */
     fun summary(mode: GameMode, vsCpu: Boolean, level: Int): String {
         val name = modeName(mode)
@@ -80,6 +105,11 @@ class Stats(context: Context) {
             GameMode.CIRCUIT -> "Circuit Pool"
             GameMode.POCKET_WARS -> "Pocket Wars"
             GameMode.CUTTHROAT -> "Cutthroat"
+            GameMode.OCTAGON -> "Octagon bumper"
         }
+
+        /** The octagon table's setup as a short key: "2", "3", "4" players or "T" for teams. */
+        fun octVariant(players: Int, teams: Boolean) = if (teams && players == 4) "T" else players.coerceIn(2, 4).toString()
+        fun octVariantName(variant: String) = if (variant == "T") "2 v 2" else "$variant-player"
     }
 }

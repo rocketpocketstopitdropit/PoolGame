@@ -13,8 +13,9 @@ import kotlin.random.Random
  * CIRCUIT: Circuit Pool — each player is secretly dealt three of the fifteen balls; first to sink all three wins.
  * POCKET_WARS: claim pockets by sinking balls in them; balls score their number; bank into a rival's pocket to steal it.
  * CUTTHROAT: three players, groups 1–5, 6–10 and 11–15; sink the others' balls, last one with a ball left wins.
+ * OCTAGON: bumper pool for two to four players (or two teams of two) on the octagon table: four cups, ramps for cushions.
  */
-enum class GameMode { EIGHT_BALL, NINE_BALL, TRICK, BUMPER, CIRCUIT, POCKET_WARS, CUTTHROAT }
+enum class GameMode { EIGHT_BALL, NINE_BALL, TRICK, BUMPER, CIRCUIT, POCKET_WARS, CUTTHROAT, OCTAGON }
 enum class Group { OPEN, SOLIDS, STRIPES }
 
 /** Called-pocket rule: off, only for the money ball (the 8 in 8-ball, the 9 in 9-ball), or every shot. */
@@ -64,15 +65,28 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     /** Cutthroat: each player's group (only used in GameMode.CUTTHROAT, the one three-player game). */
     val cut = CutthroatState()
 
-    /** How many players take turns: three in Cutthroat, two in everything else. */
-    val players get() = if (mode == GameMode.CUTTHROAT) 3 else 2
+    /** How many players take turns: three in Cutthroat, two to four on the octagon table, two in everything else. */
+    val players get() = when (mode) {
+        GameMode.CUTTHROAT -> 3
+        GameMode.OCTAGON -> names.size.coerceIn(2, 4)
+        else -> 2
+    }
+
+    /** Bumper pool on either table: no cue ball, each player shoots their own five balls. */
+    val bumperGame get() = mode == GameMode.BUMPER || mode == GameMode.OCTAGON
 
     /**
-     * Bumper pool's opening: both players shoot their marked ball at the same moment. Each sets a
-     * shot ([angle, speed, side, vert, elevation]) in turn; it waits here, unseen, until both are in.
+     * Octagon table, four players: two teams of two, red and white against blue and yellow. Partners
+     * sit across from each other, so turns go back and forth between the teams.
      */
-    val opening = arrayOfNulls<DoubleArray>(2)
-    private val openIds = intArrayOf(-1, -1)
+    var teams = false
+
+    /**
+     * Bumper pool's opening: every player shoots their marked ball at the same moment. Each sets a
+     * shot ([angle, speed, side, vert, elevation]) in turn; it waits here, unseen, until all are in.
+     */
+    val opening = arrayOfNulls<DoubleArray>(4)
+    private val openIds = intArrayOf(-1, -1, -1, -1)
 
     init {
         // The trick-shot game uses the gap table, bumper pool its own table, everything else the regulation table.
@@ -80,6 +94,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         when (mode) {
             GameMode.TRICK -> if (!Table.gap) Table.useGap()
             GameMode.BUMPER -> Table.useBumper()
+            GameMode.OCTAGON -> if (!Table.octagon) Table.useOctagon()
             else -> Table.useStandard()
         }
     }
@@ -89,7 +104,9 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     private var preCalled = -1
     private var preCallActive = false
     private var preCue = 0
-    private val preMarked = booleanArrayOf(false, false)
+    private val preMarked = BooleanArray(4)
+    /** Octagon table: whose balls each player is shooting this turn (their own, or their partner's once theirs are all down). */
+    private val prePlays = intArrayOf(0, 1, 2, 3)
 
     fun copyFrom(o: Match) {
         world.copyFrom(o.world)
@@ -101,8 +118,10 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         preTargets = o.preTargets; preOnEight = o.preOnEight
         callMode = o.callMode; calledPocket = o.calledPocket
         preCalled = o.preCalled; preCallActive = o.preCallActive
-        preCue = o.preCue; preMarked[0] = o.preMarked[0]; preMarked[1] = o.preMarked[1]
-        for (p in 0..1) { opening[p] = o.opening[p]?.copyOf(); openIds[p] = o.openIds[p] }
+        preCue = o.preCue
+        o.preMarked.copyInto(preMarked); o.prePlays.copyInto(prePlays)
+        teams = o.teams
+        for (p in 0..3) { opening[p] = o.opening[p]?.copyOf(); openIds[p] = o.openIds[p] }
         trick.copyFrom(o.trick)
         circuit.copyFrom(o.circuit)
         pockets.copyFrom(o.pockets)
@@ -111,7 +130,11 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     // "You win" / "CPU wins" — the player named "You" takes the plural verb form.
     private fun you(p: Int) = names[p] == "You"
-    fun winsText(p: Int) = if (you(p)) "You win!" else "${names[p]} wins!"
+    fun winsText(p: Int) = when {
+        teams -> "${teamName(p)} win!"
+        you(p) -> "You win!"
+        else -> "${names[p]} wins!"
+    }
     private fun has(p: Int) = if (you(p)) "You have" else "${names[p]} has"
     private fun continues(p: Int) = if (you(p)) "You continue" else "${names[p]} continues"
 
@@ -120,6 +143,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         GameMode.NINE_BALL -> IDS_9
         GameMode.TRICK -> Trick.LEVELS[trick.level].ids
         GameMode.BUMPER -> IDS_BUMPER
+        GameMode.OCTAGON -> (1..5 * players).toList()
     }
 
     // ------------------------------------------------------------------ setup
@@ -127,6 +151,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     fun rack(rng: Random, breaker: Int) {
         if (mode == GameMode.TRICK) { startTrick(breaker); return }
         if (mode == GameMode.BUMPER) { startBumper(rng); return }
+        if (mode == GameMode.OCTAGON) { startOctagon(rng); return }
         if (mode == GameMode.CIRCUIT) circuit.deal(rng)
         pockets.reset()
         cut.reset()
@@ -236,7 +261,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     fun legalTargets(player: Int = current): IntArray {
         if (mode == GameMode.TRICK) return (1..15).filter { world.balls[it].onTable }.toIntArray()
         // Bumper pool: your ball may hit anything first.
-        if (mode == GameMode.BUMPER) return IDS_BUMPER.filter { it != world.cue && world.balls[it].onTable }.toIntArray()
+        if (bumperGame) return ballIds().filter { it != world.cue && world.balls[it].onTable }.toIntArray()
         // Circuit Pool: any ball may be hit first.
         if (mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS || mode == GameMode.CUTTHROAT)
             return (1..15).filter { world.balls[it].onTable }.toIntArray()
@@ -268,7 +293,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     // ------------------------------------------------------------------ shooting
 
     /** Whether the shooter must call a pocket before this shot. */
-    fun callRequired(): Boolean = !isBreak && mode != GameMode.TRICK && mode != GameMode.BUMPER && mode != GameMode.CIRCUIT &&
+    fun callRequired(): Boolean = !isBreak && mode != GameMode.TRICK && !bumperGame && mode != GameMode.CIRCUIT &&
         mode != GameMode.POCKET_WARS && mode != GameMode.CUTTHROAT && when (callMode) {
         CallMode.OFF -> false
         CallMode.MONEY_BALL -> if (mode == GameMode.EIGHT_BALL) onEight(current) else lowestBall() == 9
@@ -276,7 +301,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     }
 
     /** Calling is allowed whenever the rule is on (e.g. to call a 9-ball combo). */
-    fun callAllowed(): Boolean = callMode != CallMode.OFF && !isBreak && mode != GameMode.TRICK && mode != GameMode.BUMPER &&
+    fun callAllowed(): Boolean = callMode != CallMode.OFF && !isBreak && mode != GameMode.TRICK && !bumperGame &&
         mode != GameMode.CIRCUIT && mode != GameMode.POCKET_WARS && mode != GameMode.CUTTHROAT
 
     fun beginShot() {
@@ -286,7 +311,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         preCalled = if (preCallActive) calledPocket else -1
         calledPocket = -1
         preCue = world.cue
-        if (mode == GameMode.BUMPER) for (p in 0..1) preMarked[p] = world.balls[markedBall(p)].onTable
+        if (bumperGame) for (p in 0 until players) { preMarked[p] = world.balls[markedBall(p)].onTable; prePlays[p] = playsFor(p) }
     }
 
     fun shoot(angle: Double, speed: Double, side: Double, vert: Double, elevation: Double = 0.0) {
@@ -300,6 +325,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     fun timeFoul(): ShotOutcome {
         if (mode == GameMode.TRICK) return trickAttempt(false, "the shot clock ran out")
         if (mode == GameMode.BUMPER) return bumperTimeFoul()
+        if (mode == GameMode.OCTAGON) return octTimeFoul()
         if (mode == GameMode.CIRCUIT) return circuitTimeFoul()
         if (mode == GameMode.CUTTHROAT) return cutthroatTimeFoul()
         val shooter = current
@@ -323,6 +349,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     fun resolve(): ShotOutcome {
         if (mode == GameMode.TRICK) return resolveTrick()
         if (mode == GameMode.BUMPER) return resolveBumper()
+        if (mode == GameMode.OCTAGON) return resolveOctagon()
         if (mode == GameMode.CIRCUIT) return resolveCircuit()
         if (mode == GameMode.POCKET_WARS) return resolvePocketWars()
         if (mode == GameMode.CUTTHROAT) return resolveCutthroat()
@@ -485,7 +512,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
      */
     fun prepareTurn() {
         if (mode == GameMode.TRICK && trick.resetPending && winner < 0) setupTrickLevel()
-        if (mode == GameMode.BUMPER && winner < 0) world.cue = defaultBall(current)
+        if (bumperGame && winner < 0) world.cue = defaultBall(current)
     }
 
     /** Trick-shot practice: judge the attempt, nothing else (the layout resets for the next one). */
@@ -606,22 +633,29 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     // ------------------------------------------------------------------ bumper pool
 
-    /** Bumper pool: player 0 has the red balls 1-5, player 1 the white balls 6-10. 1 and 6 are the marked balls. */
-    fun ownerOf(id: Int) = when (id) { in 1..5 -> 0; in 6..10 -> 1; else -> -1 }
-    fun markedBall(p: Int) = if (p == 0) 1 else 6
-    fun bumperBalls(p: Int): IntRange = if (p == 0) 1..5 else 6..10
-    /** The cup each player shoots into (an index into Table.pockets): red the right-hand one, white the left. */
-    fun targetCup(p: Int) = if (p == 0) 1 else 0
+    /**
+     * Bumper pool: player 0 has the red balls 1-5, player 1 the white balls 6-10 (and on the octagon
+     * table player 2 the blue 11-15, player 3 the yellow 16-20). The first of each five is the marked ball.
+     */
+    fun ownerOf(id: Int) = if (id in 1..5 * players && bumperGame) (id - 1) / 5 else -1
+    fun markedBall(p: Int) = 5 * p + 1
+    fun bumperBalls(p: Int): IntRange = (5 * p + 1)..(5 * p + 5)
+    /**
+     * The cup each player shoots into (an index into Table.pockets): red the right-hand one, white the
+     * left; on the octagon table blue the bottom one and yellow the top — always the cup across from them.
+     */
+    fun targetCup(p: Int) = if (mode == GameMode.OCTAGON) OCT_TARGET[p] else if (p == 0) 1 else 0
     /** The cup at a player's own end: sinking your own ball in it is a foul. */
-    fun homeCup(p: Int) = 1 - targetCup(p)
+    fun homeCup(p: Int) = if (mode == GameMode.OCTAGON) p else 1 - targetCup(p)
     fun ballsLeft(p: Int) = bumperBalls(p).count { world.balls[it].onTable }
-    fun colorName(p: Int) = if (p == 0) "red" else "white"
+    fun colorName(p: Int) = COLOR_NAMES[p]
 
     /** Where a player's opening ball sits: just in front of their own cup, toward the middle. */
     private fun openingSpot(p: Int): DoubleArray {
         val home = Table.pockets[homeCup(p)]
-        val dir = if (home.cx < P.L / 2) 1.0 else -1.0
-        return doubleArrayOf(home.cx + dir * 0.13, home.cy)
+        val ux = P.L / 2 - home.cx; val uy = P.W / 2 - home.cy
+        val l = hypot(ux, uy)
+        return doubleArrayOf(home.cx + ux / l * 0.13, home.cy + uy / l * 0.13)
     }
 
     /** The ball a player plays the opening with: the one on their opening spot (at first, the marked ball). */
@@ -633,14 +667,15 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     /** Balls player [p] may shoot: the marked ball until it's down, then any of theirs (in the opening, the opening ball). */
     fun shootable(p: Int = current): List<Int> {
-        if (mode != GameMode.BUMPER) return listOf(0)
+        if (!bumperGame) return listOf(0)
         if (isBreak) { val b = openingBall(p); return if (b >= 0) listOf(b) else emptyList() }
-        val m = markedBall(p)
+        val o = playsFor(p)
+        val m = markedBall(o)
         if (world.balls[m].onTable) return listOf(m)
-        return bumperBalls(p).filter { world.balls[it].onTable }
+        return bumperBalls(o).filter { world.balls[it].onTable }
     }
 
-    fun canShoot(id: Int) = mode == GameMode.BUMPER && id in shootable()
+    fun canShoot(id: Int) = bumperGame && id in shootable()
 
     /** Bumper pool: shoot this ball (one of the current player's). False if they can't. */
     fun selectBall(id: Int): Boolean {
@@ -651,7 +686,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     /** The ball a player starts their turn with: of the ones they may shoot, the nearest their cup. */
     private fun defaultBall(p: Int): Int {
-        val cup = Table.pockets[targetCup(p)]
+        val cup = Table.pockets[targetCup(playsFor(p))]
         return shootable(p).minByOrNull { hypot(world.balls[it].x - cup.cx, world.balls[it].y - cup.cy) } ?: world.cue
     }
 
@@ -664,6 +699,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     /** One line telling the current bumper pool player (whoever's turn it is, so "your") what to do. */
     fun bumperHint(): String {
         val p = current
+        if (mode == GameMode.OCTAGON) return octHint()
         return when {
             isBreak && opening[1 - p] != null -> "${names[p]}: your opening shot — ${names[1 - p]}'s is set, both go together"
             isBreak -> "${names[p]}: bank your ${if (world.balls[markedBall(p)].onTable) "marked ball" else "ball"} off the " +
@@ -702,7 +738,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     }
 
     /** True while the bumper pool opening is still to be played. */
-    fun openingPending() = mode == GameMode.BUMPER && isBreak && winner < 0
+    fun openingPending() = bumperGame && isBreak && winner < 0
 
     /**
      * The current player's opening shot. It's held back until the other player has chosen theirs,
@@ -711,8 +747,11 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
      */
     fun setOpening(angle: Double, speed: Double, side: Double, vert: Double, elevation: Double): Boolean {
         opening[current] = doubleArrayOf(angle, speed, side, vert, elevation)
-        val other = 1 - current
-        if (opening[other] != null) return true
+        // The next player round the table who hasn't set theirs yet.
+        var other = -1
+        var p = current
+        for (k in 1 until players) { p = nextPlayer(p); if (opening[p] == null && openingBall(p) >= 0) { other = p; break } }
+        if (other < 0) return true
         val set = if (you(current)) "Your opening shot is set" else "${names[current]}'s opening shot is set"
         current = other
         world.cue = openingBall(other).coerceAtLeast(0)
@@ -720,27 +759,29 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         return false
     }
 
-    /** Both opening shots at once. */
+    /** Every opening shot at once. */
     fun fireOpening() {
         beginShot()
         ballInHand = false; kitchenOnly = false
         var first = true
-        for (p in 0..1) {
+        for (p in 0 until 4) openIds[p] = -1
+        for (p in 0 until players) {
+            val s = opening[p] ?: continue
             val id = openingBall(p)
             openIds[p] = id
             if (id < 0) continue
-            val s = opening[p] ?: DoubleArray(5)
             world.strike(s[0], s[1], s[2], s[3], s[4], id, resetLog = first)
             first = false
         }
-        if (openIds[0] >= 0) world.cue = openIds[0]
+        val firstId = openIds.firstOrNull { it >= 0 } ?: -1
+        if (firstId >= 0) world.cue = firstId
     }
 
     /** A loaded game: an opening that was being set up starts again from the first player. */
     fun afterRestore() {
-        if (mode != GameMode.BUMPER) return
-        opening[0] = null; opening[1] = null
-        if (isBreak) current = 0
+        if (!bumperGame) return
+        for (p in 0..3) opening[p] = null
+        if (isBreak) { current = 0; world.cue = openingBall(0).coerceAtLeast(0) }
     }
 
     /** A penalty: player [p] drops two of their balls into their cup by hand (the marked one first). Returns how many. */
@@ -916,6 +957,258 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             }
             r += 0.02
         }
+    }
+
+    // ------------------------------------------------------------------ octagon bumper table
+    //
+    // Bumper pool for two to four players on the octagon table (Table.useOctagon), or two teams of
+    // two. Everyone shoots into the cup across from them. All the marked balls go at once to open, in
+    // any direction (no jump shots); after that turns go round the table. A foul — your ball in a cup
+    // that isn't yours to shoot at (it comes back out onto your spot), a ball off the table (it goes
+    // back in the middle) or a jump shot — lets every other player (or each player on the other team)
+    // drop one of their balls in by hand. First to get all five down wins; in teams, a player whose
+    // five are down shoots their partner's, and the team wins when all ten are down.
+
+    /** The order turns go round the table: red (left end), blue (top), white (right end), yellow (bottom). */
+    fun turnOrder(): IntArray = when {
+        mode != GameMode.OCTAGON -> IntArray(players) { it }
+        players == 2 -> intArrayOf(0, 1)
+        players == 3 -> intArrayOf(0, 2, 1)
+        else -> intArrayOf(0, 2, 1, 3)
+    }
+
+    /** Who shoots after player [p]. */
+    fun nextPlayer(p: Int): Int {
+        val o = turnOrder()
+        val i = o.indexOf(p)
+        return o[(i + 1) % o.size]
+    }
+
+    /** Team play: red and white are a team, blue and yellow the other. Each player's partner, or -1. */
+    fun partnerOf(p: Int) = if (teams && players == 4) p xor 1 else -1
+    fun teamOf(p: Int) = if (teams && players == 4) p / 2 else p
+    fun sameTeam(a: Int, b: Int) = teamOf(a) == teamOf(b)
+    fun teamName(p: Int): String {
+        val a = p and 2; val b = a + 1
+        return "${names[a]} & ${names[b]}"
+    }
+    /** Whether player [p] is on the winning side (the winner themselves, or their partner). */
+    fun won(p: Int) = winner >= 0 && sameTeam(winner, p)
+
+    /** Whose balls player [p] shoots: their own, or (team play) their partner's once their own are all down. */
+    fun playsFor(p: Int): Int {
+        val q = partnerOf(p)
+        return if (q >= 0 && mode == GameMode.OCTAGON && ballsLeft(p) == 0) q else p
+    }
+
+    /** Done: all five down (in team play, all ten of the team's). */
+    private fun finished(p: Int): Boolean {
+        val q = partnerOf(p)
+        return ballsLeft(p) == 0 && (q < 0 || ballsLeft(q) == 0)
+    }
+
+    private fun octHint(): String {
+        val p = current
+        val o = playsFor(p)
+        val set = (0 until players).count { opening[it] != null }
+        return when {
+            isBreak && set > 0 -> "${names[p]}: your opening shot — $set set, all go together · any direction, no jumps"
+            isBreak -> "${names[p]}: your opening shot · every marked ball goes at once, in any direction (no jumps)"
+            o != p && world.balls[markedBall(o)].onTable -> "${names[p]}: yours are down — sink ${names[o]}'s marked ${colorName(o)} ball"
+            o != p -> "${names[p]}: yours are down — shoot ${names[o]}'s ${colorName(o)} balls"
+            world.balls[markedBall(p)].onTable -> "${names[p]}: sink your marked ball first (the spotted one)"
+            else -> "${names[p]}: tap any of your ${colorName(p)} balls to shoot it"
+        }
+    }
+
+    private fun startOctagon(rng: Random) {
+        for (b in world.balls) { b.onTable = false; b.stop() }
+        for (p in 0 until players) {
+            val home = Table.pockets[homeCup(p)]
+            val ids = bumperBalls(p).toList()
+            val spot = openingSpot(p)
+            fun put(id: Int, x: Double, y: Double) {
+                val b = world.balls[id]
+                b.x = x; b.y = y; b.onTable = true
+                randomOrientation(b, rng)
+            }
+            put(ids[0], spot[0], spot[1])
+            // The other four in two pairs, one each side of the cup, as on the small table.
+            val ux = P.L / 2 - home.cx; val uy = P.W / 2 - home.cy
+            val l = hypot(ux, uy)
+            val ix = ux / l; val iy = uy / l       // into the table
+            val ax = -iy; val ay = ix               // along the wall
+            var k = 1
+            for (s in doubleArrayOf(-1.0, 1.0)) for (d in doubleArrayOf(-0.04, 0.04))
+                put(ids[k++], home.cx + ax * s * 0.2 + ix * d, home.cy + ay * s * 0.2 + iy * d)
+        }
+        current = 0
+        for (p in 0..3) { opening[p] = null; openIds[p] = -1 }
+        groups[0] = Group.OPEN; groups[1] = Group.OPEN
+        ballInHand = false; kitchenOnly = false; isBreak = true
+        winner = -1
+        consecutiveFouls[0] = 0; consecutiveFouls[1] = 0
+        world.cue = markedBall(0)
+        world.log.reset()
+        message = "Opening: every marked ball goes at the same moment"
+    }
+
+    /** Puts ball [id] at (x, y), or as near as there's room. */
+    private fun placeNear(id: Int, x: Double, y: Double) {
+        val b = world.balls[id]
+        b.stop()
+        b.onTable = true
+        if (world.isFree(x, y, id)) { b.x = x; b.y = y; return }
+        var r = 0.02
+        while (r < 0.4) {
+            for (k in 0 until 16) {
+                val a = 2 * PI * k / 16
+                val px = x + r * cos(a); val py = y + r * sin(a)
+                if (world.isFree(px, py, id)) { b.x = px; b.y = py; return }
+            }
+            r += 0.02
+        }
+        b.x = x; b.y = y
+    }
+
+    /** A penalty on the octagon table: player [p] drops one of their balls in by hand (the marked one first). */
+    private fun dropOne(p: Int): Boolean {
+        val cup = Table.pockets[targetCup(p)]
+        val id = bumperBalls(p).filter { world.balls[it].onTable }.minWithOrNull(compareBy(
+            { if (it == markedBall(p)) 0 else 1 },
+            { -hypot(world.balls[it].x - cup.cx, world.balls[it].y - cup.cy) })) ?: return false
+        val b = world.balls[id]; b.onTable = false; b.stop()
+        return true
+    }
+
+    /** Player [fouler] fouled: every other player (in teams, each opponent — or their partner, if they're out) drops one in. */
+    private fun octPenalty(fouler: Int): String {
+        val got = ArrayList<Int>()
+        for (q in turnOrder()) {
+            if (q == fouler || sameTeam(q, fouler)) continue
+            if (dropOne(q)) got += q
+            else { val r = partnerOf(q); if (r >= 0 && dropOne(r)) got += r }
+        }
+        return when {
+            got.isEmpty() -> ""
+            got.size == 1 -> "${names[got[0]]} ${if (you(got[0])) "drop" else "drops"} one in"
+            got.size == players - 1 && !teams -> "everyone else drops one in"
+            else -> got.joinToString(" and ") { names[it] } + " drop one in each"
+        }
+    }
+
+    /** Who wins now, if anyone: the first player found finished, going round the table from [from]. */
+    private fun octWinner(from: Int): Int {
+        var p = from
+        for (k in 0 until players) {
+            if (finished(p)) return p
+            p = nextPlayer(p)
+        }
+        return -1
+    }
+
+    private fun octTimeFoul(): ShotOutcome {
+        val p = current
+        isBreak = false
+        val drop = octPenalty(p)
+        val win = octWinner(nextPlayer(p))
+        if (win >= 0) {
+            winner = win
+            message = "${winsText(win)} (shot clock foul${if (drop.isNotEmpty()) ": $drop" else ""})"
+            return ShotOutcome(true, "Shot clock", false, win, message)
+        }
+        current = nextPlayer(p)
+        message = "Foul: shot clock expired" + (if (drop.isNotEmpty()) " · $drop" else "") + " · ${names[current]} to shoot"
+        return ShotOutcome(true, "Shot clock", false, -1, message)
+    }
+
+    private fun resolveOctagon(): ShotOutcome {
+        val log = world.log
+        val n = players
+        val isOpening = isBreak
+        val shooting = BooleanArray(n) { if (isOpening) openIds[it] >= 0 else it == current }
+        val struck = IntArray(n) { if (isOpening) openIds[it] else if (it == current) preCue else -1 }
+        val plays = IntArray(n) { if (isOpening) it else prePlays[it] }
+        val foulBy = BooleanArray(n)
+        val reason = Array(n) { "" }
+        fun foul(p: Int, why: String) { if (!foulBy[p]) { foulBy[p] = true; reason[p] = why } }
+        val good = BooleanArray(n)          // sank a ball they were shooting for, in the right cup
+        var firstGood = -1
+        val markedUp = BooleanArray(n) { preMarked[it] }
+        val notes = ArrayList<String>()
+        // Whose shot each player's balls were in: the player shooting them (or -1, knocked in by someone else).
+        fun shooterOf(o: Int): Int {
+            for (q in 0 until n) if (shooting[q] && plays[q] == o) return q
+            return -1
+        }
+
+        for (id in log.pocketed) {
+            val o = ownerOf(id)
+            if (o < 0) continue
+            val q = shooterOf(o)
+            if (q < 0) continue      // knocked in by someone else: it counts for its owner, wherever it went
+            if (log.pocketIn[id] != targetCup(o)) {
+                foul(q, "${colorName(o)} ball in the wrong cup")
+                val sp = openingSpot(o)
+                placeNear(id, sp[0], sp[1])
+                continue
+            }
+            if (id != markedBall(o) && markedUp[o]) { foul(q, "a ball went in before the marked ball"); continue }
+            if (id == markedBall(o)) markedUp[o] = false
+            good[q] = true
+            if (firstGood < 0) firstGood = q
+        }
+        for (id in log.jumpedOff) {
+            val o = ownerOf(id)
+            if (o < 0) continue
+            val q = if (isOpening) (shooterOf(o).takeIf { it >= 0 } ?: o) else current
+            foul(q, "a ball left the table")
+            respotMiddle(id)
+        }
+        for (q in 0 until n) {
+            val id = struck[q]
+            if (shooting[q] && id >= 0 && ((log.cueJumps or log.scoops) and (1 shl id)) != 0) foul(q, "no jump shots")
+        }
+        for (q in turnOrder()) if (foulBy[q]) {
+            val drop = octPenalty(q)
+            notes += (if (you(q) || n == 2) "Foul: " else "Foul by ${names[q]}: ") + reason[q] + if (drop.isNotEmpty()) " · $drop" else ""
+        }
+
+        val anyFoul = foulBy.any { it }
+        val why = reason.firstOrNull { it.isNotEmpty() } ?: ""
+        val win = octWinner(if (isOpening) 0 else current)
+        if (win >= 0) {
+            isBreak = false
+            for (p in 0..3) opening[p] = null
+            winner = win
+            message = winsText(win) + if (notes.isNotEmpty()) " (${notes.joinToString(", ")})" else ""
+            return ShotOutcome(anyFoul, why, false, win, message)
+        }
+
+        var keep = false
+        if (isOpening) {
+            isBreak = false
+            for (p in 0..3) opening[p] = null
+            // First in (without a foul) goes first; otherwise whoever's ball finished nearest their cup.
+            val inFirst = log.pocketed.map { ownerOf(it) }.firstOrNull { it >= 0 && good[it] && !foulBy[it] && shooting[it] } ?: -1
+            current = if (inFirst >= 0) inFirst else {
+                val pool = (0 until n).filter { shooting[it] && !foulBy[it] }.ifEmpty { (0 until n).filter { shooting[it] } }
+                pool.minByOrNull { p ->
+                    val b = world.balls[struck[p]]
+                    val cup = Table.pockets[targetCup(p)]
+                    if (!b.onTable) Double.MAX_VALUE else hypot(b.x - cup.cx, b.y - cup.cy)
+                } ?: 0
+            }
+            notes += if (inFirst >= 0) "${names[current]} ${if (you(current)) "go" else "goes"} first"
+                else if (!anyFoul) "None went in · ${names[current]} ${if (you(current)) "were" else "was"} nearest and ${if (you(current)) "go" else "goes"} first"
+                else "${names[current]} ${if (you(current)) "go" else "goes"} first"
+        } else {
+            keep = !foulBy[current] && good[current]
+            if (!keep) current = nextPlayer(current)
+            notes += if (keep) continues(current) else "${names[current]} to shoot"
+        }
+        message = notes.joinToString(" · ")
+        return ShotOutcome(anyFoul, why, keep, -1, message)
     }
 
     // ------------------------------------------------------------------ circuit pool
@@ -1340,7 +1633,10 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         return ShotOutcome(foul, reason, keep, -1, message, heckle)
     }
 
-    private companion object {
+    companion object {
+        /** Octagon table: the cup each player shoots into (the one across from them). */
+        val OCT_TARGET = intArrayOf(1, 0, 3, 2)
+        val COLOR_NAMES = arrayOf("red", "white", "blue", "yellow")
         val POCKET_NAMES = arrayOf("top-left corner", "top-right corner", "bottom-left corner", "bottom-right corner",
             "top side pocket", "bottom side pocket")
         val IDS_8 = (1..15).toList()

@@ -7,6 +7,12 @@ import kotlin.math.sign
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+/**
+ * How many balls a world holds: the cue ball and the fifteen numbered balls, or on the octagon bumper
+ * table up to four players' five balls each (ids 1 to 20; 0 is unused there).
+ */
+const val NB = 21
+
 class Ball(val id: Int) {
     var x = 0.0; var y = 0.0
     var vx = 0.0; var vy = 0.0
@@ -38,9 +44,9 @@ class ShotLog {
     var hitX = 0.0; var hitY = 0.0     // cue-ball centre at first contact
     val jumpedOff = ArrayList<Int>()   // balls that flew off the table (or fell into the gap)
     val fell = ArrayList<Int>()        // of those, the ones that fell into the gap (trick-shot table)
-    val pocketIn = IntArray(16) { -1 } // which pocket (index into Table.pockets) each ball dropped in
+    val pocketIn = IntArray(NB) { -1 } // which pocket (index into Table.pockets) each ball dropped in
     /** For each ball, a bit mask of the balls it touched this shot (bit n = ball n). */
-    val touched = IntArray(16)
+    val touched = IntArray(NB)
     /** The cue ball has come down on the far section's cloth (trick shots). */
     var cueLanded = false
     /** Balls the cue ball touched before it first came down on the far section. */
@@ -57,6 +63,10 @@ class ShotLog {
      * or "dug under") instead of being driven down into the slate by an elevated cue. A foul.
      */
     var scooped = false
+    /** Balls the cue drove down into the slate and bounced up off it (jump shots), bit n = ball n. */
+    var cueJumps = 0
+    /** Balls the tip dug under and scooped up (bit n = ball n): see [scooped]. */
+    var scoops = 0
     /** Balls that left the cloth this shot (bit n = ball n), more than a few millimetres up. */
     var air = 0
     /** Balls that touched a cushion this shot (bit n = ball n). */
@@ -70,7 +80,7 @@ class ShotLog {
         pocketIn.fill(-1)
         touched.fill(0); cueLanded = false; cueAirTouched = 0; cutDeg = Double.NaN
         cueLandX = Double.NaN; cueLandY = Double.NaN
-        miscue = false; scooped = false; air = 0; railed = 0; banked = 0
+        miscue = false; scooped = false; cueJumps = 0; scoops = 0; air = 0; railed = 0; banked = 0
     }
 
     fun copyFrom(o: ShotLog) {
@@ -82,7 +92,7 @@ class ShotLog {
         o.pocketIn.copyInto(pocketIn)
         o.touched.copyInto(touched); cueLanded = o.cueLanded; cueAirTouched = o.cueAirTouched; cutDeg = o.cutDeg
         cueLandX = o.cueLandX; cueLandY = o.cueLandY
-        miscue = o.miscue; scooped = o.scooped; air = o.air; railed = o.railed; banked = o.banked
+        miscue = o.miscue; scooped = o.scooped; cueJumps = o.cueJumps; scoops = o.scoops; air = o.air; railed = o.railed; banked = o.banked
     }
 }
 
@@ -103,7 +113,7 @@ interface WorldListener {
  * rebound angle off cushions.
  */
 class World {
-    val balls = Array(16) { Ball(it) }
+    val balls = Array(NB) { Ball(it) }
     /**
      * The ball the cue strikes. Always the cue ball (0) in 8-ball, 9-ball and trick shots; in bumper
      * pool there is no cue ball and you shoot one of your own balls, so it's whichever one you picked.
@@ -115,11 +125,14 @@ class World {
     var trackOrientation = false
     private val tmp = DoubleArray(2)
     private var lastDt = 0.0
+    /** Octagon table: balls rolling up a ramp (to count the moment each turns back, like a cushion). */
+    private val climbing = BooleanArray(NB)
 
     fun copyFrom(o: World) {
-        for (i in 0 until 16) balls[i].copyFrom(o.balls[i])
+        for (i in 0 until NB) balls[i].copyFrom(o.balls[i])
         log.copyFrom(o.log)
         cue = o.cue
+        o.climbing.copyInto(climbing)
     }
 
     private companion object {
@@ -192,10 +205,12 @@ class World {
             slateGrip(c, (1 + P.E_SLATE) * jZ)
             c.vz = P.E_SLATE * jZ
             if (c.vz < 0.05) c.vz = 0.0
+            if (c.vz > 0.0) log.cueJumps = log.cueJumps or (1 shl id)
         } else if (jZ < -0.05) {
             // Lifted straight up by the tip: a scoop.
             c.vz = -jZ
             log.scooped = true
+            log.scoops = log.scoops or (1 shl id)
         }
         c.moving = true
     }
@@ -236,9 +251,12 @@ class World {
         lastDt = dt
         for (b in balls) {
             if (!b.onTable || !b.moving) continue
-            if (b.z > 0.0 || b.vz > 0.0 || Table.overGap(b.x)) flight(b, dt) else cloth(b, dt)
-            b.x += b.vx * dt
-            b.y += b.vy * dt
+            if (Table.octagon) octMove(b, dt)
+            else {
+                if (b.z > 0.0 || b.vz > 0.0 || Table.overGap(b.x)) flight(b, dt) else cloth(b, dt)
+                b.x += b.vx * dt
+                b.y += b.vy * dt
+            }
             if (trackOrientation) rotate(b, dt)
         }
         if (Table.gap) gapEdges()
@@ -318,6 +336,96 @@ class World {
     }
 
     /**
+     * The octagon table. On the flat cloth a ball moves as on any table. On a ramp it rolls in the
+     * slope's plane: gravity pulls it back down at 5/7 g sin θ (the rolling ball's value) and its spin
+     * is the natural roll for that surface. Wherever the surface curves (the rounded foot, the top of
+     * the ramp, the ledge's outer edge) the ball follows it as long as gravity can hold it there; over
+     * a crest it's going too fast for, it leaves the surface and flies, and it lands — bouncing if it
+     * comes down hard — wherever it meets the surface again. Past the ledge there's nothing under it.
+     */
+    private fun octMove(b: Ball, dt: Double) {
+        val r = P.R
+        val d0 = Table.octDist(b.x, b.y)
+        val h0 = Table.surfZ(d0)
+        val grounded = h0 != Double.NEGATIVE_INFINITY && b.z <= h0 + 1e-7
+        if (grounded && d0 <= Table.FLAT_D && b.vz <= 1e-9) {
+            // The flat cloth.
+            b.z = 0.0; b.vz = 0.0
+            climbing[b.id] = false
+            cloth(b, dt)
+            if (!b.moving) return
+        } else if (grounded) {
+            // On the curve or the slope (or the ledge): roll in the surface's plane.
+            val e = Table.octEdge(b.x, b.y)
+            val k = Table.surfSlope(d0)
+            val inv = 1.0 / sqrt(1 + k * k)
+            val nx = -k * Table.octNx(e) * inv; val ny = -k * Table.octNy(e) * inv; val nz = inv
+            turnAlong(b, nx, ny, nz)
+            val g = 5.0 / 7.0 * P.G
+            b.vx += g * nz * nx * dt; b.vy += g * nz * ny * dt; b.vz += g * (nz * nz - 1) * dt
+            val sp = sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz)
+            val dr = P.MU_ROLL * P.G * nz * dt
+            if (sp <= dr) { b.vx = 0.0; b.vy = 0.0; b.vz = 0.0 } else { val sc = (sp - dr) / sp; b.vx *= sc; b.vy *= sc; b.vz *= sc }
+            // Natural roll on this surface: w = n x v / R (in the up frame; the engine's z points down).
+            val wux = (ny * b.vz - nz * b.vy) / r; val wuy = (nz * b.vx - nx * b.vz) / r; val wuz = (nx * b.vy - ny * b.vx) / r
+            b.wx = -wux; b.wy = -wuy; b.wz = wuz
+            // Turning back down the ramp counts as coming off a cushion (for the logs and the aim guide).
+            if (h0 > 0.002) {
+                if (b.vz > 1e-4) climbing[b.id] = true
+                else if (climbing[b.id] && b.vz <= 0.0) { climbing[b.id] = false; rampTurn(b) }
+            }
+            if (sp < 0.004 && abs(k) < 0.02) { b.stop(); b.z = if (h0 < 1e-4) 0.0 else h0; return }
+        } else {
+            // In the air.
+            b.vz -= P.G * dt
+        }
+        b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt
+        // Meet the surface where the ball is now.
+        val d1 = Table.octDist(b.x, b.y)
+        val h1 = Table.surfZ(d1)
+        if (h1 == Double.NEGATIVE_INFINITY) { log.air = log.air or (1 shl b.id); return }   // off the edge: falling
+        if (b.z <= h1) {
+            val e = Table.octEdge(b.x, b.y)
+            val k = Table.surfSlope(d1)
+            val inv = 1.0 / sqrt(1 + k * k)
+            val nx = -k * Table.octNx(e) * inv; val ny = -k * Table.octNy(e) * inv; val nz = inv
+            val vn = b.vx * nx + b.vy * ny + b.vz * nz
+            if (!grounded && vn < -0.25) {
+                // A hard landing bounces, like a jumped ball coming down on the slate.
+                val up = -vn * 0.45
+                b.vx -= (vn - up) * nx; b.vy -= (vn - up) * ny; b.vz -= (vn - up) * nz
+                if (d1 <= Table.FLAT_D) slateGrip(b, -vn + up)
+                listener?.onCushion(-vn * 0.6)
+            } else if (grounded) turnAlong(b, nx, ny, nz)
+            else if (vn < 0) { b.vx -= vn * nx; b.vy -= vn * ny; b.vz -= vn * nz }
+            b.z = h1
+            if (d1 <= Table.FLAT_D && b.vz < 1e-9) { b.z = 0.0; b.vz = 0.0 }
+        } else if (grounded && b.z - h1 < 1e-6) b.z = h1
+        if (b.z - h1 > AIR_Z) log.air = log.air or (1 shl b.id)
+    }
+
+    /**
+     * A ball rolling over a curve in the surface (normal n): its velocity turns to follow the surface,
+     * keeping its speed (a smooth curve doesn't take energy from a rolling ball).
+     */
+    private fun turnAlong(b: Ball, nx: Double, ny: Double, nz: Double) {
+        val vn = b.vx * nx + b.vy * ny + b.vz * nz
+        if (vn >= 0) return
+        val s0 = sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz)
+        b.vx -= vn * nx; b.vy -= vn * ny; b.vz -= vn * nz
+        val s1 = sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz)
+        if (s1 > 1e-9) { val k = s0 / s1; b.vx *= k; b.vy *= k; b.vz *= k }
+    }
+
+    /** A ball rolled up a ramp and turned back: logged like a cushion. */
+    private fun rampTurn(b: Ball) {
+        log.railed = log.railed or (1 shl b.id)
+        log.banked = log.banked or (1 shl b.id)
+        if (log.firstHit >= 0) log.railAfterHit = true
+        else if (b.id == cue) log.cueCushionsBeforeHit++
+    }
+
+    /**
      * The two cut edges of the gap. A ball dropping into the gap falls past the slate's edge: it can
      * catch the lip (the top corner of the cut) and bounce or roll off it, and it can't pass through
      * the cut face below the lip. Without this a ball that came down a hair short fell straight
@@ -376,10 +484,10 @@ class World {
     private fun collideBalls() {
         val r = P.R
         val minD2 = 4 * r * r
-        for (i in 0 until 16) {
+        for (i in 0 until NB) {
             val a = balls[i]
             if (!a.onTable) continue
-            for (j in i + 1 until 16) {
+            for (j in i + 1 until NB) {
                 val b = balls[j]
                 if (!b.onTable || (!a.moving && !b.moving)) continue
                 val dx = b.x - a.x; val dy = b.y - a.y; val dz = b.z - a.z
@@ -615,6 +723,19 @@ class World {
         }
     }
 
+    /** Octagon table: how far a ball at (x, y) moving along unit (dx, dy) goes before it starts up a ramp. */
+    private fun rampDistance(x: Double, y: Double, dx: Double, dy: Double): Double {
+        var best = Double.MAX_VALUE
+        for (i in 0 until 8) {
+            val v = Table.octNx(i) * dx + Table.octNy(i) * dy
+            if (v <= 1e-9) continue
+            // Where it reaches side i's rounded foot.
+            val t = (Table.FLAT_D - Table.octSide(i, x, y)) / v
+            if (t < best) best = t
+        }
+        return best.coerceAtLeast(0.0)
+    }
+
     /** How far a ball (centre) at (x, y) moving along unit (dx, dy) travels before touching a bumper post. */
     private fun postDistance(x: Double, y: Double, dx: Double, dy: Double): Double {
         var best = Double.MAX_VALUE
@@ -635,6 +756,28 @@ class World {
         val r = P.R
         for (b in balls) {
             if (!b.onTable || !b.moving) continue
+            if (Table.octagon) {
+                // Past the outside of the ledge there's nothing to hold the ball up: it's off the table.
+                if (Table.octDist(b.x, b.y) > Table.OCT_OUTER + r) {
+                    b.onTable = false
+                    log.jumpedOff += b.id
+                    listener?.onOffTable(b.id)
+                    b.stop()
+                    continue
+                }
+                if (b.z < P.R * 0.6) for ((i, p) in Table.pockets.withIndex()) {
+                    val dx = b.x - p.cx; val dy = b.y - p.cy
+                    if (dx * dx + dy * dy < p.capR * p.capR) {
+                        b.onTable = false
+                        log.pocketed += b.id
+                        log.pocketIn[b.id] = i
+                        listener?.onPocket(b.id)
+                        b.stop()
+                        break
+                    }
+                }
+                continue
+            }
             // Trick-shot table: a ball that has dropped below the table into the gap falls to the floor.
             val inGap = b.z < -2.0 * P.R && Table.overGap(b.x)
             if (!inGap && !Table.hasHoles && b.x > 0.1 && b.x < P.L - 0.1 && b.y > 0.1 && b.y < P.W - 0.1) continue
@@ -680,10 +823,11 @@ class World {
 
     fun isFree(x: Double, y: Double, ignore: Int = 0): Boolean {
         val r = P.R
-        if (x < r || x > P.L - r || y < r || y > P.W - r) return false
+        if (Table.octagon) { if (Table.octDist(x, y) > Table.FLAT_D - 0.002) return false }
+        else if (x < r || x > P.L - r || y < r || y > P.W - r) return false
         if (Table.gap && x > Table.GAP_X0 - 0.6 * r && x < Table.GAP_X1 + 0.6 * r) return false
         for (pt in Table.posts) if ((pt.x - x) * (pt.x - x) + (pt.y - y) * (pt.y - y) < (r + pt.r + 0.001) * (r + pt.r + 0.001)) return false
-        if (Table.bumper) for (pk in Table.pockets) if ((pk.cx - x) * (pk.cx - x) + (pk.cy - y) * (pk.cy - y) < (pk.capR + r) * (pk.capR + r)) return false
+        if (Table.bumper || Table.octagon) for (pk in Table.pockets) if ((pk.cx - x) * (pk.cx - x) + (pk.cy - y) * (pk.cy - y) < (pk.capR + r) * (pk.capR + r)) return false
         val m = (2 * r + 0.0005)
         for (b in balls) {
             if (!b.onTable || b.id == ignore) continue
@@ -708,11 +852,13 @@ class World {
         val c = balls[cue]
         val dx = cos(angle); val dy = sin(angle)
         val r = P.R
-        var tw = Double.MAX_VALUE
-        if (dx > 1e-9) tw = minOf(tw, (P.L - r - c.x) / dx)
-        if (dx < -1e-9) tw = minOf(tw, (r - c.x) / dx)
-        if (dy > 1e-9) tw = minOf(tw, (P.W - r - c.y) / dy)
-        if (dy < -1e-9) tw = minOf(tw, (r - c.y) / dy)
+        var tw = if (Table.octagon) rampDistance(c.x, c.y, dx, dy) else Double.MAX_VALUE
+        if (!Table.octagon) {
+            if (dx > 1e-9) tw = minOf(tw, (P.L - r - c.x) / dx)
+            if (dx < -1e-9) tw = minOf(tw, (r - c.x) / dx)
+            if (dy > 1e-9) tw = minOf(tw, (P.W - r - c.y) / dy)
+            if (dy < -1e-9) tw = minOf(tw, (r - c.y) / dy)
+        }
         if (tw == Double.MAX_VALUE || tw < 0) tw = 0.0
         if (Table.posts.isNotEmpty()) tw = minOf(tw, postDistance(c.x, c.y, dx, dy))
         out[0] = c.x + dx * tw; out[1] = c.y + dy * tw
@@ -737,13 +883,17 @@ class World {
             val tt = t - sqrt(d4 - perp2)
             if (tt < best) { best = tt; id = b.id }
         }
-        // Cushion: march against the rectangle shrunk by R (pockets ignored for the guide).
+        // Cushion: march against the rectangle shrunk by R (pockets ignored for the guide); on the
+        // octagon table, the foot of the ramps.
         var tw = Double.MAX_VALUE
         val r = P.R
-        if (dx > 1e-9) tw = minOf(tw, (P.L - r - c.x) / dx)
-        if (dx < -1e-9) tw = minOf(tw, (r - c.x) / dx)
-        if (dy > 1e-9) tw = minOf(tw, (P.W - r - c.y) / dy)
-        if (dy < -1e-9) tw = minOf(tw, (r - c.y) / dy)
+        if (Table.octagon) tw = rampDistance(c.x, c.y, dx, dy)
+        else {
+            if (dx > 1e-9) tw = minOf(tw, (P.L - r - c.x) / dx)
+            if (dx < -1e-9) tw = minOf(tw, (r - c.x) / dx)
+            if (dy > 1e-9) tw = minOf(tw, (P.W - r - c.y) / dy)
+            if (dy < -1e-9) tw = minOf(tw, (r - c.y) / dy)
+        }
         if (Table.posts.isNotEmpty()) tw = minOf(tw, postDistance(c.x, c.y, dx, dy))
         if (id >= 0 && best <= tw) {
             out[0] = 1.0; out[1] = c.x + dx * best; out[2] = c.y + dy * best; out[3] = id.toDouble()

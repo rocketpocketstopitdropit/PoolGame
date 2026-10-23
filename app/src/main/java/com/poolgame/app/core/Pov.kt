@@ -183,6 +183,15 @@ class PovScene {
         const val CUSHION_W = 0.045  // cushion nose to the wooden rail
         const val RAIL_W = 0.115     // cushion nose to the outside of the table
         const val APRON = 0.2        // how far the table's sides go down below the cloth
+        // Octagon table: where its ramp profile is cut into strips (distance outside the edge), and the light.
+        val OCT_PROFILE = run {
+            val f = Table.FLAT_D; val t = -f * 0.7071067811865476
+            doubleArrayOf(f, f + (t - f) * 0.25, f + (t - f) * 0.5, f + (t - f) * 0.75, t, Table.RAMP_H)
+        }
+        private val LIGHT_L = sqrt(0.3 * 0.3 + 0.5 * 0.5 + 1.0)
+        val LIGHT_X = -0.3 / LIGHT_L
+        val LIGHT_Y = -0.5 / LIGHT_L
+        val LIGHT_H = 1.0 / LIGHT_L
         private const val PIECE = 0.14   // long rails are cut into pieces this long so they sort with the balls
     }
 
@@ -211,6 +220,9 @@ class PovScene {
 
     // Where the cloth's lighting is brightest, and how far it spreads (screen).
     var clothCx = 0.0; var clothCy = 0.0; var clothR = 1.0
+
+    /** Bumper pool: the ring colour round each cup (see [BumperColors.cupRings]); null for the default. */
+    var cupRings: IntArray? = null
 
     private lateinit var cam: PovCam
     private val q = DoubleArray(3)
@@ -289,6 +301,7 @@ class PovScene {
     fun build(cam: PovCam, w: World, cueX: Double, cueY: Double) {
         this.cam = cam
         n = 0; np = 0
+        if (Table.octagon) { buildOctagon(w, cueX, cueY); return }
         val L = P.L; val W = P.W
         val rw = RAIL_W
 
@@ -323,7 +336,7 @@ class PovScene {
 
         // ---- layer 1: pockets and holes in the cloth, and the balls' shadows.
         if (Table.bumper) for ((i, pk) in Table.pockets.withIndex())
-            disc(pk.cx, pk.cy, 0.0003, pk.capR + 0.009, if (i == 1) RING_RED else RING_WHITE, 1, 24)
+            disc(pk.cx, pk.cy, 0.0003, pk.capR + 0.009, cupRings?.getOrNull(i) ?: if (i == 1) RING_RED else RING_WHITE, 1, 24)
         for (pk in Table.pockets) {
             if (Table.gap && Table.overGap(pk.cx)) continue
             disc(pk.cx, pk.cy, 0.0005, pk.capR, POCKET, 1)
@@ -400,6 +413,119 @@ class PovScene {
         for (i in 0 until n) order[i] = i
         val l2 = guideAt
         // Insertion sort is fine: a few hundred items, mostly in order frame to frame.
+        val tail = order.copyOfRange(l2, n).sortedByDescending { depth[it] }
+        for (i in tail.indices) order[l2 + i] = tail[i]
+    }
+
+    /** [col] lit for a surface facing (nx, ny, nh): brighter facing the light (from above and the top left). */
+    private fun lit(col: Int, nx: Double, ny: Double, nh: Double): Int {
+        val k = (0.62 + 0.5 * (nx * LIGHT_X + ny * LIGHT_Y + nh * LIGHT_H)).coerceIn(0.35, 1.15)
+        val r = (((col shr 16) and 255) * k).toInt().coerceIn(0, 255)
+        val g = (((col shr 8) and 255) * k).toInt().coerceIn(0, 255)
+        val b = ((col and 255) * k).toInt().coerceIn(0, 255)
+        return (col and -0x1000000) or (r shl 16) or (g shl 8) or b
+    }
+
+    private val oc = DoubleArray(2)
+    private val ocx = DoubleArray(8); private val ocy = DoubleArray(8)
+    private val och = DoubleArray(8)
+
+    /** Corners of the octagon offset out by [d] into ocx/ocy, at height [h]. */
+    private fun ring(d: Double, h: Double) {
+        for (i in 0 until 8) { Table.octCorner(i, d, oc); ocx[i] = oc[0]; ocy[i] = oc[1]; och[i] = h }
+    }
+
+    /**
+     * The octagon table: the cloth, the ramps rising from it on every side (their rounded foot as a few
+     * strips), the wooden ledge round the top and the table's outside, all lit by which way they face;
+     * then the cups, bumpers and balls. The ramps and ledge are drawn under the balls (from anywhere
+     * above the table a ball is never behind them).
+     */
+    private fun buildOctagon(w: World, cueX: Double, cueY: Double) {
+        val tan5 = tan(Table.LEDGE_TILT_DEG * PI / 180)
+        val ledgeOut = Table.RAMP_H - Table.LEDGE_W * tan5
+        val lo = -APRON
+        val a = DoubleArray(2); val b = DoubleArray(2)
+        // ---- layer 0: the outside, the ledge, the ramps, the cloth.
+        for (i in 0 until 8) {
+            val j = (i + 1) % 8
+            val nx = Table.octNx(i); val ny = Table.octNy(i)
+            Table.octCorner(i, Table.OCT_OUTER, a); Table.octCorner(j, Table.OCT_OUTER, b)
+            val mx = (a[0] + b[0]) / 2; val my = (a[1] + b[1]) / 2
+            if ((cam.ex - mx) * nx + (cam.ey - my) * ny > 0)
+                quad(a[0], a[1], ledgeOut, b[0], b[1], ledgeOut, b[0], b[1], lo, a[0], a[1], lo, lit(WOOD_SIDE, nx, ny, 0.0), 0)
+        }
+        // The ledge, sloping down and outward a little.
+        for (i in 0 until 8) {
+            val j = (i + 1) % 8
+            val nx = Table.octNx(i); val ny = Table.octNy(i)
+            val c = lit(WOOD, nx * tan5, ny * tan5, 1.0)
+            val ax = DoubleArray(2); val bx = DoubleArray(2)
+            Table.octCorner(i, Table.RAMP_H, a); Table.octCorner(j, Table.RAMP_H, b)
+            Table.octCorner(i, Table.OCT_OUTER, ax); Table.octCorner(j, Table.OCT_OUTER, bx)
+            quad(a[0], a[1], Table.RAMP_H, b[0], b[1], Table.RAMP_H, bx[0], bx[1], ledgeOut, ax[0], ax[1], ledgeOut, c, 0)
+        }
+        // The ramps: the rounded foot in a few strips, then the straight 45-degree slope.
+        val prof = OCT_PROFILE
+        for (i in 0 until 8) {
+            val j = (i + 1) % 8
+            val nx = Table.octNx(i); val ny = Table.octNy(i)
+            for (k in 0 until prof.size - 1) {
+                val d0 = prof[k]; val d1 = prof[k + 1]
+                val h0 = Table.profileHeight(d0); val h1 = Table.profileHeight(d1)
+                val slope = (h1 - h0) / (d1 - d0)
+                val l = sqrt(1 + slope * slope)
+                val c = lit(CLOTH, -nx * slope / l, -ny * slope / l, 1 / l)
+                val pa = DoubleArray(2); val pb = DoubleArray(2)
+                Table.octCorner(i, d0, a); Table.octCorner(j, d0, b)
+                Table.octCorner(i, d1, pa); Table.octCorner(j, d1, pb)
+                quad(a[0], a[1], h0, b[0], b[1], h0, pb[0], pb[1], h1, pa[0], pa[1], h1, c, 0)
+            }
+        }
+        ring(Table.FLAT_D, 0.0)
+        poly(ocx, ocy, och, 8, CLOTH, 0)
+        cam.project(P.L / 2, P.W / 2, 0.0, q)
+        clothCx = q[0]; clothCy = q[1]
+        clothR = cam.focal * P.L * 0.7 / q[2].coerceAtLeast(0.3)
+        // Diamonds along the middle of the ledge.
+        val dd = Table.RAMP_H + Table.LEDGE_W / 2
+        val dh = Table.RAMP_H - Table.LEDGE_W / 2 * tan5 + 0.001
+        for (i in 0 until 8) {
+            val j = (i + 1) % 8
+            Table.octCorner(i, dd, a); Table.octCorner(j, dd, b)
+            for (t in doubleArrayOf(0.25, 0.5, 0.75)) disc(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, dh, 0.007, DIAMOND, 0, 6)
+        }
+
+        // ---- layer 1: cups (ringed in the colour of whoever shoots into them) and the balls' shadows.
+        val rings = cupRings
+        for ((i, pk) in Table.pockets.withIndex()) {
+            disc(pk.cx, pk.cy, 0.0003, pk.capR + 0.009, rings?.getOrNull(i) ?: BumperColors.RING[(i xor 1).coerceIn(0, 3)], 1, 24)
+            disc(pk.cx, pk.cy, 0.0005, pk.capR, POCKET, 1)
+        }
+        for (bl in w.balls) {
+            if (!bl.onTable) continue
+            val x = if (bl.id == w.cue) cueX else bl.x; val y = if (bl.id == w.cue) cueY else bl.y
+            if (Table.surfaceZ(x, y) > 0.002) continue   // (no shadow drawn on the ramps)
+            val up = (bl.z / 0.12).coerceIn(0.0, 1.0)
+            disc(x + 0.006, y + 0.008, 0.001, P.R * (0.95 - 0.3 * up), SHADOW, 1, 14)
+        }
+        guideAt = n
+
+        // ---- layer 2, sorted by depth: bumpers and balls.
+        for (pt in Table.posts) post(pt)
+        for (bl in w.balls) {
+            if (!bl.onTable) continue
+            val x = if (bl.id == w.cue) cueX else bl.x; val y = if (bl.id == w.cue) cueY else bl.y
+            if (!cam.project(x, y, P.R + bl.z, q)) continue
+            val r = cam.ballRadius(q[2])
+            if (q[0] + r < cam.left || q[0] - r > cam.right || q[1] + r < cam.top || q[1] - r > cam.bottom) continue
+            if (n >= cap) grow()
+            kind[n] = BALL; color[n] = bl.id; bx[n] = q[0]; by[n] = q[1]; br[n] = r
+            depth[n] = q[2]; layer[n] = 2
+            n++
+        }
+        for (i in 0 until n) order[i] = i
+        val l2 = guideAt
         val tail = order.copyOfRange(l2, n).sortedByDescending { depth[it] }
         for (i in tail.indices) order[l2 + i] = tail[i]
     }

@@ -28,6 +28,9 @@ class GameActivity : Activity(), GameView.Host {
         const val EXTRA_TUTORIAL = "tutorial"
         const val EXTRA_TABLE = "tableSize"
         const val EXTRA_PRACTICE_RULES = "practiceRules"
+        const val EXTRA_OCT_PLAYERS = "octPlayers"
+        const val EXTRA_OCT_TEAMS = "octTeams"
+        const val EXTRA_OCT_LAYOUT = "octLayout"
 
         const val PREFS = "pool"
         const val KEY_SAVED = "savedGame"
@@ -37,10 +40,14 @@ class GameActivity : Activity(), GameView.Host {
             val text = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_SAVED, null) ?: return null
             val s = GameSave.readSettings(text) ?: return null
             val name = Stats.modeName(s.mode)
-            val size = if (s.mode == GameMode.BUMPER) "" else " · ${s.tableSize.label}"
+            val size = if (s.mode == GameMode.BUMPER || s.mode == GameMode.OCTAGON) "" else " · ${s.tableSize.label}"
+            val oct = "${Stats.octVariantName(Stats.octVariant(s.octPlayers, s.octTeams))} · ${com.poolgame.app.core.Table.OCT_LAYOUTS[s.octLayout]}"
             return when {
                 s.practice && s.mode == GameMode.TRICK -> "Trick-shot practice"
                 s.practice && s.mode == GameMode.BUMPER -> "Bumper practice"
+                s.practice && s.mode == GameMode.OCTAGON -> "Octagon practice · ${com.poolgame.app.core.Table.OCT_LAYOUTS[s.octLayout]}"
+                s.mode == GameMode.OCTAGON && s.vsCpu -> "$name $oct vs CPU level ${s.level}"
+                s.mode == GameMode.OCTAGON -> "$name $oct pass & play"
                 s.practice && s.practiceRules -> "$name practice$size"
                 s.mode == GameMode.TRICK -> if (s.vsCpu) "$name vs CPU level ${s.level}" else "$name pass & play"
                 s.practice -> "Free-table practice$size"
@@ -59,6 +66,8 @@ class GameActivity : Activity(), GameView.Host {
     private val prefs by lazy { getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
     /** The hands-on tutorial: a practice table that never touches your saved game or record. */
     private var tutorial = false
+    /** Octagon table: the setup the record is kept under (2, 3 or 4 players, or T for teams). */
+    private var octVariant = "4"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,6 +83,9 @@ class GameActivity : Activity(), GameView.Host {
         tutorial = intent.getBooleanExtra(EXTRA_TUTORIAL, false)
         var tableSize = TableSize.fromName(intent.getStringExtra(EXTRA_TABLE))
             ?: TableSize.fromName(prefs.getString("tableSize", null)) ?: TableSize.DEFAULT
+        var octPlayers = intent.getIntExtra(EXTRA_OCT_PLAYERS, prefs.getInt("octPlayers", 4)).coerceIn(2, 4)
+        var octTeams = intent.getBooleanExtra(EXTRA_OCT_TEAMS, prefs.getBoolean("octTeams", false))
+        var octLayout = intent.getIntExtra(EXTRA_OCT_LAYOUT, prefs.getInt("octLayout", 0)).coerceIn(0, 2)
 
         // Continue a saved game: its own settings win over the menu's current ones.
         var resume: String? = null
@@ -89,18 +101,21 @@ class GameActivity : Activity(), GameView.Host {
                 practiceRules = s.practiceRules
                 call = s.callMode
                 tableSize = s.tableSize   // a paused game keeps the table it was started on
+                octPlayers = s.octPlayers; octTeams = s.octTeams; octLayout = s.octLayout
             }
         } else {
             prefs.edit().remove(KEY_SAVED).apply()   // starting fresh replaces any paused game
         }
         // Practice: a game with its own rules on your own, the free table (8-ball's balls), one trick shot, or the bumper table.
         if (practice) {
-            if (mode == GameMode.TRICK || mode == GameMode.BUMPER) practiceRules = false
+            if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.OCTAGON) practiceRules = false
             else if (!practiceRules) mode = GameMode.EIGHT_BALL
             vsCpu = false; clock = 0; call = CallMode.OFF
         }
         if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS ||
-            mode == GameMode.CUTTHROAT) call = CallMode.OFF
+            mode == GameMode.CUTTHROAT || mode == GameMode.OCTAGON) call = CallMode.OFF
+        octTeams = octTeams && octPlayers == 4
+        this.octVariant = Stats.octVariant(octPlayers, octTeams)
 
         game = GameView(
             this, mode, vsCpu, level,
@@ -115,7 +130,10 @@ class GameActivity : Activity(), GameView.Host {
             this,
             tutorial,
             tableSize,
-            practiceRules
+            practiceRules,
+            octPlayers,
+            octTeams,
+            octLayout
         )
         setContentView(game)
         hideSystemBars()
@@ -163,6 +181,10 @@ class GameActivity : Activity(), GameView.Host {
         prefs.edit().remove(KEY_SAVED).apply()
         if (game.isPractice()) return ""
         val lvl = if (vsCpu) level else 0
+        if (mode == GameMode.OCTAGON) {
+            stats.recordOctagon(octVariant, vsCpu, lvl, game.youWon(), game.winningSeat())
+            return stats.octSummary(octVariant, vsCpu, lvl).substringBefore('\n')
+        }
         stats.record(mode, vsCpu, lvl, winner)
         return stats.summary(mode, vsCpu, lvl)
     }

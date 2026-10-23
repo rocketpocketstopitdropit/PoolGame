@@ -1,6 +1,7 @@
 package com.poolgame.app.core
 
 import kotlin.math.PI
+import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /** Degrees to radians (the engine is plain Kotlin so it also compiles for the web version). */
@@ -133,7 +134,7 @@ object Table {
 
     /** The regulation table: four corner pockets and two side pockets, in [s] (default: the size in use). */
     fun useStandard(s: TableSize = size) {
-        if (segs.isNotEmpty() && !gap && !bumper && s == size) return
+        if (segs.isNotEmpty() && !gap && !bumper && !octagon && s == size) return
         size = s
         P.resize(s)
         val L = P.L; val W = P.W
@@ -167,6 +168,7 @@ object Table {
         posts = emptyArray()
         gap = false
         bumper = false
+        octagon = false
         holeKey = ""
         hasHoles = false
         version++
@@ -204,10 +206,277 @@ object Table {
         posts = ps.toTypedArray()
         gap = false
         bumper = true
+        octagon = false
         holeKey = ""
         hasHoles = true
         version++
     }
+
+    // ------------------------------------------------------------------ octagon bumper table
+    //
+    // A bigger bumper table, octagon-shaped, with four cups (one at each end and one on each side)
+    // and no cushions: the cloth runs up a 45-degree ramp, 6" high, on every side, with a rounded
+    // foot so balls ride up it smoothly. Above the ramp is a 4" wooden ledge tilted a little outward,
+    // so a ball that makes it over the top rolls off the table. The bumpers are the same as on the
+    // small table; three layouts to pick from.
+    //
+    // The ramps are described by one profile across them: the height of the surface at a distance d
+    // outside the octagon's edge (d = 0 is the foot of the straight slope, extended). Distance from
+    // the octagon is measured to its nearest side (the largest of the eight edge distances), which
+    // makes the ramps meet in straight creases at the corners.
+
+    /** True while the octagon bumper table is in use. */
+    var octagon = false
+        private set
+    /** The octagon table's bumper layout: 0 Scatter, 1 Chevrons, 2 Goal gates ([OCT_LAYOUTS]). */
+    var octLayout = 0
+        private set
+
+    val OCT_LAYOUTS = arrayOf("Scatter", "Chevrons", "Goal gates")
+
+    /** Half the octagon's length and width (the cloth, ramp foot to ramp foot: 70" x 63"). */
+    const val OCT_HX = 0.889
+    const val OCT_HY = 0.8001
+    /** Half-lengths of the end sides (across the long axis) and the long sides: 22" and 34". */
+    const val OCT_END = 0.2794
+    const val OCT_SIDE = 0.4318
+    /** The ramps: 45 degrees, 6" high (so 6" deep); the foot is rounded off with this radius. */
+    const val RAMP_H = 0.1524
+    const val FILLET_R = 0.0508
+    /** The wooden ledge above the ramps: 4" wide, sloping down and outward by this angle. */
+    const val LEDGE_W = 0.1016
+    const val LEDGE_TILT_DEG = 5.0
+    /** From the octagon's edge to the outside of the ledge. */
+    const val OCT_OUTER = RAMP_H + LEDGE_W
+    /** Where the rounded foot starts: a ball whose centre is no further out than this sits on the flat. */
+    val FLAT_D = -FILLET_R * kotlin.math.tan(toRad(22.5))
+
+    // Outward unit normal (x, y) and offset of each of the eight sides: a point's distance outside
+    // side i is octNx[i] * x + octNy[i] * y - octC[i] (table coordinates).
+    private val octNx = DoubleArray(8)
+    private val octNy = DoubleArray(8)
+    private val octC = DoubleArray(8)
+    fun octNx(i: Int) = octNx[i]
+    fun octNy(i: Int) = octNy[i]
+    /** How far (x, y) is outside side [i] of the octagon (negative inside it). */
+    fun octSide(i: Int, x: Double, y: Double) = octNx[i] * x + octNy[i] * y - octC[i]
+
+    /** How far (x, y) is outside the octagon's edge (negative inside). */
+    fun octDist(x: Double, y: Double): Double {
+        var best = -Double.MAX_VALUE
+        for (i in 0 until 8) {
+            val d = octNx[i] * x + octNy[i] * y - octC[i]
+            if (d > best) best = d
+        }
+        return best
+    }
+
+    /** The side of the octagon (x, y) is nearest the outside of: the one [octDist] measures from. */
+    fun octEdge(x: Double, y: Double): Int {
+        var best = -Double.MAX_VALUE; var k = 0
+        for (i in 0 until 8) {
+            val d = octNx[i] * x + octNy[i] * y - octC[i]
+            if (d > best) { best = d; k = i }
+        }
+        return k
+    }
+
+    /** A point on the octagon offset outward by [d] (its corner [i], 0..7, as x into out[0], y into out[1]). */
+    fun octCorner(i: Int, d: Double, out: DoubleArray) {
+        val a = (i + 7) % 8; val b = i
+        // Corner where sides a and b, each moved out by d, meet.
+        val n1x = octNx[a]; val n1y = octNy[a]; val c1 = octC[a] + d
+        val n2x = octNx[b]; val n2y = octNy[b]; val c2 = octC[b] + d
+        val det = n1x * n2y - n1y * n2x
+        out[0] = (c1 * n2y - n1y * c2) / det
+        out[1] = (n1x * c2 - c1 * n2x) / det
+    }
+
+    /** Height of the ramp profile's surface (not the ball) at distance [d] outside the edge, or -infinity past the ledge. */
+    fun profileHeight(d: Double): Double {
+        val t = -FLAT_D
+        return when {
+            d < -t -> 0.0
+            d < t * 0.7071067811865476 -> { val u = d + t; FILLET_R - sqrt((FILLET_R * FILLET_R - u * u).coerceAtLeast(0.0)) }
+            d <= RAMP_H -> d
+            d <= OCT_OUTER -> RAMP_H - (d - RAMP_H) * kotlin.math.tan(toRad(LEDGE_TILT_DEG))
+            else -> Double.NEGATIVE_INFINITY
+        }
+    }
+
+    // The ball's resting height (its bottom above the cloth) against its centre's distance outside the
+    // edge, worked out once: the highest point the ball would touch anywhere within its radius.
+    private const val PROF_D0 = -0.04
+    private const val PROF_STEP = 0.0005
+    private val prof: DoubleArray by lazy {
+        val r = P.R
+        val n = ((OCT_OUTER + r - PROF_D0) / PROF_STEP).toInt() + 2
+        val out = DoubleArray(n)
+        val ds = 0.0002
+        for (k in 0 until n) {
+            val dc = PROF_D0 + k * PROF_STEP
+            var best = Double.NEGATIVE_INFINITY
+            fun touch(d: Double) {
+                val s = profileHeight(d)
+                if (s == Double.NEGATIVE_INFINITY) return
+                val off = d - dc
+                val h = s + sqrt((r * r - off * off).coerceAtLeast(0.0))
+                if (h > best) best = h
+            }
+            var d = dc - r
+            while (d <= dc + r) { touch(d); d += ds }
+            touch(dc + r)
+            if (RAMP_H > dc - r && RAMP_H < dc + r) touch(RAMP_H)
+            if (OCT_OUTER > dc - r && OCT_OUTER < dc + r) touch(OCT_OUTER)
+            out[k] = if (best == Double.NEGATIVE_INFINITY) best else (best - r).let { if (it < 1e-7) 0.0 else it }
+        }
+        out
+    }
+
+    /**
+     * Where the bottom of a ball rests (height above the cloth) when its centre is [d] outside the
+     * octagon's edge: 0 on the flat, rising up the ramp, or -infinity off the outside of the ledge.
+     */
+    fun surfZ(d: Double): Double {
+        if (d <= FLAT_D) return 0.0
+        val f = (d - PROF_D0) / PROF_STEP
+        val i = f.toInt()
+        val p = prof
+        if (i + 1 >= p.size) return Double.NEGATIVE_INFINITY
+        val a = p[i]; val b = p[i + 1]
+        if (a == Double.NEGATIVE_INFINITY || b == Double.NEGATIVE_INFINITY) return Double.NEGATIVE_INFINITY
+        return a + (b - a) * (f - i)
+    }
+
+    /** How steeply [surfZ] rises with [d] (0 on the flat, 1 on the 45-degree slope). */
+    fun surfSlope(d: Double): Double {
+        if (d <= FLAT_D) return 0.0
+        val i = ((d - PROF_D0) / PROF_STEP).toInt()
+        val p = prof
+        if (i + 1 >= p.size || p[i + 1] == Double.NEGATIVE_INFINITY) return 0.0
+        return (p[i + 1] - p[i]) / PROF_STEP
+    }
+
+    /** Height of a resting ball's bottom at (x, y): 0 everywhere but the octagon table's ramps. */
+    fun surfaceZ(x: Double, y: Double): Double {
+        if (!octagon) return 0.0
+        val z = surfZ(octDist(x, y))
+        return if (z == Double.NEGATIVE_INFINITY) 0.0 else z
+    }
+
+    /** The octagon bumper table with bumper layout [layout] (0..2). */
+    fun useOctagon(layout: Int = octLayout) {
+        val lay = layout.coerceIn(0, OCT_LAYOUTS.size - 1)
+        if (octagon && lay == octLayout) return
+        val hx = OCT_HX + OCT_OUTER; val hy = OCT_HY + OCT_OUTER
+        P.resize(2 * hx, 2 * hy)
+        val mx = hx; val my = hy
+        val vx = OCT_VX; val vy = OCT_VY
+        for (i in 0 until 8) {
+            val j = (i + 1) % 8
+            val tx = vx[j] - vx[i]; val ty = vy[j] - vy[i]
+            var nx = ty; var ny = -tx
+            val l = sqrt(nx * nx + ny * ny); nx /= l; ny /= l
+            if (nx * vx[i] + ny * vy[i] < 0) { nx = -nx; ny = -ny }
+            octNx[i] = nx; octNy[i] = ny
+            octC[i] = nx * vx[i] + ny * vy[i] + nx * mx + ny * my
+        }
+        pockets = octCups().map { c ->
+            val x = mx + c[0]; val y = my + c[1]
+            Pocket(x, y, CUP_R, x, y, false, doubleArrayOf(x - CUP_R, y, x + CUP_R, y), CUP_R - P.R * 0.5, hole = true)
+        }.toTypedArray()
+        posts = octPosts(lay).map { Post(mx + it[0], my + it[1], POST_R) }.toTypedArray()
+        segs = emptyArray()
+        gap = false
+        bumper = false
+        octagon = true
+        octLayout = lay
+        holeKey = ""
+        hasHoles = true
+        version++
+    }
+
+    /** Corners of the octagon's cloth relative to its centre, going round; side i runs from corner i to i + 1. */
+    val OCT_VX = doubleArrayOf(OCT_HX, OCT_HX, OCT_SIDE, -OCT_SIDE, -OCT_HX, -OCT_HX, -OCT_SIDE, OCT_SIDE)
+    val OCT_VY = doubleArrayOf(-OCT_END, OCT_END, OCT_HY, OCT_HY, OCT_END, -OCT_END, -OCT_HY, -OCT_HY)
+
+    /**
+     * The octagon table's cups relative to its centre: 0 the left end, 1 the right end, 2 the top
+     * side, 3 the bottom side; each the same distance in from the foot of its ramp as the small table's
+     * cups are from their cushions.
+     */
+    fun octCups(): List<DoubleArray> {
+        val ex = OCT_HX - CUP_IN; val sy = OCT_HY - CUP_IN
+        return listOf(doubleArrayOf(-ex, 0.0), doubleArrayOf(ex, 0.0), doubleArrayOf(0.0, -sy), doubleArrayOf(0.0, sy))
+    }
+
+    /** Bumper layout [layout]'s bumpers relative to the octagon table's centre (x, y each). */
+    fun octPosts(layout: Int): List<DoubleArray> {
+        val ps = ArrayList<DoubleArray>()
+        fun post(x: Double, y: Double) { ps += doubleArrayOf(x, y) }
+        val ex = OCT_HX - CUP_IN; val sy = OCT_HY - CUP_IN
+        // The small table's cross in the middle.
+        for (d in doubleArrayOf(0.11, 0.21)) for (s in doubleArrayOf(-1.0, 1.0)) { post(s * d, 0.0); post(0.0, s * d) }
+        // A bumper either side of every cup, as far from it as on the small table.
+        for (s in doubleArrayOf(-1.0, 1.0)) {
+            post(-ex, s * 0.095); post(ex, s * 0.095)
+            post(s * 0.095, -sy); post(s * 0.095, sy)
+        }
+        val inch = 0.0254
+        val dl = hypot(26.0, 21.25)
+        val ux = 26.0 / dl; val uy = 21.25 / dl
+        for (sx in doubleArrayOf(-1.0, 1.0)) for (syg in doubleArrayOf(-1.0, 1.0)) {
+            val px = -uy * sx; val py = ux * syg
+            when (layout) {
+                0 -> for ((a, b) in listOf(7.3 to 7.3, 13.3 to 11.2, 18.5 to 16.7)) post(sx * a * inch, syg * b * inch)
+                1 -> {
+                    // Chevrons on the diagonals, pointing at the middle.
+                    post(sx * ux * 15 * inch, syg * uy * 15 * inch)
+                    for (k in doubleArrayOf(-1.0, 1.0)) post((sx * ux * 19 + k * px * 3.8) * inch, (syg * uy * 19 + k * py * 3.8) * inch)
+                }
+                else -> post(sx * ux * 17 * inch, syg * uy * 17 * inch)
+            }
+        }
+        when (layout) {
+            0 -> for (s in doubleArrayOf(-1.0, 1.0)) { post(s * 12.8 * inch, 0.0); post(0.0, s * 13.4 * inch) }
+            2 -> for (s in doubleArrayOf(-1.0, 1.0)) for (k in doubleArrayOf(-1.0, 1.0)) {
+                // A gate in front of every cup.
+                post(s * 21.5 * inch, k * 3.3 * inch); post(k * 3.3 * inch, s * 18.0 * inch)
+            }
+        }
+        return ps
+    }
+
+    /**
+     * The octagon offset outward by [d] (0 = the cloth's edge, [OCT_OUTER] = the outside of the ledge),
+     * relative to its centre, whatever table is in use: x0, y0, x1, y1, ... for its eight corners.
+     */
+    fun octOutline(d: Double): DoubleArray {
+        val nx = DoubleArray(8); val ny = DoubleArray(8); val c = DoubleArray(8)
+        for (i in 0 until 8) {
+            val j = (i + 1) % 8
+            val tx = OCT_VX[j] - OCT_VX[i]; val ty = OCT_VY[j] - OCT_VY[i]
+            var ax = ty; var ay = -tx
+            val l = sqrt(ax * ax + ay * ay); ax /= l; ay /= l
+            if (ax * OCT_VX[i] + ay * OCT_VY[i] < 0) { ax = -ax; ay = -ay }
+            nx[i] = ax; ny[i] = ay; c[i] = ax * OCT_VX[i] + ay * OCT_VY[i] + d
+        }
+        val out = DoubleArray(16)
+        for (i in 0 until 8) {
+            val a = (i + 7) % 8
+            val det = nx[a] * ny[i] - ny[a] * nx[i]
+            out[2 * i] = (c[a] * ny[i] - ny[a] * c[i]) / det
+            out[2 * i + 1] = (nx[a] * c[i] - c[a] * nx[i]) / det
+        }
+        return out
+    }
+
+    /** One line about each bumper layout, for the menus. */
+    val OCT_LAYOUT_HELP = arrayOf(
+        "Scatter: the small table's cross, with bumpers scattered all round it.",
+        "Chevrons: arrow shapes push balls out to the corner ramps — bank off the ramps to get across.",
+        "Goal gates: a gate in front of every cup — thread the 4¾″ gap, or curl in off the ramp behind it."
+    )
 
     /**
      * The trick-shot table: the second quarter (from the head string to the side pockets) is gone.
@@ -245,6 +514,7 @@ object Table {
         pockets = p.toTypedArray()
         posts = emptyArray()
         bumper = false
+        octagon = false
         gap = true
         holeKey = key
         hasHoles = holes.isNotEmpty()

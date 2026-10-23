@@ -8,6 +8,8 @@ import android.graphics.RadialGradient
 import android.graphics.Shader
 import android.graphics.Typeface
 import com.poolgame.app.core.Ball
+import com.poolgame.app.core.BumperColors
+import com.poolgame.app.core.NB
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
@@ -33,9 +35,9 @@ class BallRenderer {
         // Practice set: plain red and yellow balls (plus the black), no numbers.
         const val PRACTICE_RED = 0xFFC62828.toInt()
         const val PRACTICE_YELLOW = 0xFFF2BE00.toInt()
-        // Bumper pool: five red and five white balls; the marked one of each is spotted in the other colour.
-        const val BUMPER_RED = 0xFFC62828.toInt()
-        fun isMarked(id: Int) = id == 1 || id == 6
+        // Bumper pool: five balls per player (red, white, and on the octagon table blue and yellow); each
+        // player's marked one is spotted in another colour.
+        fun isMarked(id: Int) = BumperColors.isMarked(id)
         // Light from upper left, above the table (world space; up is -z).
         private val LL = sqrt(0.35f * 0.35f + 0.55f * 0.55f + 1f)
         val LX = -0.35f / LL; val LY = -0.55f / LL; val LZ = -1f / LL
@@ -43,13 +45,13 @@ class BallRenderer {
 
     /** Practice style: solid colours, no stripes or numbers. */
     var plain = false
-        set(v) { field = v; for (i in 0 until 16) lastQ[i][0] = Double.NaN }
+        set(v) { field = v; for (i in 0 until NB) lastQ[i][0] = Double.NaN }
 
-    /** Bumper pool style: red balls 1-5 and white 6-10, no numbers; 1 and 6 are spotted (the marked balls). */
+    /** Bumper pool style: red balls 1-5, white 6-10, blue 11-15, yellow 16-20, no numbers; the first of each five is spotted (the marked balls). */
     var bumper = false
-        set(v) { field = v; for (i in 0 until 16) lastQ[i][0] = Double.NaN }
+        set(v) { field = v; for (i in 0 until NB) lastQ[i][0] = Double.NaN }
 
-    private fun colorOf(id: Int): Int = if (bumper) (if (id in 1..5) BUMPER_RED else WHITE) else if (!plain) BASE[id] else when (id) {
+    private fun colorOf(id: Int): Int = if (bumper) BumperColors.ball(id) else if (!plain) BASE[id.coerceAtMost(15)] else when (id) {
         0 -> BASE[0]
         8 -> BASE[8]
         in 1..7 -> PRACTICE_RED
@@ -65,7 +67,7 @@ class BallRenderer {
      */
     private var view: DoubleArray? = null
     private val viewNow = DoubleArray(9)
-    private val viewDrawn = Array(16) { DoubleArray(9) { Double.NaN } }
+    private val viewDrawn = Array(NB) { DoubleArray(9) { Double.NaN } }
 
     fun setView(v: DoubleArray?) {
         if (v == null) { view = null; return }
@@ -79,8 +81,8 @@ class BallRenderer {
     private lateinit var spec: FloatArray
     private lateinit var alpha: FloatArray
     private lateinit var px: IntArray
-    private val bitmaps = arrayOfNulls<Bitmap>(16)
-    private val lastQ = Array(16) { DoubleArray(4) { Double.NaN } }
+    private val bitmaps = arrayOfNulls<Bitmap>(NB)
+    private val lastQ = Array(NB) { DoubleArray(4) { Double.NaN } }
     private val m = DoubleArray(9)
     var shadow: Bitmap? = null
         private set
@@ -120,7 +122,7 @@ class BallRenderer {
             shade[k] = (0.38f + 0.66f * lam) * (0.82f + 0.18f * -z)
             spec[k] = max(0f, u * hx + v * hy + z * hz).toDouble().pow(70.0).toFloat() * 0.85f
         }
-        for (i in 0 until 16) { bitmaps[i]?.recycle(); bitmaps[i] = null; lastQ[i][0] = Double.NaN }
+        for (i in 0 until NB) { bitmaps[i]?.recycle(); bitmaps[i] = null; lastQ[i][0] = Double.NaN }
         val sh = Bitmap.createBitmap(size * 2, size * 2, Bitmap.Config.ARGB_8888)
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         p.shader = RadialGradient(size.toFloat(), size.toFloat(), r * 1.25f,
@@ -156,7 +158,7 @@ class BallRenderer {
         val numbered = !plain && !bumper
         // A marked bumper pool ball: spots of the other colour (white on red, red on white).
         val marked = bumper && isMarked(b.id)
-        val spot = if (b.id == 1) WHITE else BUMPER_RED
+        val spot = BumperColors.spot(b.id)
         val sr = (spot shr 16) and 255; val sg = (spot shr 8) and 255; val sb = spot and 255
         val m0 = m[0].toFloat(); val m1 = m[1].toFloat(); val m2 = m[2].toFloat()
         val m3 = m[3].toFloat(); val m4 = m[4].toFloat(); val m5 = m[5].toFloat()
@@ -300,7 +302,7 @@ class BallRenderer {
         canvas.drawCircle(cx, cy, r, p)
         if (bumper) {
             if (isMarked(id)) {
-                p.color = if (id == 1) WHITE else BUMPER_RED; p.alpha = (255 * alphaMul).toInt()
+                p.color = BumperColors.spot(id); p.alpha = (255 * alphaMul).toInt()
                 canvas.drawCircle(cx, cy, r * 0.32f, p)
             }
             p.alpha = 255

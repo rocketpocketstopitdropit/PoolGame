@@ -99,9 +99,11 @@ object Predictor {
                 break
             }
             val d = hypot(c.x - lx, c.y - ly)
-            if (d >= 0.006 || (c.z > 0) != out.cueAir[out.cueN - 1]) {
+            // In the air: off the cloth (on the octagon table, off the ramp under it), or over the gap.
+            val air = c.z - Table.surfaceZ(c.x, c.y) > 0.002 || Table.overGap(c.x)
+            if (d >= 0.006 || air != out.cueAir[out.cueN - 1]) {
                 val doneCue = out.hitId >= 0 && after >= cueAfter
-                if (!doneCue) out.addCue(c.x, c.y, c.z > 0.002 || Table.overGap(c.x))
+                if (!doneCue) out.addCue(c.x, c.y, air)
                 if (out.hitId >= 0) after += d else { travel += d; if (log.cueCushionsBeforeHit >= 1) afterCushion += d }
                 lx = c.x; ly = c.y
             }
