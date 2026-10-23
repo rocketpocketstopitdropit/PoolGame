@@ -138,6 +138,10 @@ class World {
     private companion object {
         /** A ball higher than this off the cloth counts as having left it ([ShotLog.air]). */
         const val AIR_Z = 0.004
+        /** Octagon table: a change of surface direction sharper than about 10 degrees in one step is a hard corner... */
+        val HARD_CORNER = kotlin.math.cos(10.0 * kotlin.math.PI / 180)
+        /** ...and a ball comes off it with this much of the speed it hit it with (felt over a hard board). */
+        const val E_RAMP = 0.3
     }
 
     fun anyMoving(): Boolean {
@@ -338,15 +342,21 @@ class World {
     /**
      * The octagon table. On the flat cloth a ball moves as on any table. On a ramp it rolls in the
      * slope's plane: gravity pulls it back down at 5/7 g sin θ (the rolling ball's value) and its spin
-     * is the natural roll for that surface. Wherever the surface curves (the rounded foot, the top of
-     * the ramp, the ledge's outer edge) the ball follows it as long as gravity can hold it there; over
-     * a crest it's going too fast for, it leaves the surface and flies, and it lands — bouncing if it
-     * comes down hard — wherever it meets the surface again. Past the ledge there's nothing under it.
+     * is the natural roll for that surface. The hard corners — where the cloth meets a ramp, and where two
+     * ramps meet — are impacts: the ball loses the part of its speed going into the new face and hops
+     * off it a little. Over a crest it's going too fast for (the top of the ramp, the ledge's outer edge)
+     * it leaves the surface and flies, and it lands — bouncing if it comes down hard — wherever it meets
+     * the surface again. Past the ledge there's nothing under it.
      */
     private fun octMove(b: Ball, dt: Double) {
         val r = P.R
         val d0 = Table.octDist(b.x, b.y)
         val h0 = Table.surfZ(d0)
+        // The surface's normal where the ball starts this step (to tell a hard corner from a gentle curve).
+        val e0 = Table.octEdge(b.x, b.y)
+        val k0 = Table.surfSlope(d0)
+        val i0 = 1.0 / sqrt(1 + k0 * k0)
+        val n0x = -k0 * Table.octNx(e0) * i0; val n0y = -k0 * Table.octNy(e0) * i0; val n0z = i0
         val grounded = h0 != Double.NEGATIVE_INFINITY && b.z <= h0 + 1e-7
         if (grounded && d0 <= Table.FLAT_D && b.vz <= 1e-9) {
             // The flat cloth.
@@ -396,6 +406,13 @@ class World {
                 b.vx -= (vn - up) * nx; b.vy -= (vn - up) * ny; b.vz -= (vn - up) * nz
                 if (d1 <= Table.FLAT_D) slateGrip(b, -vn + up)
                 listener?.onCushion(-vn * 0.6)
+            } else if (grounded && n0x * nx + n0y * ny + n0z * nz < HARD_CORNER) {
+                // A hard corner: the speed going into the new face is lost, and the ball hops off it a little.
+                if (vn < 0) {
+                    val up = -vn * E_RAMP
+                    b.vx -= (vn - up) * nx; b.vy -= (vn - up) * ny; b.vz -= (vn - up) * nz
+                    if (-vn > 0.15) listener?.onCushion(-vn)
+                }
             } else if (grounded) turnAlong(b, nx, ny, nz)
             else if (vn < 0) { b.vx -= vn * nx; b.vy -= vn * ny; b.vz -= vn * nz }
             b.z = h1

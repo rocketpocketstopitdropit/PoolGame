@@ -29,15 +29,11 @@ class OctagonTest {
             assertEquals(d + P.R * (sqrt(2.0) - 1), Table.surfZ(d), 0.0008)
             assertEquals(1.0, Table.surfSlope(d), 0.02)
         }
-        // It rises smoothly through the rounded foot: no step bigger than the grid would give.
-        var last = 0.0
-        var d = Table.FLAT_D
-        while (d < 0.12) {
-            val z = Table.surfZ(d)
-            assertTrue(z >= last - 1e-9)
-            assertTrue(z - last < 0.0006)
-            last = z; d += 0.0005
-        }
+        // No rounded foot: flat right up to where the ball touches the ramp, then straight up at 45 degrees.
+        assertEquals(0.0, Table.surfSlope(Table.FLAT_D - 0.001), 0.0)
+        assertEquals(1.0, Table.surfSlope(Table.FLAT_D + 0.002), 0.02)
+        assertEquals(0.0, Table.profileHeight(-0.001), 0.0)
+        assertEquals(0.01, Table.profileHeight(0.01), 1e-12)
         // Past the ledge there's nothing.
         assertEquals(Double.NEGATIVE_INFINITY, Table.surfZ(Table.OCT_OUTER + P.R + 0.002), 0.0)
     }
@@ -84,14 +80,16 @@ class OctagonTest {
         val b = w.balls[1]
         var top = 0.0
         var t = 0.0
-        while (t < 20 && w.anyMoving()) { t += w.step(0.01); if (b.z > top) top = b.z }
+        // Until it has been up the ramp and is back on the cloth.
+        while (t < 20 && w.anyMoving() && !(top > 0.01 && b.z == 0.0 && Table.octDist(b.x, b.y) < -0.05)) {
+            t += w.step(0.01); if (b.z > top) top = b.z
+        }
         assertTrue(b.onTable)
-        assertTrue("climbed ${top}", top > 0.03)
+        assertTrue("climbed ${top}", top > 0.012)
         assertTrue("climbed ${top}", top < Table.RAMP_H)
-        assertEquals(0.0, b.z, 0.0)
-        assertTrue(Table.octDist(b.x, b.y) <= Table.FLAT_D + 1e-9)
+        assertTrue(b.vy > 0)   // coming back down the table
         assertTrue(w.log.cueCushionsBeforeHit >= 1)
-        assertEquals(0, w.log.air)
+        assertEquals(0, w.log.cueJumps)
     }
 
     @Test fun aHardBallFliesOffTheTable() {
@@ -101,9 +99,10 @@ class OctagonTest {
         assertEquals(listOf(1), w.log.jumpedOff.toList())
     }
 
-    @Test fun climbSpeedMatchesRollingEnergy() {
-        // Rolling up the ramp, the ball reaches about the height its rolling energy allows (v^2 = 10/7 g h),
-        // less what rolling resistance takes on the way.
+    @Test fun theHardFootTakesAboutHalfTheSpeedOfABallRollingStraightIn() {
+        // Rolling straight into the ramp, the ball loses the half of its energy going into the slope at the
+        // hard corner (and hops a little), so it climbs well under half the height its rolling energy
+        // would allow on a smooth curve (v^2 = 10/7 g h).
         Table.useOctagon(0)
         val w = World(); w.clearAll()
         val d0 = Table.FLAT_D - 0.002
@@ -115,8 +114,26 @@ class OctagonTest {
         var t = 0.0
         while (t < 10 && w.anyMoving()) { t += w.step(0.01); if (w.balls[1].z > top) top = w.balls[1].z }
         val ideal = v * v * 7 / (10 * P.G)
-        assertTrue("reached $top, ideal $ideal", top < ideal && top > ideal * 0.95)
+        assertTrue("reached $top, ideal $ideal", top < ideal * 0.5 && top > ideal * 0.3)
         assertTrue(w.balls[1].onTable)
+    }
+
+    @Test fun aBallCantRideRoundTheEdge() {
+        // Sent along a ramp at a shallow angle, a ball crosses at most one crease between ramps (where it
+        // thumps into the next one) before it comes back down onto the cloth.
+        Table.useOctagon(1)
+        for (sp in doubleArrayOf(1.5, 2.0, 2.5)) for (ang in doubleArrayOf(3.0, 8.0, 15.0)) {
+            val w = World(); w.clearAll()
+            val b = w.balls[1]
+            w.put(1, P.L / 2 + Table.OCT_HX - 0.05, P.W / 2 - 0.25); w.cue = 1
+            w.strike(PI / 2 - toRad(ang), sp, 0.0, 0.4)
+            val sides = HashSet<Int>(); var most = 0; var t = 0.0
+            while (t < 20 && w.anyMoving() && b.onTable) {
+                t += w.step(0.01)
+                if (b.z > 0.005) { sides += Table.octEdge(b.x, b.y); most = maxOf(most, sides.size) } else sides.clear()
+            }
+            assertTrue("speed $sp angle $ang: $most sides", most <= 2)
+        }
     }
 
     @Test fun aBallLeftOnTheRampRollsDownAndStops() {

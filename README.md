@@ -189,9 +189,11 @@ is picked for you.
 
 Bumper pool on a big eight-sided table (70″ × 63″ of cloth, about 90″ × 83″ overall) with a cup on every side — one at
 each end and one on each long side, each 5.1″ from the foot of its ramp, like the small table's from its cushion — and
-**no cushions**: every side is a 45° felt ramp, 6″ high, with a rounded foot so balls ride up it smoothly. Roll a ball
-up a ramp and it curves back down (a ramp works like a soft cushion you can bank off); hit it harder than about 1.5 m/s
-and it goes over the top, onto a 4″ wooden ledge that tilts outward, and off the table. The bumpers are the small
+**no cushions**: every side is a 45° felt ramp, 6″ high, rising straight off the cloth with a hard corner at its foot
+(and hard creases where two ramps meet). A ball thumps into a ramp, loses the part of its speed going into it, hops a
+little and rolls back down (so a ramp works like a dead cushion you can still bank off, and you can't roll a ball round
+the outside of the table); straight in at more than about 2 m/s it goes over the top, onto a 4″ wooden ledge that tilts
+outward, and off the table. The bumpers are the small
 table's bumpers (same size, look and bounce); each cup has one either side of it, as far away as on the small table.
 
 - **Players** (menu → PLAYERS): 2, 3 or 4, or **2 v 2**. Five balls each: **red** (left end), **white** (right end),
@@ -204,7 +206,8 @@ table's bumpers (same size, look and bounce); each cup has one either side of it
   direction — off a bumper, up a ramp, anything but a jump shot — then they all go. A legal ball in: whoever's dropped
   first shoots first. Otherwise whoever finished nearest their cup. Then turns go round the table.
 - **Your turn** carries on while you sink one of your own in your cup. Your marked ball has to go first.
-- **Fouls** — one of your balls in a cup that isn't yours (it comes back out onto your spot), another of yours going in
+- **Fouls** — one of your balls in a cup that isn't yours (it comes back out onto your starting spot: a wrong cup never
+  counts as a ball down, so there's nothing to gain by dumping balls in the nearest cup), another of yours going in
   before the marked one, a ball off the table (it goes back in the middle of the cross) or a jump shot: **every other
   player** drops one of their balls in by hand (their marked one first) — in teams, each player on the other team —
   and play moves on round the table. A ball flying off a ramp is just physics, not a jump; only a raised cue's is.
@@ -324,12 +327,13 @@ model changed, and a unit test makes sure each level still has one).
   fly ballistically, collide in 3D, and pass over pockets and balls. Spin is kept in the air and the cloth grips the
   ball on every landing, so draw, follow and english act when it comes down. A ball higher than the cushions flies
   over them and off the table.
-- Octagon ramps (`Table.useOctagon`, `World.octMove`): the ramps are one profile (flat, rounded foot, 45° slope,
-  ledge) measured outward from the octagon's nearest side, and the ball's resting height is worked out from it once
+- Octagon ramps (`Table.useOctagon`, `World.octMove`): the ramps are one profile (flat, 45° slope, ledge) measured
+  outward from the octagon's nearest side, and the ball's resting height is worked out from it once
   (the highest point it would touch within its radius). On the flat the cloth model above runs as usual. On a ramp the
   ball rolls in the slope's plane: gravity pulls it back at 5/7 g sin θ (the rolling ball's value) and its spin is the
-  natural roll for that surface. Over curves it turns with the surface, keeping its speed; over a crest it's too fast for
-  it leaves the surface and flies, and it lands (bouncing if it comes down hard) wherever it meets it again. Past the
+  natural roll for that surface. A hard corner (the ramp's foot, the creases between ramps: the surface turning more
+  than 10° in one step) is an impact: the speed going into the new face is lost and the ball comes off it at 0.3 of
+  that, a little hop. Over a crest it's too fast for it leaves the surface and flies, and it lands (bouncing if it comes down hard) wherever it meets it again. Past the
   ledge there's nothing under it: off the table. Rolling up a ramp and back counts like a cushion for the aim guide.
 - Bumpers (bumper pool, `Table.useBumper`): round rubber posts with the same contact model as the cushions
   (exact time-of-impact, friction at the contact point) but livelier. A ball in the air higher than a bumper

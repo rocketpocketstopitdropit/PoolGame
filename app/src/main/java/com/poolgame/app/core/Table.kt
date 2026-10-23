@@ -215,8 +215,8 @@ object Table {
     // ------------------------------------------------------------------ octagon bumper table
     //
     // A bigger bumper table, octagon-shaped, with four cups (one at each end and one on each side)
-    // and no cushions: the cloth runs up a 45-degree ramp, 6" high, on every side, with a rounded
-    // foot so balls ride up it smoothly. Above the ramp is a 4" wooden ledge tilted a little outward,
+    // and no cushions: the cloth runs up a 45-degree ramp, 6" high, on every side, with a hard corner
+    // at its foot (a ball thumps into it rather than gliding up). Above the ramp is a 4" wooden ledge tilted a little outward,
     // so a ball that makes it over the top rolls off the table. The bumpers are the same as on the
     // small table; three layouts to pick from.
     //
@@ -240,16 +240,18 @@ object Table {
     /** Half-lengths of the end sides (across the long axis) and the long sides: 22" and 34". */
     const val OCT_END = 0.2794
     const val OCT_SIDE = 0.4318
-    /** The ramps: 45 degrees, 6" high (so 6" deep); the foot is rounded off with this radius. */
+    /** The ramps: 45 degrees, 6" high (so 6" deep), rising straight from the cloth with a hard corner at the foot. */
     const val RAMP_H = 0.1524
-    const val FILLET_R = 0.0508
     /** The wooden ledge above the ramps: 4" wide, sloping down and outward by this angle. */
     const val LEDGE_W = 0.1016
     const val LEDGE_TILT_DEG = 5.0
     /** From the octagon's edge to the outside of the ledge. */
     const val OCT_OUTER = RAMP_H + LEDGE_W
-    /** Where the rounded foot starts: a ball whose centre is no further out than this sits on the flat. */
-    val FLAT_D = -FILLET_R * kotlin.math.tan(toRad(22.5))
+    /**
+     * Where a ball first touches the ramp: its centre is R(sqrt 2 - 1) inside the foot then. A ball whose centre
+     * is no further out than this sits on the flat.
+     */
+    val FLAT_D = -P.R * (sqrt(2.0) - 1)
 
     // Outward unit normal (x, y) and offset of each of the eight sides: a point's distance outside
     // side i is octNx[i] * x + octNy[i] * y - octC[i] (table coordinates).
@@ -294,10 +296,8 @@ object Table {
 
     /** Height of the ramp profile's surface (not the ball) at distance [d] outside the edge, or -infinity past the ledge. */
     fun profileHeight(d: Double): Double {
-        val t = -FLAT_D
         return when {
-            d < -t -> 0.0
-            d < t * 0.7071067811865476 -> { val u = d + t; FILLET_R - sqrt((FILLET_R * FILLET_R - u * u).coerceAtLeast(0.0)) }
+            d < 0.0 -> 0.0
             d <= RAMP_H -> d
             d <= OCT_OUTER -> RAMP_H - (d - RAMP_H) * kotlin.math.tan(toRad(LEDGE_TILT_DEG))
             else -> Double.NEGATIVE_INFINITY
@@ -326,6 +326,7 @@ object Table {
             var d = dc - r
             while (d <= dc + r) { touch(d); d += ds }
             touch(dc + r)
+            if (0.0 > dc - r && 0.0 < dc + r) touch(0.0)
             if (RAMP_H > dc - r && RAMP_H < dc + r) touch(RAMP_H)
             if (OCT_OUTER > dc - r && OCT_OUTER < dc + r) touch(OCT_OUTER)
             out[k] = if (best == Double.NEGATIVE_INFINITY) best else (best - r).let { if (it < 1e-7) 0.0 else it }

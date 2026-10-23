@@ -246,8 +246,8 @@ class MenuActivity : Activity() {
             "player with a ball on the table wins. Against the computer you play two CPUs, both at the level below; pass & " +
             "play is for three people sharing the phone.")
         val octHelp = help("Octagon bumper: a big eight-sided bumper table with a cup on every side and ramps instead of " +
-            "cushions — 45°, 6″ high. Roll a ball up one and it curves back down; hit it too hard and it flies off the " +
-            "table. Two to four players (or two teams of two), five balls each: you shoot into the cup across from you, " +
+            "cushions — 45°, 6″ high, with a hard corner at the bottom. A ball thumps into one, loses speed and rolls back " +
+            "down; hit it hard enough and it goes over the top and off the table. Two to four players (or two teams of two), five balls each: you shoot into the cup across from you, " +
             "your marked ball first. Every marked ball goes at once to open, in any direction (no jump shots). Your ball " +
             "in a cup that isn't yours, a ball off the table or a jump shot is a foul: everyone else (in teams, the other " +
             "team) drops one in. First to sink all five wins; in teams, a player whose five are down shoots their " +

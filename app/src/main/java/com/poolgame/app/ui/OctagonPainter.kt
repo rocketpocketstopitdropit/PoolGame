@@ -63,7 +63,7 @@ object OctagonPainter {
         grain.color = 0x33FFFFFF; grain.strokeWidth = 1.5f * dp
         c.drawPath(outline(Table.OCT_OUTER - 1.5 / scale), grain)
         // The ramps: one band per side, from the foot to the top, lit by the way it faces.
-        val foot = Table.octOutline(Table.FLAT_D)
+        val foot = Table.octOutline(0.0)
         val crest = Table.octOutline(Table.RAMP_H)
         val cloth = 0xFF1C7E4C.toInt()
         for (i in 0 until 8) {
@@ -95,10 +95,10 @@ object OctagonPainter {
         val r = (Table.OCT_HX * scale).toFloat()
         p.shader = RadialGradient(cx, cy, r * 1.05f, intArrayOf(0xFF22935A.toInt(), 0xFF1C7E4C.toInt(), 0xFF166A3F.toInt()),
             floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP)
-        c.drawPath(outline(Table.FLAT_D), p)
+        c.drawPath(outline(0.0), p)
         p.shader = null
         line.color = 0x40000000; line.strokeWidth = 1.2f * dp
-        c.drawPath(outline(Table.FLAT_D), line)
+        c.drawPath(outline(0.0), line)
         // Diamonds along the ledge.
         p.color = 0xFFEDE3C8.toInt()
         val mid = Table.octOutline(Table.RAMP_H + Table.LEDGE_W / 2)

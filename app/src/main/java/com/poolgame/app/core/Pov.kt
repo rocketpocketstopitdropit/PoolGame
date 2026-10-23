@@ -183,11 +183,8 @@ class PovScene {
         const val CUSHION_W = 0.045  // cushion nose to the wooden rail
         const val RAIL_W = 0.115     // cushion nose to the outside of the table
         const val APRON = 0.2        // how far the table's sides go down below the cloth
-        // Octagon table: where its ramp profile is cut into strips (distance outside the edge), and the light.
-        val OCT_PROFILE = run {
-            val f = Table.FLAT_D; val t = -f * 0.7071067811865476
-            doubleArrayOf(f, f + (t - f) * 0.25, f + (t - f) * 0.5, f + (t - f) * 0.75, t, Table.RAMP_H)
-        }
+        // Octagon table: its ramp (from the foot, out to the top), and the light.
+        val OCT_PROFILE = doubleArrayOf(0.0, Table.RAMP_H)
         private val LIGHT_L = sqrt(0.3 * 0.3 + 0.5 * 0.5 + 1.0)
         val LIGHT_X = -0.3 / LIGHT_L
         val LIGHT_Y = -0.5 / LIGHT_L
@@ -436,8 +433,7 @@ class PovScene {
     }
 
     /**
-     * The octagon table: the cloth, the ramps rising from it on every side (their rounded foot as a few
-     * strips), the wooden ledge round the top and the table's outside, all lit by which way they face;
+     * The octagon table: the cloth, the ramps rising from it on every side, the wooden ledge round the top and the table's outside, all lit by which way they face;
      * then the cups, bumpers and balls. The ramps and ledge are drawn under the balls (from anywhere
      * above the table a ball is never behind them).
      */
@@ -465,7 +461,7 @@ class PovScene {
             Table.octCorner(i, Table.OCT_OUTER, ax); Table.octCorner(j, Table.OCT_OUTER, bx)
             quad(a[0], a[1], Table.RAMP_H, b[0], b[1], Table.RAMP_H, bx[0], bx[1], ledgeOut, ax[0], ax[1], ledgeOut, c, 0)
         }
-        // The ramps: the rounded foot in a few strips, then the straight 45-degree slope.
+        // The ramps: straight 45-degree slopes.
         val prof = OCT_PROFILE
         for (i in 0 until 8) {
             val j = (i + 1) % 8
@@ -482,7 +478,7 @@ class PovScene {
                 quad(a[0], a[1], h0, b[0], b[1], h0, pb[0], pb[1], h1, pa[0], pa[1], h1, c, 0)
             }
         }
-        ring(Table.FLAT_D, 0.0)
+        ring(0.0, 0.0)
         poly(ocx, ocy, och, 8, CLOTH, 0)
         cam.project(P.L / 2, P.W / 2, 0.0, q)
         clothCx = q[0]; clothCy = q[1]
