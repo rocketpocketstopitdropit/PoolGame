@@ -220,6 +220,27 @@ object Store {
         return "$rec<br>Longest: $max ${if (max == 1) "round" else "rounds"} · average ${t / 10}.${t % 10} rounds to a winner"
     }
 
+    // The octagon table, kept per setup: "2", "3" or "4" players, or "T" for two teams of two.
+    fun octVariant(players: Int, teams: Boolean) = if (teams && players == 4) "T" else players.coerceIn(2, 4).toString()
+    fun octVariantName(v: String) = if (v == "T") "2 v 2" else "$v-player"
+    /** One octagon game: [youWon] against the CPUs; in pass & play, [seat] is the winner (in teams, 0 red & white, 1 blue & yellow). */
+    fun recordOctagon(v: String, vsCpu: Boolean, level: Int, youWon: Boolean, seat: Int) {
+        val k = key("OCTAGON$v", vsCpu, level, if (vsCpu) (if (youWon) "w" else "l") else "p${seat + 1}")
+        set(k, (getInt(k, 0) + 1).toString())
+    }
+    fun octSeatWins(v: String, seat: Int) = getInt(key("OCTAGON$v", false, 0, "p${seat + 1}"), 0)
+    /** The octagon record for a setup (HTML), and [plain] for the end-of-game line. */
+    fun octSummary(v: String, vsCpu: Boolean, level: Int, plain: Boolean = false): String {
+        val name = "Octagon ${octVariantName(v)}"
+        val m = "OCTAGON$v"
+        if (vsCpu) return if (plain) "Your $name record vs level $level: ${wins(m, true, level)}–${losses(m, true, level)}"
+            else "$name vs level $level: <b>${wins(m, true, level)} W – ${losses(m, true, level)} L</b><br>" +
+                "$name vs all levels: ${totalWins(m)} W – ${totalLosses(m)} L"
+        val t = if (v == "T") "Red & White ${octSeatWins(v, 0)} · Blue & Yellow ${octSeatWins(v, 1)}"
+            else (0 until (v.toIntOrNull() ?: 2)).joinToString(" · ") { "Player ${it + 1} ${octSeatWins(v, it)}" }
+        return "$name pass & play wins: $t"
+    }
+
     fun totalWins(mode: String) = (1..10).sumOf { wins(mode, true, it) }
     fun totalLosses(mode: String) = (1..10).sumOf { losses(mode, true, it) }
     fun resetRecord() {

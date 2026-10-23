@@ -40,6 +40,11 @@ class App : GameHost {
     private var practiceLevel = Store.getInt("practiceLevel", 0).coerceIn(0, com.poolgame.app.core.Trick.LEVELS.size - 1)
     private var askTutorial = Store.getBool("askTutorial", true)
     private var tableSize = TableSize.fromName(Store.get("tableSize", "")) ?: TableSize.DEFAULT
+    // The octagon table: 2, 3 or 4 players, two teams of two (with 4), and which bumper layout.
+    private var octPlayers = Store.getInt("octPlayers", 4).coerceIn(2, 4)
+    private var octTeams = Store.getBool("octTeams", false) && octPlayers == 4
+    private var octLayout = Store.getInt("octLayout", 0).coerceIn(0, com.poolgame.app.core.Table.OCT_LAYOUTS.size - 1)
+    private var playingOct = "4"
     private val guide = Guide()
 
     // What the current game is (may differ from the menu when resuming a saved game)
@@ -175,6 +180,8 @@ class App : GameHost {
         segment("seg-prules") { practiceRules = it == 0; save(); refreshMenu() }
         segment("seg-call") { callIdx = it; save(); refreshMenu() }
         segment("seg-size") { tableSize = TableSize.values()[it]; save(); refreshMenu() }
+        segment("seg-octp") { octTeams = it == 3; octPlayers = if (it == 3) 4 else it + 2; save(); refreshMenu() }
+        segment("seg-octl") { octLayout = it; save(); refreshMenu() }
         val pl = el("seg-plevel")
         for ((i, lv) in com.poolgame.app.core.Trick.LEVELS.withIndex()) {
             val b = document.createElement("button")
@@ -297,11 +304,28 @@ class App : GameHost {
     private fun nameOf(m: GameMode) = when (m) {
         GameMode.EIGHT_BALL -> "8-Ball"; GameMode.NINE_BALL -> "9-Ball"; GameMode.TRICK -> "Trick shots"; GameMode.BUMPER -> "Bumper pool"
         GameMode.CIRCUIT -> "Circuit Pool"; GameMode.POCKET_WARS -> "Pocket Wars"; GameMode.CUTTHROAT -> "Cutthroat"
+        GameMode.OCTAGON -> "Octagon bumper"
+    }
+
+    /** The menu's picture of the octagon table with the chosen bumper layout. */
+    private fun drawOctPreview() {
+        val cv = el("octPreview")
+        val w = (cv.clientWidth as Number).toDouble(); val h = (cv.clientHeight as Number).toDouble()
+        if (w <= 0 || h <= 0) return
+        val d = min((window.devicePixelRatio as Number?)?.toDouble() ?: 1.0, 2.5)
+        cv.width = (w * d).toInt(); cv.height = (h * d).toInt()
+        val c = ctxOf(cv)
+        c.setTransform(d, 0.0, 0.0, d, 0.0, 0.0)
+        c.clearRect(0.0, 0.0, w, h)
+        val T = com.poolgame.app.core.Table
+        val tw = 2 * (T.OCT_HX + T.OCT_OUTER); val th = 2 * (T.OCT_HY + T.OCT_OUTER)
+        val sc = min(w / tw, h / th) * 0.96
+        OctagonPainter.draw(c, w / 2, h / 2, sc, octLayout, com.poolgame.app.core.BumperColors.cupRings(true, octPlayers), 0.6)
     }
 
     private fun refreshMenu() {
         val practice = opp == 2
-        val poolTable = gameMode != GameMode.TRICK && gameMode != GameMode.BUMPER
+        val poolTable = gameMode != GameMode.TRICK && gameMode != GameMode.BUMPER && gameMode != GameMode.OCTAGON
         setSegment("seg-mode", GAMES.indexOf(gameMode))
         setSegment("seg-opp", opp)
         setSegment("seg-call", callIdx)
@@ -313,6 +337,20 @@ class App : GameHost {
             "and each one is judged as in a game (fouls give you ball in hand). Retry a shot, re-rack, or hold a ball to move it."
             else "No rules: plain red and yellow balls (and the black). Hold any ball to move it anywhere."
         el("pbumperHelp").style.display = if (gameMode == GameMode.BUMPER) "block" else "none"
+        el("poctHelp").style.display = if (gameMode == GameMode.OCTAGON) "block" else "none"
+        val oct = gameMode == GameMode.OCTAGON
+        el("octHelp").style.display = if (oct) "block" else "none"
+        el("octBlock").style.display = if (oct) "block" else "none"
+        setSegment("seg-octp", if (octTeams) 3 else octPlayers - 2)
+        setSegment("seg-octl", octLayout)
+        el("octlHelp").textContent = com.poolgame.app.core.Table.OCT_LAYOUT_HELP[octLayout]
+        el("octpHelp").textContent = when {
+            octTeams -> "Two teams: red & white against blue & yellow, partners across the table from each other. " +
+                (if (vsCpu) "You're red, with CPU 1 as your partner." else "")
+            vsCpu -> "You against ${if (octPlayers == 2) "one CPU" else "${octPlayers - 1} CPUs"}, all at the skill below."
+            else -> "$octPlayers people sharing the phone."
+        } + " Turns go round the table: red, blue, white, yellow."
+        if (oct) window.setTimeout({ drawOctPreview() }, 0)
         el("plevelBlock").style.display = if (gameMode == GameMode.TRICK) "block" else "none"
         setSegment("seg-plevel", practiceLevel)
         el("callBlock").style.display = if (gameMode == GameMode.EIGHT_BALL || gameMode == GameMode.NINE_BALL) "block" else "none"
@@ -321,7 +359,11 @@ class App : GameHost {
         el("circuitHelp").style.display = if (gameMode == GameMode.CIRCUIT) "block" else "none"
         el("warsHelp").style.display = if (gameMode == GameMode.POCKET_WARS) "block" else "none"
         el("cutHelp").style.display = if (gameMode == GameMode.CUTTHROAT) "block" else "none"
-        el("skillTitle").textContent = if (gameMode == GameMode.CUTTHROAT) "COMPUTER SKILL (BOTH CPUs)" else "COMPUTER SKILL"
+        el("skillTitle").textContent = when {
+            gameMode == GameMode.CUTTHROAT -> "COMPUTER SKILL (BOTH CPUs)"
+            gameMode == GameMode.OCTAGON && octPlayers > 2 -> "COMPUTER SKILL (ALL CPUs)"
+            else -> "COMPUTER SKILL"
+        }
         // Trick shots are always on the 9 ft table (with its gap) and bumper pool on its own table, so the size choice hides for them.
         el("sizeBlock").style.display = if (poolTable) "block" else "none"
         setSegment("seg-size", tableSize.ordinal)
@@ -345,7 +387,9 @@ class App : GameHost {
         el("resumeBtn").textContent = "RESUME · ${saved ?: ""}"
         val m = modeName()
         val name = nameOf(menuMode())
-        el("record").innerHTML = (if (gameMode == GameMode.CUTTHROAT && !vsCpu)
+        el("record").innerHTML = (if (gameMode == GameMode.OCTAGON)
+            Store.octSummary(Store.octVariant(octPlayers, octTeams), vsCpu, level)
+        else if (gameMode == GameMode.CUTTHROAT && !vsCpu)
             "$name pass &amp; play wins: Player 1 <b>${Store.cutthroatWins(0)}</b> · Player 2 <b>${Store.cutthroatWins(1)}</b> · " +
                 "Player 3 <b>${Store.cutthroatWins(2)}</b>"
         else if (gameMode == GameMode.CUTTHROAT)
@@ -365,15 +409,20 @@ class App : GameHost {
         Store.set("aimSens", aimSens.toString()); Store.set("callMode", callIdx.toString()); Store.set("prediction", prediction.toString())
         Store.set("practiceRules", practiceRules.toString()); Store.set("practiceLevel", practiceLevel.toString())
         Store.set("tableSize", tableSize.name)
+        Store.set("octPlayers", octPlayers.toString()); Store.set("octTeams", octTeams.toString()); Store.set("octLayout", octLayout.toString())
     }
 
     private fun savedSummary(): String? {
         val s = GameSave.readSettings(Store.get("savedGame", "")) ?: return null
         val name = nameOf(s.mode)
-        val size = if (s.mode == GameMode.BUMPER) "" else " · ${s.tableSize.label}"
+        val size = if (s.mode == GameMode.BUMPER || s.mode == GameMode.OCTAGON) "" else " · ${s.tableSize.label}"
+        val oct = "${Store.octVariantName(Store.octVariant(s.octPlayers, s.octTeams))} · ${com.poolgame.app.core.Table.OCT_LAYOUTS[s.octLayout]}"
         return when {
             s.practice && s.mode == GameMode.TRICK -> "Trick-shot practice"
             s.practice && s.mode == GameMode.BUMPER -> "Bumper practice"
+            s.practice && s.mode == GameMode.OCTAGON -> "Octagon practice · ${com.poolgame.app.core.Table.OCT_LAYOUTS[s.octLayout]}"
+            s.mode == GameMode.OCTAGON && s.vsCpu -> "$name $oct vs CPU level ${s.level}"
+            s.mode == GameMode.OCTAGON -> "$name $oct pass & play"
             s.practice && s.practiceRules -> "$name practice$size"
             s.mode == GameMode.TRICK -> if (s.vsCpu) "$name vs CPU level ${s.level}" else "$name pass & play"
             s.practice -> "Free-table practice$size"
@@ -399,6 +448,7 @@ class App : GameHost {
         var call = CallMode.values()[callIdx]
         var text: String? = null
         var size = tableSize
+        var oPlayers = octPlayers; var oTeams = octTeams; var oLayout = octLayout
         if (resume) {
             val saved = Store.get("savedGame", "")
             val s = GameSave.readSettings(saved)
@@ -408,22 +458,26 @@ class App : GameHost {
                 rules = s.practiceRules
                 call = s.callMode
                 size = s.tableSize   // a paused game keeps the table it was started on
+                oPlayers = s.octPlayers; oTeams = s.octTeams; oLayout = s.octLayout
             }
         } else Store.set("savedGame", "")
         // Practice: a game with its own rules on your own, the free table (8-ball's balls), one trick shot, or the bumper table.
         if (practice) {
-            if (mode == GameMode.TRICK || mode == GameMode.BUMPER) rules = false
+            if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.OCTAGON) rules = false
             else if (!rules) mode = GameMode.EIGHT_BALL
             cpu = false; clock = 0
         }
         if (practice || mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS ||
-            mode == GameMode.CUTTHROAT) call = CallMode.OFF
+            mode == GameMode.CUTTHROAT || mode == GameMode.OCTAGON) call = CallMode.OFF
+        oTeams = oTeams && oPlayers == 4
+        playingOct = Store.octVariant(oPlayers, oTeams)
         sounds.enabled = sound
         playingCpu = cpu; playingLevel = lvl; playingMode = mode; playingPractice = practice
         el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
         el("restart").textContent = if (mode == GameMode.TRICK) "Restart match" else "Restart rack"
         el("quit").textContent = "Main menu (game is saved)"
-        game = Game(mode, cpu, lvl, clock, practice, practiceLevel, aimSens, prediction, text, call, sounds, this, tableSize = size, practiceRules = rules)
+        game = Game(mode, cpu, lvl, clock, practice, practiceLevel, aimSens, prediction, text, call, sounds, this, tableSize = size, practiceRules = rules,
+            octPlayers = oPlayers, octTeams = oTeams, octLayout = oLayout)
         showGame()
     }
 
@@ -475,6 +529,11 @@ class App : GameHost {
         val m = playingMode.name
         val cpu = playingCpu
         val lvl = if (cpu) playingLevel else 0
+        if (playingMode == GameMode.OCTAGON) {
+            val g = game!!
+            Store.recordOctagon(playingOct, cpu, lvl, g.youWon(), g.winningSeat())
+            return Store.octSummary(playingOct, cpu, lvl, plain = true)
+        }
         Store.record(m, cpu, lvl, winner)
         val name = nameOf(playingMode)
         if (playingMode == GameMode.CUTTHROAT) return if (cpu) "Your $name record vs two level $lvl CPUs: ${Store.wins(m, true, lvl)}–${Store.losses(m, true, lvl)}"
@@ -486,6 +545,6 @@ class App : GameHost {
     private companion object {
         /** The game buttons, in order. */
         val GAMES = listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS, GameMode.CUTTHROAT,
-            GameMode.BUMPER, GameMode.TRICK)
+            GameMode.BUMPER, GameMode.OCTAGON, GameMode.TRICK)
     }
 }

@@ -1,6 +1,8 @@
 package com.poolgame.web
 
 import com.poolgame.app.core.Ball
+import com.poolgame.app.core.BumperColors
+import com.poolgame.app.core.NB
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.ceil
@@ -23,9 +25,9 @@ class Balls {
         const val DOT = 0xFFC8222A.toInt()
         const val PRACTICE_RED = 0xFFC62828.toInt()
         const val PRACTICE_YELLOW = 0xFFF2BE00.toInt()
-        // Bumper pool: five red and five white balls; the marked one of each is spotted in the other colour.
-        const val BUMPER_RED = 0xFFC62828.toInt()
-        fun isMarked(id: Int) = id == 1 || id == 6
+        // Bumper pool: five balls per player (red, white, and on the octagon table blue and yellow); each
+        // player's marked one is spotted in another colour.
+        fun isMarked(id: Int) = BumperColors.isMarked(id)
         fun isStripe(id: Int) = id in 9..15
         // Light from upper left, above the table (world space; up is -z).
         private val LL = sqrt(0.35 * 0.35 + 0.55 * 0.55 + 1.0)
@@ -38,7 +40,7 @@ class Balls {
      */
     private var view: DoubleArray? = null
     private val viewNow = DoubleArray(9)
-    private val viewDrawn = Array(16) { DoubleArray(9) { Double.NaN } }
+    private val viewDrawn = Array(NB) { DoubleArray(9) { Double.NaN } }
 
     fun setView(v: DoubleArray?) {
         if (v == null) { view = null; return }
@@ -46,11 +48,11 @@ class Balls {
     }
 
     var plain = false
-        set(v) { field = v; for (i in 0 until 16) lastQ[i][0] = Double.NaN }
+        set(v) { field = v; for (i in 0 until NB) lastQ[i][0] = Double.NaN }
 
-    /** Bumper pool style: red balls 1-5 and white 6-10, no numbers; 1 and 6 are spotted (the marked balls). */
+    /** Bumper pool style: red balls 1-5, white 6-10, blue 11-15, yellow 16-20, no numbers; the first of each five is spotted. */
     var bumper = false
-        set(v) { field = v; for (i in 0 until 16) lastQ[i][0] = Double.NaN }
+        set(v) { field = v; for (i in 0 until NB) lastQ[i][0] = Double.NaN }
 
     var radius = 0.0       // CSS px
         private set
@@ -58,14 +60,14 @@ class Balls {
     private var size = 0   // device px
     private var nx = DoubleArray(0); private var ny = DoubleArray(0); private var nz = DoubleArray(0)
     private var shade = DoubleArray(0); private var spec = DoubleArray(0); private var alpha = DoubleArray(0)
-    private val canvases = arrayOfNulls<dynamic>(16)
-    private val images = arrayOfNulls<ImageData>(16)
-    private val lastQ = Array(16) { DoubleArray(4) { Double.NaN } }
+    private val canvases = arrayOfNulls<dynamic>(NB)
+    private val images = arrayOfNulls<ImageData>(NB)
+    private val lastQ = Array(NB) { DoubleArray(4) { Double.NaN } }
     private val m = DoubleArray(9)
     private var shadow: dynamic = null
     private var shadowSize = 0
 
-    private fun colorOf(id: Int): Int = if (bumper) (if (id in 1..5) BUMPER_RED else WHITE) else if (!plain) BASE[id] else when (id) {
+    private fun colorOf(id: Int): Int = if (bumper) BumperColors.ball(id) else if (!plain) BASE[id.coerceAtMost(15)] else when (id) {
         0 -> BASE[0]
         8 -> BASE[8]
         in 1..7 -> PRACTICE_RED
@@ -100,7 +102,7 @@ class Balls {
             shade[k] = (0.38 + 0.66 * lam) * (0.82 + 0.18 * -z)
             spec[k] = max(0.0, u * hx + v * hy + z * hz).pow(70.0) * 0.85
         }
-        for (i in 0 until 16) {
+        for (i in 0 until NB) {
             val cv = offscreen(size, size)
             canvases[i] = cv
             images[i] = ctxOf(cv).createImageData(size, size)
@@ -142,7 +144,7 @@ class Balls {
         val numbered = !plain && !bumper
         // A marked bumper pool ball: spots of the other colour (white on red, red on white).
         val marked = bumper && isMarked(b.id)
-        val spot = if (b.id == 1) WHITE else BUMPER_RED
+        val spot = BumperColors.spot(b.id)
         val sr = (spot shr 16) and 255; val sg = (spot shr 8) and 255; val sb = spot and 255
         val m0 = m[0]; val m1 = m[1]; val m2 = m[2]; val m3 = m[3]; val m4 = m[4]; val m5 = m[5]
         val m6 = m[6]; val m7 = m[7]; val m8 = m[8]
@@ -256,7 +258,7 @@ class Balls {
         ctx.fillStyle = col(if (striped) WHITE else base)
         ctx.circle(cx, cy, r); ctx.fill()
         if (bumper) {
-            if (isMarked(id)) { ctx.fillStyle = col(if (id == 1) WHITE else BUMPER_RED); ctx.circle(cx, cy, r * 0.32); ctx.fill() }
+            if (isMarked(id)) { ctx.fillStyle = col(BumperColors.spot(id)); ctx.circle(cx, cy, r * 0.32); ctx.fill() }
             if (id in 6..10) { ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1.0; ctx.circle(cx, cy, r - 0.5); ctx.stroke() }
         } else if (!plain) {
             if (striped) {

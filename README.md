@@ -1,7 +1,7 @@
 # Pool — 8-Ball, 9-Ball & Trick Shots for Android
 
 A landscape pool game on a 7, 8 or 9 ft table, with real cue-ball spin, a 3D view down the cue, physically real jump shots (and
-illegal scoops), 8-ball and 9-ball rules, Circuit Pool (three secret target balls each), Pocket Wars (a fight over the six pockets), Cutthroat (three players, three groups of five), bumper pool on its own table, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people (three in Cutthroat). Pure Kotlin, no third-party libraries,
+illegal scoops), 8-ball and 9-ball rules, Circuit Pool (three secret target balls each), Pocket Wars (a fight over the six pockets), Cutthroat (three players, three groups of five), bumper pool on its own table, octagon bumper pool for up to four players (or two teams) on an eight-sided table with ramps for cushions, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people (three in Cutthroat). Pure Kotlin, no third-party libraries,
 no image or sound assets (balls are rendered per-pixel and sounds are synthesized).
 
 ## Build & run
@@ -116,9 +116,10 @@ apps or close it. A shot that was still rolling is replayed from the start of th
 **Shot clock** (menu): optional 10–120 s per shot for human players; running out is a foul. With
 ball in hand the clock waits until you aim (table or fine-aim wheel) or touch the power bar.
 
-**Every game three ways**: pick the game (8-Ball, 9-Ball, Circuit, Pocket Wars, Cutthroat, Bumper, Trick), then the
+**Every game three ways**: pick the game (8-Ball, 9-Ball, Circuit, Pocket Wars, Cutthroat, Bumper, Octagon, Trick), then the
 **Opponent**: *Computer* (ten levels), *Pass & Play*, or *Practice* on your own. In Cutthroat, *Computer* means you
-against two CPUs, both at the level on the skill slider, and *Pass & Play* is three people sharing the phone.
+against two CPUs, both at the level on the skill slider, and *Pass & Play* is three people sharing the phone. On the
+octagon table, *Computer* is you against one to three CPUs (all at that level), or you and a CPU partner against two CPUs.
 
 **Practice** (Opponent → Practice). For 8-ball, 9-ball, Circuit Pool, Pocket Wars and Cutthroat:
 - *With the rules* (the default): the game's own rack and rules, but you take every shot. Each shot is judged as in a
@@ -133,7 +134,7 @@ against two CPUs, both at the level on the skill slider, and *Pass & Play* is th
   *Retry shot* puts every ball back where it was before your last shot, *Re-rack* starts over, *Clear table* removes
   the object balls, and tapping a ball in the ball tray (left) brings it back.
 
-Bumper and Trick have their own practice, below.
+Bumper, Octagon and Trick have their own practice, below.
 **Record**: wins and losses are saved per game type and CPU level (and for pass & play), shown on
 the menu and after each game.
 
@@ -183,6 +184,36 @@ ball (red or white) to shoot it; the guide then shows the cup that ball's colour
 up and drag it anywhere. *Retry shot*, *Re-rack* and *Clear table* work as on the free table (Clear keeps the ball
 you're shooting), and tapping a ball in the tray puts it back. When the ball you shot goes in, the nearest one left
 is picked for you.
+
+## Octagon bumper (menu → Game → Octagon)
+
+Bumper pool on a big eight-sided table (70″ × 63″ of cloth, about 90″ × 83″ overall) with a cup on every side — one at
+each end and one on each long side, each 5.1″ from the foot of its ramp, like the small table's from its cushion — and
+**no cushions**: every side is a 45° felt ramp, 6″ high, with a rounded foot so balls ride up it smoothly. Roll a ball
+up a ramp and it curves back down (a ramp works like a soft cushion you can bank off); hit it harder than about 1.5 m/s
+and it goes over the top, onto a 4″ wooden ledge that tilts outward, and off the table. The bumpers are the small
+table's bumpers (same size, look and bounce); each cup has one either side of it, as far away as on the small table.
+
+- **Players** (menu → PLAYERS): 2, 3 or 4, or **2 v 2**. Five balls each: **red** (left end), **white** (right end),
+  **blue** (top), **yellow** (bottom). You shoot into the cup **across from you**; each cup is ringed in the colour of
+  whoever shoots into it (grey if nobody does). Turns go round the table: red, blue, white, yellow.
+- **Bumper layout** (menu → BUMPER LAYOUT, with a picture): *Scatter* (the small table's cross with bumpers scattered
+  all round, 32 bumpers), *Chevrons* (arrow shapes that push balls out to the corner ramps, 28) or *Goal gates* (a gate
+  in front of every cup — thread it, or curl in off the ramp behind it, 28). `core/Table.kt`, `octPosts`.
+- **The opening**: every marked ball goes at the same moment. Each player sets their shot in turn (unseen), in any
+  direction — off a bumper, up a ramp, anything but a jump shot — then they all go. A legal ball in: whoever's dropped
+  first shoots first. Otherwise whoever finished nearest their cup. Then turns go round the table.
+- **Your turn** carries on while you sink one of your own in your cup. Your marked ball has to go first.
+- **Fouls** — one of your balls in a cup that isn't yours (it comes back out onto your spot), another of yours going in
+  before the marked one, a ball off the table (it goes back in the middle of the cross) or a jump shot: **every other
+  player** drops one of their balls in by hand (their marked one first) — in teams, each player on the other team —
+  and play moves on round the table. A ball flying off a ramp is just physics, not a jump; only a raised cue's is.
+- A ball of someone else's that you knock in, in any cup, counts for them, no penalty.
+- **Winning**: the first player to get all five down. **2 v 2**: red & white against blue & yellow, partners across
+  the table (so turns alternate between the teams). A player whose five are down shoots their partner's balls (into the
+  partner's cup), and the team wins when all ten are down.
+- **Practice** (Octagon, Opponent → Practice): the octagon table on your own with all four colours and the chosen
+  layout, no rules, as in bumper practice.
 
 ## Circuit Pool (menu → Game → Circuit)
 
@@ -293,6 +324,13 @@ model changed, and a unit test makes sure each level still has one).
   fly ballistically, collide in 3D, and pass over pockets and balls. Spin is kept in the air and the cloth grips the
   ball on every landing, so draw, follow and english act when it comes down. A ball higher than the cushions flies
   over them and off the table.
+- Octagon ramps (`Table.useOctagon`, `World.octMove`): the ramps are one profile (flat, rounded foot, 45° slope,
+  ledge) measured outward from the octagon's nearest side, and the ball's resting height is worked out from it once
+  (the highest point it would touch within its radius). On the flat the cloth model above runs as usual. On a ramp the
+  ball rolls in the slope's plane: gravity pulls it back at 5/7 g sin θ (the rolling ball's value) and its spin is the
+  natural roll for that surface. Over curves it turns with the surface, keeping its speed; over a crest it's too fast for
+  it leaves the surface and flies, and it lands (bouncing if it comes down hard) wherever it meets it again. Past the
+  ledge there's nothing under it: off the table. Rolling up a ramp and back counts like a cushion for the aim guide.
 - Bumpers (bumper pool, `Table.useBumper`): round rubber posts with the same contact model as the cushions
   (exact time-of-impact, friction at the contact point) but livelier. A ball in the air higher than a bumper
   passes over it. `World.cue` is the ball the cue strikes: always the cue ball except in bumper pool.
@@ -332,6 +370,13 @@ Pocket Wars: it scores each shot it simulates on the points it gains and gives a
 (points count for more once either player is near 61), and only goes for balls into its own or open pockets. From
 level 5 it also looks at banks into your pockets to steal them. Headless: L10 beat L1 10/10, L7 beat L4 9/10.
 
+Octagon bumper: for each ball it may shoot it tries straight at its cup and at the cup's mirror image across each of
+the eight ramps (a ball rolling up a ramp and back comes off it roughly like a cushion), fanned out either side, at a
+few speeds, through the physics engine; it scores each on its own (and its partner's) balls down, everyone else's (an
+opponent close to finishing counts more; a foul hands each opponent a ball), and how the balls are left for whoever
+shoots next. From level 4 it checks its best few against its own aim and speed error, and from level 6 it keeps
+refining the best. Headless, two players: L10 beat L1 6/6, L7 beat L4 7/8.
+
 Circuit Pool: it never looks at your targets. From the counts both players can see after every shot it works out
 every set of three balls you could have (`core/Circuit.kt`, `CircuitBelief`), and scores each shot it simulates
 averaged over all of them: its own targets are worth the most, a probably-neutral ball keeps its turn, and a ball
@@ -350,10 +395,11 @@ Headless, one strong CPU against two weaker ones (a third each by chance): L10 b
 ```
 app/src/main/java/com/poolgame/app/
   core/   Table.kt (constants, sizes, rails)    World.kt (physics)
-          Match.kt (racks + rules, bumper pool, Circuit Pool, Pocket Wars, Cutthroat)  Ai.kt (computer player)
+          Match.kt (racks + rules, bumper pool and octagon bumper, Circuit Pool, Pocket Wars, Cutthroat)  Ai.kt (computer player)
           Circuit.kt (Circuit Pool's secret targets, and what a player can work out about the opponent's)
           PocketWars.kt (Pocket Wars: who owns each pocket, and the points)
           Cutthroat.kt (Cutthroat: each player's group, and the open-table pick)
+          BumperColors.kt (bumper pool's ball, spot and cup-ring colours, for both tables)
           Crowd.kt (synthesized crowd "aww", shared with the web version)
           Trick.kt (trick-shot levels, match state, known shots)
           Cough.kt (synthesized cough, the foul sound until you record one)
@@ -363,7 +409,8 @@ app/src/main/java/com/poolgame/app/
           ControlsGuide.kt (screen-guide text and the screen map's layout)
   ui/     MenuActivity  GameActivity  GameView (render + input + turn flow, tutorial overlay)
           ControlsActivity (the screen guide and its map)
+          OctagonPainter (the octagon table from above, and the menu's preview of it)
           BallRenderer (3D ball shading)        Sfx (synthesized sounds)
           VoiceRecorder (records your foul voice)
-app/src/test/  EngineTest.kt
+app/src/test/  EngineTest.kt  OctagonTest.kt (the octagon table: ramps, rules, teams, the CPU)
 ```

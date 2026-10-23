@@ -1,6 +1,9 @@
 package com.poolgame.web
 
 import com.poolgame.app.core.Ai
+import com.poolgame.app.core.Ball
+import com.poolgame.app.core.BumperColors
+import com.poolgame.app.core.NB
 import com.poolgame.app.core.CallMode
 import com.poolgame.app.core.CutthroatState
 import com.poolgame.app.core.GameMode
@@ -59,7 +62,10 @@ class Game(
     private val host: GameHost,
     private val tutorialMode: Boolean = false,  // the hands-on tutorial (a practice table with a guide)
     private val tableSize: TableSize = TableSize.DEFAULT,  // table for 8-ball, 9-ball and practice
-    private val practiceRules: Boolean = false   // practice: play the game's own rules on your own (not the free table)
+    private val practiceRules: Boolean = false,  // practice: play the game's own rules on your own (not the free table)
+    private val octPlayers: Int = 4,             // octagon table: how many players (2 to 4)
+    private val octTeams: Boolean = false,       // octagon table, four players: two teams of two
+    private val octLayout: Int = 0               // octagon table: the bumper layout
 ) {
     private enum class Phase { RPS, HANDOFF, PICK, HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
     private enum class Rps { PICK, SHAKE, REVEAL }
@@ -91,7 +97,14 @@ class Game(
 
     /** Cutthroat: three players — you and two CPUs (both at the menu's level), or three people passing the phone. */
     private val cutthroat = mode == GameMode.CUTTHROAT
+    /** The octagon bumper table: two to four players (or two teams of two), four cups, ramps for cushions. */
+    private val octagon = mode == GameMode.OCTAGON
     private val names = when {
+        // (Practice on the octagon table puts out all four colours, so it has four seats.)
+        octagon && practiceMode -> arrayOf("Red", "White", "Blue", "Yellow")
+        octagon && vsCpu && octPlayers == 2 -> arrayOf("You", "CPU")
+        octagon && vsCpu -> Array(octPlayers) { if (it == 0) "You" else "CPU $it" }
+        octagon -> Array(octPlayers) { "Player ${it + 1}" }
         cutthroat && vsCpu -> arrayOf("You", "CPU 1", "CPU 2")
         cutthroat && rulesPractice -> arrayOf("You", "Opponent 1", "Opponent 2")
         cutthroat -> arrayOf("Player 1", "Player 2", "Player 3")
@@ -103,7 +116,7 @@ class Game(
     private val rng = Random(now().toLong())
     // 8-ball, 9-ball and practice use the chosen table size (set before the layout reads its dimensions);
     // trick shots always use the 9 ft gap table.
-    private var match = run { useTable(); Match(mode, names) }
+    private var match = run { useTable(); Match(mode, names).also { it.teams = octTeams && names.size == 4 && !practiceMode } }
     private var breaker = 0
     private var phase = Phase.HUMAN
     private var generation = 0
@@ -160,9 +173,9 @@ class Game(
     // in the order they were made, like the ball return on a bar table.
     private val trayRect = Rect()
     private var potR = 0.0
-    private val potIds = IntArray(16)
-    private val potY = DoubleArray(16)
-    private val potV = DoubleArray(16)
+    private val potIds = IntArray(NB)
+    private val potY = DoubleArray(NB)
+    private val potV = DoubleArray(NB)
     private var potN = 0
     private var trayGrad: Gradient? = null
 
@@ -185,7 +198,7 @@ class Game(
     // Trick shots: a banner announcing each level as it starts.
     private val trick = mode == GameMode.TRICK
     /** Bumper pool: no cue ball (you shoot your own balls), its own table, and an opening shot both players take at once. */
-    private val bumper = mode == GameMode.BUMPER
+    private val bumper = mode == GameMode.BUMPER || octagon
     /** Bumper pool practice: the bumper table on your own, any ball, no rules. */
     private val bumperPractice = practice && bumper
     /** Circuit Pool: three secret target balls each. */
@@ -238,6 +251,8 @@ class Game(
     private val menuBtn = Rect(); private val rematchBtn = Rect(); private val menuExitBtn = Rect()
     private val overPanel = Rect(); private val leftCard = Rect(); private val rightCard = Rect()
     private val midCard = Rect()                 // Cutthroat's third player card (left of the right-hand one)
+    private val card4 = Rect()                   // octagon table: the fourth player's card
+    private var msgL = 0.0; private var msgR = 0.0   // the HUD's message, between the player cards
     private val pickBtn = Array(3) { Rect() }
     private var background: dynamic = null
     private var powerGrad: Gradient? = null
@@ -261,6 +276,7 @@ class Game(
         povBalls.plain = balls.plain
         balls.bumper = bumper
         povBalls.bumper = bumper
+        if (bumper) povScene.cupRings = BumperColors.cupRings(octagon, names.size)
         // Cutthroat has no rock, paper, scissors (three players): the first breaker is drawn at random.
         if (resume == null || !resumeGame(resume)) newGame(if (cutthroat && !practiceMode) rng.nextInt(3) else 0)
     }
@@ -289,6 +305,7 @@ class Game(
         breaker = breakerPlayer
         useTable()
         match = Match(mode, names)
+        match.teams = octTeams && names.size == 4 && !practiceMode
         match.world.trackOrientation = true
         match.world.listener = makeListener()
         match.rack(rng, breaker)
@@ -372,20 +389,28 @@ class Game(
 
     fun restart() = newGame(breaker)
 
+    /** The game just finished: whether you (player 1) are on the winning side. */
+    fun youWon() = match.won(0)
+
+    /** The winner's seat (0 to 3), or in team play the winning team (0 red & white, 1 blue & yellow). */
+    fun winningSeat() = if (match.teams) match.teamOf(match.winner) else match.winner
+
     fun isPractice() = practiceMode
 
-    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practiceMode, breaker, match.callMode, tableSize, rulesPractice)
+    private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practiceMode, breaker, match.callMode, tableSize, rulesPractice,
+        octPlayers, octTeams, octLayout)
 
     private fun gameName() = when (mode) {
         GameMode.EIGHT_BALL -> "8-Ball"; GameMode.NINE_BALL -> "9-Ball"; GameMode.CIRCUIT -> "Circuit Pool"
         GameMode.POCKET_WARS -> "Pocket Wars"; GameMode.BUMPER -> "Bumper pool"; GameMode.TRICK -> "Trick shots"
-        GameMode.CUTTHROAT -> "Cutthroat"
+        GameMode.CUTTHROAT -> "Cutthroat"; GameMode.OCTAGON -> "Octagon bumper"
     }
 
     private fun useTable() {
         when (mode) {
             GameMode.TRICK -> {}
             GameMode.BUMPER -> Table.useBumper()
+            GameMode.OCTAGON -> Table.useOctagon(octLayout)
             else -> Table.useStandard(tableSize)
         }
     }
@@ -433,7 +458,7 @@ class Game(
         .replace("Opponent to break", "break again")
 
     private fun practiceHint() =
-        if (bumperPractice) "Bumper practice · tap a ball to shoot it, hold it to move it" else "Practice · hold any ball to move it"
+        if (bumperPractice) "${if (octagon) "Octagon" else "Bumper"} practice · tap a ball to shoot it, hold it to move it" else "Practice · hold any ball to move it"
 
     private fun startTurn() {
         match.prepareTurn()
@@ -447,6 +472,8 @@ class Game(
             val w = match.winner
             gameOverTitle = when {
                 rulesPractice -> if (w == 0) "Rack won!" else "Rack lost"
+                match.teams && vsCpu -> if (match.won(0)) "Your team wins!" else "${match.teamName(w)} win"
+                match.teams -> "${match.teamName(w)} win!"
                 vsCpu && w == 0 -> "You win!"
                 vsCpu -> "${names[w]} wins"
                 else -> "${names[w]} wins!"
@@ -516,7 +543,7 @@ class Game(
         val c = match.world.cueBall
         if (bumper) {
             // Bumper pool: start out aimed at the cup you're shooting for.
-            val cup = Table.pockets[match.targetCup(match.current)]
+            val cup = Table.pockets[match.targetCup(match.ownerOf(match.world.cue).coerceAtLeast(0))]
             aimAngle = atan2(cup.cy - c.y, cup.cx - c.x)
             return
         }
@@ -660,7 +687,7 @@ class Game(
 
     private fun practiceClear() {
         // (Bumper practice keeps the ball you're shooting.)
-        for (id in 1..15) if (id != match.world.cue) { val b = match.world.balls[id]; b.onTable = false; b.stop() }
+        for (id in 1 until NB) if (id != match.world.cue) { val b = match.world.balls[id]; b.onTable = false; b.stop() }
         message = "Table cleared · tap a ball in the tray to bring it back"
     }
 
@@ -770,7 +797,9 @@ class Game(
                         pauseT = if (out.foul || out.winner >= 0) 0.9 else 0.45
                         if (out.heckle) window.setTimeout({ sfx.heckle() }, 260)
                     } else if (bumperPractice) {
-                        val jumped = (match.world.log.air and (1 shl match.world.cue)) != 0
+                        // (On the octagon table a ball flying off a ramp is just physics; only the cue's jump counts.)
+                        val bit = 1 shl match.world.cue
+                        val jumped = ((if (octagon) match.world.log.cueJumps or match.world.log.scoops else match.world.log.air) and bit) != 0
                         // The ball you shot went down: carry on with the nearest one left.
                         if (!match.world.cueBall.onTable) bumperPracticePick(-1)
                         message = when {
@@ -1047,7 +1076,8 @@ class Game(
         val rightW = max(w * 0.15, 96.0) + 14
         trayRect.set(leftW, hudH + 34, leftW + trayW, h - 18)
         tableArea.set(trayRect.r + 6, hudH, w - rightW, h)
-        val rail = 0.115
+        // (The octagon table's width already includes its ledge.)
+        val rail = if (octagon) 0.012 else 0.115
         val tw = P.L + 2 * rail; val th = P.W + 2 * rail
         scale = min(tableArea.w / tw, (tableArea.h - 6) / th) * 0.98
         ox = tableArea.l + (tableArea.w - tw * scale) / 2 + rail * scale
@@ -1070,7 +1100,9 @@ class Game(
         topViewBtn.set(tableArea.l + 8, tableArea.t + 8, tableArea.l + 118, tableArea.t + 44)
         resetViewBtn.set(topViewBtn.r + 8, topViewBtn.t, topViewBtn.r + 52, topViewBtn.b)
         // In the top view the 3D button sits over the top rail, between the corner and side pockets.
-        view3dBtn.set(sx(P.L * 0.11), sy(-0.1) - 15, sx(P.L * 0.11) + 104, sy(-0.1) + 15)
+        // (On the octagon table, in the empty corner at the top left.)
+        if (octagon) view3dBtn.set(sx(0.0), sy(0.0), sx(0.0) + 104, sy(0.0) + 30)
+        else view3dBtn.set(sx(P.L * 0.11), sy(-0.1) - 15, sx(P.L * 0.11) + 104, sy(-0.1) + 15)
         povBalls.setRadius(30.0, dpr)
         menuBtn.set(8.0, 8.0, 52.0, 44.0)
         val cardW = min(w * 0.27, 260.0)
@@ -1083,6 +1115,23 @@ class Game(
             leftCard.set(menuBtn.r + 10, 8.0, menuBtn.r + 10 + cw, 8 + cardH)
             rightCard.set(w - 8 - cw, 8.0, w - 8, 8 + cardH)
             midCard.set(rightCard.l - 8 - cw, 8.0, rightCard.l - 8, 8 + cardH)
+        }
+        msgL = leftCard.r + 10
+        msgR = (if (cutthroat && !practice) midCard.l else rightCard.l) - 10
+        if (octagon && !practice && names.size > 2) {
+            // Three or four players, in the order they shoot: three cards like Cutthroat's, or two each side.
+            val n = names.size
+            val cw = if (n == 4) min(w * 0.155, 170.0) else min(w * 0.19, 200.0)
+            leftCard.set(menuBtn.r + 10, 8.0, menuBtn.r + 10 + cw, 8 + cardH)
+            rightCard.set(w - 8 - cw, 8.0, w - 8, 8 + cardH)
+            if (n == 4) {
+                midCard.set(leftCard.r + 8, 8.0, leftCard.r + 8 + cw, 8 + cardH)
+                card4.set(rightCard.l - 8 - cw, 8.0, rightCard.l - 8, 8 + cardH)
+                msgL = midCard.r + 10; msgR = card4.l - 10
+            } else {
+                midCard.set(rightCard.l - 8 - cw, 8.0, rightCard.l - 8, 8 + cardH)
+                msgL = leftCard.r + 10; msgR = midCard.l - 10
+            }
         }
         run {
             val gap = 8.0
@@ -1132,10 +1181,18 @@ class Game(
         bgVersion = Table.version
     }
 
+    /** How high ball [b] is off the surface under it (on the octagon table's ramps, above the ramp). */
+    private fun airOf(b: Ball): Double =
+        if (octagon) (b.z - Table.surfaceZ(b.x, b.y)).coerceAtLeast(0.0).let { if (it < 0.002) 0.0 else it } else b.z
+
     private fun drawBackground(c: Ctx2D, w: Double, h: Double, rail: Double) {
         val g0 = c.createLinearGradient(0.0, 0.0, 0.0, h)
         g0.addColorStop(0.0, "#1A2026"); g0.addColorStop(1.0, "#0D1013")
         c.fillStyle = g0; c.fillRect(0.0, 0.0, w, h)
+        if (Table.octagon) {
+            OctagonPainter.draw(c, sx(P.L / 2), sy(P.W / 2), scale, Table.octLayout, BumperColors.cupRings(true, names.size))
+            return
+        }
 
         val l = sx(-rail); val t = sy(-rail); val r = sx(P.L + rail); val b = sy(P.W + rail)
         val corner = 0.06 * scale
@@ -1295,7 +1352,7 @@ class Game(
         for (b in w.balls) if (b.onTable) {
             val bx = if (b.id == w.cue) cueX else b.x; val by = if (b.id == w.cue) cueY else b.y
             if (b.z < 0.0) continue
-            val h = (b.z / 0.12).coerceIn(0.0, 1.0)
+            val h = (airOf(b) / 0.12).coerceIn(0.0, 1.0)
             balls.drawShadow(ctx, sx(bx), sy(by), 1 - 0.35 * h, 1 - 0.55 * h)
         }
         for (s in sinks) {
@@ -1306,15 +1363,18 @@ class Game(
             // Falling into the gap: shrinks as it drops away.
             balls.draw(ctx, b, sx(b.x), sy(b.y), (1 + b.z * 6).coerceAtLeast(0.45))
         }
-        for (b in w.balls) if (b.onTable && b.z == 0.0) {
+        for (b in w.balls) if (b.onTable && b.z >= 0.0 && airOf(b) == 0.0) {
             val bx = if (b.id == w.cue) cueX else b.x; val by = if (b.id == w.cue) cueY else b.y
-            balls.draw(ctx, b, sx(bx), sy(by))
+            // (Up an octagon table's ramp a ball is a little nearer the viewer: a little bigger.)
+            if (b.z > 0.0) balls.draw(ctx, b, sx(bx), sy(by), 1 + b.z * RAMP_GROW)
+            else balls.draw(ctx, b, sx(bx), sy(by))
         }
         // In the air: the height is exaggerated on screen (the distance is real) so a jump is easy to
         // see. The ball is drawn lifted toward the top of the screen and bigger, away from its shadow.
-        for (b in w.balls) if (b.onTable && b.z > 0.0) {
-            val lift = b.z * JUMP_LIFT * scale
-            balls.draw(ctx, b, sx(b.x) - lift * 0.25, sy(b.y) - lift, 1 + b.z * JUMP_GROW)
+        for (b in w.balls) if (b.onTable && b.z >= 0.0 && airOf(b) > 0.0) {
+            val air = airOf(b)
+            val lift = air * JUMP_LIFT * scale
+            balls.draw(ctx, b, sx(b.x) - lift * 0.25, sy(b.y) - lift, 1 + air * JUMP_GROW + (b.z - air) * RAMP_GROW)
         }
 
         ctx.setLineDash(noDash)
@@ -1535,7 +1595,7 @@ class Game(
 
     /** Bumper pool: the guide's ball drops at (x, y) into the cup the current player is shooting for. */
     private fun intoTargetCup(x: Double, y: Double): Boolean {
-        val pk = Table.pockets[match.targetCup(match.current)]
+        val pk = Table.pockets[match.targetCup(match.ownerOf(match.world.cue).coerceAtLeast(0))]
         return hypot(x - pk.cx, y - pk.cy) < pk.capR + 0.06
     }
 
@@ -1579,13 +1639,9 @@ class Game(
         if (tutorialMode) { drawTutorialHud(ctx); return }
         if (practice) { drawPracticeHud(ctx); return }
         if (trickPractice) { drawTrickPracticeHud(ctx); return }
-        drawPlayerCard(ctx, leftCard, 0)
-        if (cutthroat) {
-            drawPlayerCard(ctx, midCard, 1)
-            drawPlayerCard(ctx, rightCard, 2)
-        } else drawPlayerCard(ctx, rightCard, 1)
+        for (p in 0 until match.players) drawPlayerCard(ctx, cardOf(p), p)
         val cardH = leftCard.h
-        val midL = leftCard.r + 10; val midR = (if (cutthroat) midCard.l else rightCard.l) - 10
+        val midL = msgL; val midR = msgR
         ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"
         ctx.fillStyle = "#E8ECEF"; ctx.font = font(min(15.0, hudH * 0.26), false)
         val msg = when (phase) {
@@ -1608,7 +1664,7 @@ class Game(
         val subY = 8 + cardH * 0.82
         if (phase == Phase.CPU_THINK) {
             ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
-            ctx.fillText(if (cutthroat) "${names[match.current]} (level $cpuLevel) is thinking…" else "CPU (level $cpuLevel) is thinking…",
+            ctx.fillText(if (names.size > 2) "${names[match.current]} (level $cpuLevel) is thinking…" else "CPU (level $cpuLevel) is thinking…",
                 (midL + midR) / 2, subY)
         } else if (trick) {
             val t = match.trick
@@ -1700,7 +1756,7 @@ class Game(
         ctx.font = font(min(16.0, leftCard.h * 0.32), true); ctx.fillStyle = "#FFF"
         val title = when {
             rulesPractice -> "${gameName().uppercase()} PRACTICE"
-            bumperPractice -> "BUMPER PRACTICE"
+            bumperPractice -> if (octagon) "OCTAGON PRACTICE" else "BUMPER PRACTICE"
             else -> "PRACTICE"
         }
         ctx.fillText(ellipsize(ctx, title, leftCard.w - 20), leftCard.l + 12, leftCard.t + leftCard.h * 0.42)
@@ -1738,6 +1794,14 @@ class Game(
         ctx.font = font(min(11.0, rightCard.h * 0.22), false); ctx.fillStyle = "#9AA7B1"
         ctx.fillText(ellipsize(ctx, if (potN == 0) "All balls on the table" else "Tap a ball in the tray (left) to put it back", rightCard.w - 20),
             rightCard.l + 12, rightCard.t + rightCard.h * 0.42)
+    }
+
+    /** Player [p]'s card at the top of the screen: the cards go in the order the players shoot. */
+    private fun cardOf(p: Int): Rect = when {
+        octagon && names.size == 4 -> when (p) { 0 -> leftCard; 2 -> midCard; 1 -> card4; else -> rightCard }
+        octagon && names.size == 3 -> when (p) { 0 -> leftCard; 2 -> midCard; else -> rightCard }
+        cutthroat -> when (p) { 0 -> leftCard; 1 -> midCard; else -> rightCard }
+        else -> if (p == 0) leftCard else rightCard
     }
 
     private fun drawPlayerCard(ctx: Ctx2D, r: Rect, player: Int) {
@@ -1831,7 +1895,14 @@ class Game(
             // Five balls each (dim once they're down), and which way this player shoots.
             var x = r.l + 12 + iconR
             for (id in match.bumperBalls(player)) { balls.icon(ctx, id, x, iy, iconR, !match.world.balls[id].onTable); x += iconR * 2.3 }
-            ctx.fillText(ellipsize(ctx, if (match.targetCup(player) == 1) "red · shoots ▶" else "white · shoots ◀", r.r - x - 4), x, iy + iconR * 0.4)
+            val arrow = when (match.targetCup(player)) { 0 -> "◀"; 1 -> "▶"; 2 -> "▲"; else -> "▼" }
+            val q = match.partnerOf(player)
+            val dir = when {
+                octagon && names.size == 4 && match.ballsLeft(player) == 0 && q >= 0 -> "done · shoots ${names[q]}'s"
+                names.size > 2 -> arrow
+                else -> "${match.colorName(player)} · shoots $arrow"
+            }
+            ctx.fillText(ellipsize(ctx, dir, r.r - x - 4), x, iy + iconR * 0.4)
         } else if (mode == GameMode.EIGHT_BALL) {
             val g = match.groups[player]
             if (g == Group.OPEN) {
@@ -2185,7 +2256,7 @@ class Game(
         if (first && menuBtn.contains(x, y) && phase != Phase.OVER) { ptrMode[id] = Touch.BUTTON; host.onMenuRequested(); return }
         if (phase == Phase.OVER) {
             if (first) {
-                if (rematchBtn.contains(x, y)) newGame(if (practiceMode) 0 else if (cutthroat) (breaker + 1) % 3 else 1 - breaker)
+                if (rematchBtn.contains(x, y)) newGame(if (practiceMode || octagon) 0 else if (cutthroat) (breaker + 1) % 3 else 1 - breaker)
                 else if (menuExitBtn.contains(x, y)) host.onExitToMenu()
             }
             ptrMode[id] = Touch.BUTTON
@@ -2505,7 +2576,7 @@ class Game(
      * if the tap was taken that way: your ball, picked or not (the marked ball has to go first).
      */
     private fun pickBumperBall(id: Int): Boolean {
-        if (!bumper || match.ownerOf(id) != match.current) return false
+        if (!bumper || match.ownerOf(id) != match.playsFor(match.current)) return false
         if (match.selectBall(id)) {
             aimAtNearestTarget()
             sfx.ball(0.6)
@@ -2690,7 +2761,8 @@ class Game(
     }
 
     private fun povLine(ctx: Ctx2D, x1: Double, y1: Double, x2: Double, y2: Double, h: Double) {
-        if (povCam.segment(x1, y1, h, x2, y2, h, povSeg)) ctx.line(povSeg[0], povSeg[1], povSeg[2], povSeg[3])
+        // (On the octagon table's ramps the line runs up the ramp, not through it.)
+        if (povCam.segment(x1, y1, h + Table.surfaceZ(x1, y1), x2, y2, h + Table.surfaceZ(x2, y2), povSeg)) ctx.line(povSeg[0], povSeg[1], povSeg[2], povSeg[3])
     }
 
     /** An outline of a circle of radius [r] lying on the cloth at (x, y). */
@@ -2821,6 +2893,8 @@ class Game(
         const val JUMP_LIFT = 1.6
         /** ...and this much bigger per metre of height (closer to the viewer). */
         const val JUMP_GROW = 8.0
+        /** ...and a ball up an octagon table's ramp this much bigger per metre (it's only a little nearer). */
+        const val RAMP_GROW = 1.6
         val GESTURES = arrayOf("\u270A", "\u270B", "\u270C\uFE0F")   // fist, flat hand, peace sign
         val GESTURE_NAMES = arrayOf("Rock", "Paper", "Scissors")
         val SHAKE_WORDS = arrayOf("Rock…", "Paper…", "Scissors…")

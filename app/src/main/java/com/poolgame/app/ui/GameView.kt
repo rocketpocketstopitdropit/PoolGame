@@ -3133,7 +3133,7 @@ class GameView(
      * if the tap was taken that way: your ball, picked or not (the marked ball has to go first).
      */
     private fun pickBumperBall(id: Int): Boolean {
-        if (!bumper || match.ownerOf(id) != match.current) return false
+        if (!bumper || match.ownerOf(id) != match.playsFor(match.current)) return false
         if (match.selectBall(id)) {
             aimAtNearestTarget()
             sfx.ball(0.6)
