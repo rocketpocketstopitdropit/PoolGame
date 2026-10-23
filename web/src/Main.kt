@@ -296,7 +296,7 @@ class App : GameHost {
     private fun modeName() = menuMode().name
     private fun nameOf(m: GameMode) = when (m) {
         GameMode.EIGHT_BALL -> "8-Ball"; GameMode.NINE_BALL -> "9-Ball"; GameMode.TRICK -> "Trick shots"; GameMode.BUMPER -> "Bumper pool"
-        GameMode.CIRCUIT -> "Circuit Pool"; GameMode.POCKET_WARS -> "Pocket Wars"
+        GameMode.CIRCUIT -> "Circuit Pool"; GameMode.POCKET_WARS -> "Pocket Wars"; GameMode.CUTTHROAT -> "Cutthroat"
     }
 
     private fun refreshMenu() {
@@ -320,6 +320,8 @@ class App : GameHost {
         el("bumperHelp").style.display = if (gameMode == GameMode.BUMPER) "block" else "none"
         el("circuitHelp").style.display = if (gameMode == GameMode.CIRCUIT) "block" else "none"
         el("warsHelp").style.display = if (gameMode == GameMode.POCKET_WARS) "block" else "none"
+        el("cutHelp").style.display = if (gameMode == GameMode.CUTTHROAT) "block" else "none"
+        el("skillTitle").textContent = if (gameMode == GameMode.CUTTHROAT) "COMPUTER SKILL (BOTH CPUs)" else "COMPUTER SKILL"
         // Trick shots are always on the 9 ft table (with its gap) and bumper pool on its own table, so the size choice hides for them.
         el("sizeBlock").style.display = if (poolTable) "block" else "none"
         setSegment("seg-size", tableSize.ordinal)
@@ -343,7 +345,13 @@ class App : GameHost {
         el("resumeBtn").textContent = "RESUME · ${saved ?: ""}"
         val m = modeName()
         val name = nameOf(menuMode())
-        el("record").innerHTML = (if (vsCpu)
+        el("record").innerHTML = (if (gameMode == GameMode.CUTTHROAT && !vsCpu)
+            "$name pass &amp; play wins: Player 1 <b>${Store.cutthroatWins(0)}</b> · Player 2 <b>${Store.cutthroatWins(1)}</b> · " +
+                "Player 3 <b>${Store.cutthroatWins(2)}</b>"
+        else if (gameMode == GameMode.CUTTHROAT)
+            "$name vs two level $level CPUs: <b>${Store.wins(m, true, level)} W – ${Store.losses(m, true, level)} L</b><br>" +
+                "$name vs all levels: ${Store.totalWins(m)} W – ${Store.totalLosses(m)} L"
+        else if (vsCpu)
             "$name vs level $level: <b>${Store.wins(m, true, level)} W – ${Store.losses(m, true, level)} L</b><br>" +
                 "$name vs all levels: ${Store.totalWins(m)} W – ${Store.totalLosses(m)} L"
         else "$name pass &amp; play: Player 1 <b>${Store.wins(m, false, 0)} – ${Store.losses(m, false, 0)}</b> Player 2") +
@@ -369,6 +377,7 @@ class App : GameHost {
             s.practice && s.practiceRules -> "$name practice$size"
             s.mode == GameMode.TRICK -> if (s.vsCpu) "$name vs CPU level ${s.level}" else "$name pass & play"
             s.practice -> "Free-table practice$size"
+            s.vsCpu && s.mode == GameMode.CUTTHROAT -> "$name vs 2 CPUs level ${s.level}$size"
             s.vsCpu -> "$name vs CPU level ${s.level}$size"
             else -> "$name pass & play$size"
         }
@@ -407,7 +416,8 @@ class App : GameHost {
             else if (!rules) mode = GameMode.EIGHT_BALL
             cpu = false; clock = 0
         }
-        if (practice || mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS) call = CallMode.OFF
+        if (practice || mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS ||
+            mode == GameMode.CUTTHROAT) call = CallMode.OFF
         sounds.enabled = sound
         playingCpu = cpu; playingLevel = lvl; playingMode = mode; playingPractice = practice
         el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
@@ -467,12 +477,15 @@ class App : GameHost {
         val lvl = if (cpu) playingLevel else 0
         Store.record(m, cpu, lvl, winner)
         val name = nameOf(playingMode)
+        if (playingMode == GameMode.CUTTHROAT) return if (cpu) "Your $name record vs two level $lvl CPUs: ${Store.wins(m, true, lvl)}–${Store.losses(m, true, lvl)}"
+            else "$name wins: Player 1 ${Store.cutthroatWins(0)} · Player 2 ${Store.cutthroatWins(1)} · Player 3 ${Store.cutthroatWins(2)}"
         return if (cpu) "Your $name record vs level $lvl: ${Store.wins(m, true, lvl)}–${Store.losses(m, true, lvl)}"
         else "$name pass & play: Player 1 ${Store.wins(m, false, 0)} – Player 2 ${Store.losses(m, false, 0)}"
     }
 
     private companion object {
         /** The game buttons, in order. */
-        val GAMES = listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS, GameMode.BUMPER, GameMode.TRICK)
+        val GAMES = listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS, GameMode.CUTTHROAT,
+            GameMode.BUMPER, GameMode.TRICK)
     }
 }

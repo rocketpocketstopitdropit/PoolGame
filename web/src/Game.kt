@@ -2,6 +2,7 @@ package com.poolgame.web
 
 import com.poolgame.app.core.Ai
 import com.poolgame.app.core.CallMode
+import com.poolgame.app.core.CutthroatState
 import com.poolgame.app.core.GameMode
 import com.poolgame.app.core.GameSave
 import com.poolgame.app.core.GameSettings
@@ -60,7 +61,7 @@ class Game(
     private val tableSize: TableSize = TableSize.DEFAULT,  // table for 8-ball, 9-ball and practice
     private val practiceRules: Boolean = false   // practice: play the game's own rules on your own (not the free table)
 ) {
-    private enum class Phase { RPS, HANDOFF, HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
+    private enum class Phase { RPS, HANDOFF, PICK, HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
     private enum class Rps { PICK, SHAKE, REVEAL }
     private enum class Touch { NONE, AIM, POWER, SPIN, WHEEL, MOVE_CUE, BUTTON, PENDING, MOVE_BALL, TAP_BALL, POV, CAM }
 
@@ -88,7 +89,12 @@ class Game(
     private var tpTries = 0
     private var tpMade = 0
 
+    /** Cutthroat: three players — you and two CPUs (both at the menu's level), or three people passing the phone. */
+    private val cutthroat = mode == GameMode.CUTTHROAT
     private val names = when {
+        cutthroat && vsCpu -> arrayOf("You", "CPU 1", "CPU 2")
+        cutthroat && rulesPractice -> arrayOf("You", "Opponent 1", "Opponent 2")
+        cutthroat -> arrayOf("Player 1", "Player 2", "Player 3")
         vsCpu -> arrayOf("You", "CPU")
         trickPractice -> arrayOf("You", "You")
         rulesPractice -> arrayOf("You", "Opponent")
@@ -231,6 +237,8 @@ class Game(
     private val wheelRect = Rect()
     private val menuBtn = Rect(); private val rematchBtn = Rect(); private val menuExitBtn = Rect()
     private val overPanel = Rect(); private val leftCard = Rect(); private val rightCard = Rect()
+    private val midCard = Rect()                 // Cutthroat's third player card (left of the right-hand one)
+    private val pickBtn = Array(3) { Rect() }
     private var background: dynamic = null
     private var powerGrad: Gradient? = null
     private var spinGrad: Gradient? = null
@@ -253,7 +261,8 @@ class Game(
         povBalls.plain = balls.plain
         balls.bumper = bumper
         povBalls.bumper = bumper
-        if (resume == null || !resumeGame(resume)) newGame(0)
+        // Cutthroat has no rock, paper, scissors (three players): the first breaker is drawn at random.
+        if (resume == null || !resumeGame(resume)) newGame(if (cutthroat && !practiceMode) rng.nextInt(3) else 0)
     }
 
     private fun makeListener() = object : WorldListener {
@@ -271,7 +280,7 @@ class Game(
     /** Scratch or a ball off the table: the crowd groans, a beat after it happens. */
     private fun crowdAww() { window.setTimeout({ sfx.aww() }, 180) }
 
-    private fun isCpu(player: Int) = vsCpu && player == 1
+    private fun isCpu(player: Int) = vsCpu && player != 0
 
     // ------------------------------------------------------------------ game flow
 
@@ -315,8 +324,13 @@ class Game(
         rpsRounds = 0
         message = match.message
         // Trick shots don't need rock, paper, scissors (who goes first doesn't matter), nor does
-        // bumper pool (both players open at the same moment).
-        if (practice || trick || bumper) startTurn() else startRps(false)
+        // bumper pool (both players open at the same moment). Cutthroat's break goes round the three players.
+        if (cutthroat && !practice) {
+            match.setBreaker(breaker)
+            message = "${names[breaker]} ${if (breaker == 0 && vsCpu) "break" else "breaks"} · the break goes round, one rack each"
+            match.message = message
+            startTurn()
+        } else if (practice || trick || bumper) startTurn() else startRps(false)
         if (tutorialMode) aimAngle = Tutorial.lineUp(match.world)
     }
 
@@ -365,6 +379,7 @@ class Game(
     private fun gameName() = when (mode) {
         GameMode.EIGHT_BALL -> "8-Ball"; GameMode.NINE_BALL -> "9-Ball"; GameMode.CIRCUIT -> "Circuit Pool"
         GameMode.POCKET_WARS -> "Pocket Wars"; GameMode.BUMPER -> "Bumper pool"; GameMode.TRICK -> "Trick shots"
+        GameMode.CUTTHROAT -> "Cutthroat"
     }
 
     private fun useTable() {
@@ -406,15 +421,15 @@ class Game(
         if (tutorialMode) return null
         if (match.winner >= 0 || phase == Phase.OVER || phase == Phase.RPS) return null
         return when (phase) {
-            Phase.HUMAN, Phase.PAUSE -> GameSave.write(match, settings())
+            Phase.HUMAN, Phase.PAUSE, Phase.PICK -> GameSave.write(match, settings())
             else -> turnSave ?: GameSave.write(match, settings())
         }
     }
 
     /** Practice with the rules: the game's verdict, worded for someone playing on their own. */
     private fun practiceText(msg: String) = msg
-        .replace("Opponent has ball in hand", "you take ball in hand")
-        .replace("Opponent to shoot", "in a game your turn would end here")
+        .replace(Regex("Opponent( \\d)? has ball in hand"), "you take ball in hand")
+        .replace(Regex("Opponent( \\d)? to shoot"), "in a game your turn would end here")
         .replace("Opponent to break", "break again")
 
     private fun practiceHint() =
@@ -433,7 +448,7 @@ class Game(
             gameOverTitle = when {
                 rulesPractice -> if (w == 0) "Rack won!" else "Rack lost"
                 vsCpu && w == 0 -> "You win!"
-                vsCpu -> "CPU wins"
+                vsCpu -> "${names[w]} wins"
                 else -> "${names[w]} wins!"
             }
             message = match.message
@@ -444,6 +459,14 @@ class Game(
         power = 0.0
         elevDeg = 0.0
         povLocked = false
+        // Cutthroat: a ball down on an open table — the shooter picks a group first (the CPU straight away).
+        val chooser = if (cutthroat) match.cut.choosing else -1
+        if (chooser >= 0) {
+            if (isCpu(chooser) || (rulesPractice && chooser != 0)) { cutPick(match.cutSuggestedGroup()); return }
+            phase = Phase.PICK
+            clearTouches()
+            return
+        }
         turnSave = GameSave.write(match, settings())
         if (isCpu(match.current)) {
             phase = Phase.CPU_THINK
@@ -465,6 +488,19 @@ class Game(
             phase = Phase.HANDOFF
             clearTouches()
         } else beginHumanTurn()
+    }
+
+    /** Cutthroat: the shooter takes group [g] (one nobody has), and play goes on. */
+    private fun cutPick(g: Int) {
+        if (match.cut.choosing < 0 || g !in match.cut.free()) return
+        val out = match.cutPick(g)
+        // On your own, the two absent opponents get the other groups as soon as you've picked yours.
+        if (rulesPractice) for (q in 1..2) if (match.cut.group[q] < 0) match.cut.group[q] = match.cut.free()[0]
+        message = if (rulesPractice) practiceText(out.message) else out.message
+        if (rulesPractice && match.winner < 0) match.current = 0
+        sfx.ball(1.2)
+        phase = Phase.PAUSE
+        pauseT = if (out.winner >= 0) 0.6 else 0.9
     }
 
     private fun beginHumanTurn() {
@@ -726,6 +762,8 @@ class Game(
                         val out = match.resolve()
                         rpShots++
                         if (out.foul) rpFouls++
+                        // Cutthroat on your own: with your group gone, the rack's lost.
+                        if (cutthroat && match.winner < 0 && match.cutOut(0)) match.winner = match.cutNext(0)
                         match.current = 0
                         message = practiceText(out.message)
                         phase = Phase.PAUSE
@@ -1039,6 +1077,13 @@ class Game(
         val cardH = hudH - 16
         leftCard.set(menuBtn.r + 10, 8.0, menuBtn.r + 10 + cardW, 8 + cardH)
         rightCard.set(w - 8 - cardW, 8.0, w - 8, 8 + cardH)
+        if (cutthroat && !practice) {
+            // Three players: three narrower cards — player 1 on the left, players 2 and 3 on the right.
+            val cw = min(w * 0.19, 200.0)
+            leftCard.set(menuBtn.r + 10, 8.0, menuBtn.r + 10 + cw, 8 + cardH)
+            rightCard.set(w - 8 - cw, 8.0, w - 8, 8 + cardH)
+            midCard.set(rightCard.l - 8 - cw, 8.0, rightCard.l - 8, 8 + cardH)
+        }
         run {
             val gap = 8.0
             val left = leftCard.r + 10; val right = rightCard.l - 10
@@ -1328,6 +1373,7 @@ class Game(
         drawWheel(ctx)
         if (phase == Phase.RPS) drawRps(ctx)
         if (phase == Phase.HANDOFF) drawHandoff(ctx)
+        if (phase == Phase.PICK) drawPick(ctx)
         if (phase == Phase.OVER) drawGameOver(ctx)
         drawTutorial(ctx)
     }
@@ -1534,14 +1580,18 @@ class Game(
         if (practice) { drawPracticeHud(ctx); return }
         if (trickPractice) { drawTrickPracticeHud(ctx); return }
         drawPlayerCard(ctx, leftCard, 0)
-        drawPlayerCard(ctx, rightCard, 1)
+        if (cutthroat) {
+            drawPlayerCard(ctx, midCard, 1)
+            drawPlayerCard(ctx, rightCard, 2)
+        } else drawPlayerCard(ctx, rightCard, 1)
         val cardH = leftCard.h
-        val midL = leftCard.r + 10; val midR = rightCard.l - 10
+        val midL = leftCard.r + 10; val midR = (if (cutthroat) midCard.l else rightCard.l) - 10
         ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"
         ctx.fillStyle = "#E8ECEF"; ctx.font = font(min(15.0, hudH * 0.26), false)
         val msg = when (phase) {
             Phase.HANDOFF -> "${names[match.current]}'s turn — pass it over"
-            Phase.CPU_THINK, Phase.CPU_ANIM -> if (message.isNotEmpty()) message else "CPU is thinking…"
+            Phase.PICK -> "${names[match.cut.choosing.coerceAtLeast(0)]}: pick your group"
+            Phase.CPU_THINK, Phase.CPU_ANIM -> if (message.isNotEmpty()) message else "${names[match.current]} is thinking…"
             Phase.HUMAN -> when {
                 pov && match.ballInHand -> "${names[match.current]}: ball in hand — tap Top view to move the cue ball"
                 trick && match.ballInHand -> "${names[match.current]}: jump the gap and sink the 1 · drag the cue ball to move it"
@@ -1558,7 +1608,8 @@ class Game(
         val subY = 8 + cardH * 0.82
         if (phase == Phase.CPU_THINK) {
             ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
-            ctx.fillText("CPU (level $cpuLevel) is thinking…", (midL + midR) / 2, subY)
+            ctx.fillText(if (cutthroat) "${names[match.current]} (level $cpuLevel) is thinking…" else "CPU (level $cpuLevel) is thinking…",
+                (midL + midR) / 2, subY)
         } else if (trick) {
             val t = match.trick
             ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
@@ -1571,6 +1622,14 @@ class Game(
             ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
             ctx.fillText(ellipsize(ctx, if (match.isBreak) "The break scores but claims no pockets · first to 61 wins"
                 else "Open pockets are yours to claim · bank into theirs to steal", midR - midL), (midL + midR) / 2, subY)
+        } else if (cutthroat && phase == Phase.HUMAN) {
+            ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
+            val hint = when {
+                match.isBreak -> "Break · any ball in keeps you shooting · groups are picked after the break"
+                match.cutGroup(match.current) < 0 -> "Open table · sink any ball, then pick your group"
+                else -> "Sink the other players' balls · last one with a ball left wins"
+            }
+            ctx.fillText(ellipsize(ctx, hint, midR - midL), (midL + midR) / 2, subY)
         } else if (circuit && phase == Phase.HUMAN) {
             ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
             ctx.fillText(ellipsize(ctx, "Sink your 3 secret balls · any ball first · theirs ends your turn", midR - midL), (midL + midR) / 2, subY)
@@ -1622,6 +1681,12 @@ class Game(
         GameMode.NINE_BALL -> if (match.isBreak) "Break the rack" else "Shoot the ${match.lowestBall()}" +
             if (match.consecutiveFouls[0] > 0) " · ${match.consecutiveFouls[0]} foul${if (match.consecutiveFouls[0] > 1) "s" else ""} in a row" else ""
         GameMode.CIRCUIT -> "Yours: ${match.circuit.targets[0].joinToString(" · ")} (${match.circuitSunk(0)}/3) · 3 hidden: ${match.circuitSunk(1)}/3"
+        GameMode.CUTTHROAT -> when {
+            match.isBreak -> "Break the rack"
+            match.cutGroup(0) < 0 -> "Open table · sink a ball, then pick your group"
+            else -> "Yours: ${CutthroatState.groupName(match.cutGroup(0))} (${match.cutLeft(0)} left) · " +
+                (1..2).joinToString(" · ") { "${CutthroatState.groupName(match.cutGroup(it))}: ${match.cutLeft(it)}" }
+        }
         GameMode.POCKET_WARS -> "${match.pockets.score[0]} points · ${match.pockets.pocketsOf(0)} " +
             "pocket${if (match.pockets.pocketsOf(0) == 1) "" else "s"} · ${maxOf(0, 61 - match.pockets.score[0])} to go"
         else -> ""
@@ -1682,7 +1747,8 @@ class Game(
         if (active) { ctx.strokeStyle = "#F2C94C"; ctx.lineWidth = 2.0; ctx.roundRect(r, 10.0); ctx.stroke() }
         ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"
         ctx.font = font(min(16.0, r.h * 0.32), true); ctx.fillStyle = "#FFF"
-        ctx.fillText(if (isCpu(player)) "CPU · Lv $cpuLevel" else names[player], r.l + 12, r.t + r.h * 0.4)
+        ctx.fillText(ellipsize(ctx, if (isCpu(player)) "${names[player]} · Lv $cpuLevel" else names[player],
+            r.w - (if (active && shotClock > 0) 64 else 20)), r.l + 12, r.t + r.h * 0.4)
         if (active && phase == Phase.HUMAN && shotClock > 0) {
             val secs = max(0, ceil(clockLeft).toInt())
             val low = clockStarted && clockLeft <= 5.0
@@ -1740,6 +1806,26 @@ class Game(
                 ctx.fillStyle = "#9AA7B1"
                 val hidden = if (phase == Phase.HANDOFF && player == match.current) "tap to see your targets" else "$sunk/3 sunk · hidden"
                 ctx.fillText(ellipsize(ctx, hidden, r.r - x - 4), x, iy + iconR * 0.4)
+            }
+        } else if (cutthroat) {
+            // This player's five balls (dim once they're down), or how the table stands before they have a group.
+            val g = match.cutGroup(player)
+            if (g < 0) {
+                val t = when {
+                    match.isBreak -> ""
+                    match.cut.choosing == player -> "picking a group…"
+                    else -> "Open table · ${match.cut.free().size} groups left"
+                }
+                ctx.fillText(ellipsize(ctx, t, r.w - 24), r.l + 12, iy + iconR * 0.4)
+            } else {
+                var x = r.l + 12 + iconR
+                for (id in CutthroatState.ballsOf(g)) { balls.icon(ctx, id, x, iy, iconR, !match.world.balls[id].onTable); x += iconR * 2.3 }
+                // (Drawing the numbered icons changes the text settings.)
+                ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"
+                ctx.font = font(min(11.0, r.h * 0.22), false)
+                val out = match.cutOut(player)
+                ctx.fillStyle = if (out) "#FF6B6B" else "#9AA7B1"
+                ctx.fillText(ellipsize(ctx, if (out) "OUT" else "${match.cutLeft(player)} left", r.r - x - 4), x, iy + iconR * 0.4)
             }
         } else if (bumper) {
             // Five balls each (dim once they're down), and which way this player shoots.
@@ -2013,6 +2099,47 @@ class Game(
         ctx.fillText("Tap to see your targets", overPanel.cx, overPanel.b - 18)
     }
 
+    /** Cutthroat: the shooter sank a ball on an open table — pick the group the others will be trying to sink. */
+    private fun drawPick(ctx: Ctx2D) {
+        val w = width; val h = height
+        ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0.0, hudH, w, h - hudH)
+        val pw = min(w * 0.7, 600.0); val ph = min(h - hudH - 16, 250.0)
+        val top = hudH + (h - hudH - ph) / 2
+        overPanel.set(w / 2 - pw / 2, top, w / 2 + pw / 2, top + ph)
+        ctx.fillStyle = "rgba(30,37,43,0.95)"; ctx.roundRect(overPanel, 16.0); ctx.fill()
+        ctx.strokeStyle = "#F2C94C"; ctx.lineWidth = 2.0; ctx.roundRect(overPanel, 16.0); ctx.stroke()
+        val p = match.cut.choosing.coerceAtLeast(0)
+        ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"
+        ctx.font = font(min(22.0, ph * 0.1), true); ctx.fillStyle = "#FFF"
+        ctx.fillText(if (p == 0 && (vsCpu || rulesPractice)) "Pick your group" else "${names[p]}: pick your group", overPanel.cx, overPanel.t + ph * 0.15)
+        ctx.font = font(min(13.0, ph * 0.06), false); ctx.fillStyle = "#B8C2CA"
+        ctx.fillText(ellipsize(ctx, "These are the balls you keep on the table — the others try to sink them", pw - 24),
+            overPanel.cx, overPanel.t + ph * 0.26)
+        val gap = 10.0
+        val bw = (pw - 32 - 2 * gap) / 3
+        val bh = ph * 0.56
+        val by = overPanel.t + ph * 0.34
+        val free = match.cut.free()
+        for (g in 0..2) {
+            val r = pickBtn[g]
+            r.set(overPanel.l + 16 + g * (bw + gap), by, overPanel.l + 16 + g * (bw + gap) + bw, by + bh)
+            val open = g in free
+            ctx.fillStyle = if (open) "#2A333B" else "#161B1F"; ctx.roundRect(r, 12.0); ctx.fill()
+            if (open) { ctx.strokeStyle = "rgba(242,201,76,0.55)"; ctx.lineWidth = 1.5; ctx.roundRect(r, 12.0); ctx.stroke() }
+            ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"
+            ctx.font = font(min(18.0, bh * 0.16), true); ctx.fillStyle = if (open) "#FFF" else "#6B7780"
+            ctx.fillText(CutthroatState.groupName(g), r.cx, r.t + bh * 0.24)
+            val ir = min(bw / 13, bh * 0.1)
+            var x = r.cx - 4 * ir * 1.25
+            for (id in CutthroatState.ballsOf(g)) { balls.icon(ctx, id, x, r.t + bh * 0.5, ir, !match.world.balls[id].onTable); x += ir * 2.5 }
+            val left = CutthroatState.ballsOf(g).count { match.world.balls[it].onTable }
+            ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"
+            ctx.font = font(min(12.0, bh * 0.11), false); ctx.fillStyle = if (open) "#CED6DD" else "#6B7780"
+            val owner = match.cut.ownerOfGroup(g)
+            ctx.fillText(if (open) "$left on the table" else "${names[owner]}'s", r.cx, r.t + bh * 0.82)
+        }
+    }
+
     private fun drawGameOver(ctx: Ctx2D) {
         val w = width; val h = height
         ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0.0, 0.0, w, h)
@@ -2058,7 +2185,7 @@ class Game(
         if (first && menuBtn.contains(x, y) && phase != Phase.OVER) { ptrMode[id] = Touch.BUTTON; host.onMenuRequested(); return }
         if (phase == Phase.OVER) {
             if (first) {
-                if (rematchBtn.contains(x, y)) newGame(if (practiceMode) 0 else 1 - breaker)
+                if (rematchBtn.contains(x, y)) newGame(if (practiceMode) 0 else if (cutthroat) (breaker + 1) % 3 else 1 - breaker)
                 else if (menuExitBtn.contains(x, y)) host.onExitToMenu()
             }
             ptrMode[id] = Touch.BUTTON
@@ -2067,6 +2194,11 @@ class Game(
         if (phase == Phase.HANDOFF) {
             ptrMode[id] = Touch.BUTTON
             if (first) { revealTo = match.current; beginHumanTurn() }
+            return
+        }
+        if (phase == Phase.PICK) {
+            ptrMode[id] = Touch.BUTTON
+            if (first) for (g in 0..2) if (pickBtn[g].contains(x, y)) cutPick(g)
             return
         }
         if (phase == Phase.RPS) {
@@ -2675,7 +2807,7 @@ class Game(
 
     private companion object {
         /** Games that can be practised with their own rules. */
-        val RULES_PRACTICE = setOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS)
+        val RULES_PRACTICE = setOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS, GameMode.CUTTHROAT)
         /** Pocket Wars colours: player 1 / you blue, player 2 / the CPU orange. */
         val PW_COLORS = arrayOf("#4DA3FF", "#FF8A3D")
         const val RPS_BEAT = 0.42

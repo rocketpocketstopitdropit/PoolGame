@@ -144,7 +144,12 @@ class MenuActivity : Activity() {
     private fun refreshRecord() {
         val t = recordText ?: return
         val name = Stats.modeName(mode)
-        t.text = (if (vsCpu) {
+        t.text = (if (mode == GameMode.CUTTHROAT && !vsCpu) {
+            "$name pass & play wins:  Player 1  ${stats.cutthroatWins(0)} · Player 2  ${stats.cutthroatWins(1)} · Player 3  ${stats.cutthroatWins(2)}"
+        } else if (mode == GameMode.CUTTHROAT) {
+            "$name vs two level $level CPUs:  ${stats.wins(mode, true, level)} W – ${stats.losses(mode, true, level)} L\n" +
+                "$name vs all levels:  ${stats.totalWinsVsCpu(mode)} W – ${stats.totalLossesVsCpu(mode)} L"
+        } else if (vsCpu) {
             "$name vs level $level:  ${stats.wins(mode, true, level)} W – ${stats.losses(mode, true, level)} L\n" +
                 "$name vs all levels:  ${stats.totalWinsVsCpu(mode)} W – ${stats.totalLossesVsCpu(mode)} L"
         } else {
@@ -198,7 +203,7 @@ class MenuActivity : Activity() {
         col.addView(card, LinearLayout.LayoutParams(minOf(dpi(560f), resources.displayMetrics.widthPixels - dpi(48f)), ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL })
 
         card.addView(label("POOL", 38f, Color.WHITE, true).apply { letterSpacing = 0.25f; gravity = Gravity.CENTER })
-        card.addView(label("8-Ball · 9-Ball · Circuit Pool · Pocket Wars · bumper pool · trick shots", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
+        card.addView(label("8-Ball · 9-Ball · Circuit Pool · Pocket Wars · Cutthroat · bumper pool · trick shots", 14f, 0xFF9AA7B1.toInt()).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dpi(14f)) })
 
         // Game type
         card.addView(section("GAME"))
@@ -206,6 +211,7 @@ class MenuActivity : Activity() {
         var callBlockRef: View? = null
         var sizeBlockRef: View? = null
         var skillBlockRef: View? = null
+        var skillTitleRef: TextView? = null
         var refresh: () -> Unit = {}
         fun help(t: String) = label(t, 12.5f, 0xFF8A97A1.toInt()).apply { setPadding(0, dpi(8f), 0, 0); setLineSpacing(0f, 1.15f) }
         val trickHelp = help("Trick shots: half the table's missing between the break area and the far end. " +
@@ -223,10 +229,17 @@ class MenuActivity : Activity() {
             "ringed in your colour); every ball scores its number. Your own pockets keep you shooting; a ball in your " +
             "opponent's pocket scores for them and ends your turn, unless you banked it in off a rail, which steals the " +
             "pocket. A foul spots the balls back. First to 61 points wins.")
-        val modes = listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS, GameMode.BUMPER, GameMode.TRICK)
-        card.addView(segmentedGrid(listOf("8-Ball", "9-Ball", "Circuit", "Pocket Wars", "Bumper", "Trick"), 3,
+        val cutHelp = help("Cutthroat: three players, three groups — 1–5, 6–10 and 11–15. After the break the table is " +
+            "open: the first player to sink a ball picks any group, the next picks one of the other two, and the last " +
+            "player gets what's left. Keep your own balls up and sink everyone else's; any ball you sink keeps you " +
+            "shooting. A foul gives the next player ball in hand and each opponent one of their balls back. The last " +
+            "player with a ball on the table wins. Against the computer you play two CPUs, both at the level below; pass & " +
+            "play is for three people sharing the phone.")
+        val modes = listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS,
+            GameMode.CUTTHROAT, GameMode.BUMPER, GameMode.TRICK)
+        card.addView(segmentedGrid(listOf("8-Ball", "9-Ball", "Circuit", "Pocket Wars", "Cutthroat", "Bumper", "Trick"), 4,
             modes.indexOf(mode).coerceAtLeast(0)) { mode = modes[it]; refresh(); save() })
-        for (h in listOf(circuitHelp, warsHelp, trickHelp, bumperHelp)) card.addView(h)
+        for (h in listOf(circuitHelp, warsHelp, cutHelp, trickHelp, bumperHelp)) card.addView(h)
 
         // Opponent: the computer, a friend, or practice on your own.
         card.addView(section("OPPONENT"))
@@ -297,6 +310,8 @@ class MenuActivity : Activity() {
             bumperHelp.visibility = if (mode == GameMode.BUMPER) View.VISIBLE else View.GONE
             circuitHelp.visibility = if (mode == GameMode.CIRCUIT) View.VISIBLE else View.GONE
             warsHelp.visibility = if (mode == GameMode.POCKET_WARS) View.VISIBLE else View.GONE
+            cutHelp.visibility = if (mode == GameMode.CUTTHROAT) View.VISIBLE else View.GONE
+            skillTitleRef?.text = if (mode == GameMode.CUTTHROAT) "COMPUTER SKILL (BOTH CPUs)" else "COMPUTER SKILL"
             // Trick shots are always on the 9 ft table (with its gap) and bumper pool on its own table.
             sizeBlockRef?.visibility = if (poolTable) View.VISIBLE else View.GONE
         }
@@ -324,7 +339,9 @@ class MenuActivity : Activity() {
         val skillLabel = label("", 15f, Color.WHITE, true)
         fun refreshSkill() { skillLabel.text = "Level $level · ${levelNames[level - 1]}" }
         refreshSkill()
-        skillBlock.addView(section("COMPUTER SKILL"))
+        val skillTitle = section("COMPUTER SKILL")
+        skillTitleRef = skillTitle
+        skillBlock.addView(skillTitle)
         skillBlock.addView(skillLabel)
         val seek = SeekBar(this).apply {
             max = 9
@@ -504,7 +521,7 @@ class MenuActivity : Activity() {
         card.addView(play, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(54f)).apply { topMargin = dpi(18f) })
 
         card.addView(label(
-            "Rock, paper, scissors decides who breaks. Drag on the table to aim, fine-tune with the wheel " +
+            "Rock, paper, scissors decides who breaks (in Cutthroat the break goes round). Drag on the table to aim, fine-tune with the wheel " +
                 "(slow drags are extra fine, fast swipes swing the cue a long way), touch the cue ball on the right " +
                 "to add spin, then pull the power bar down and let go to shoot. Tap a ball to look down the cue in 3D: " +
                 "drag up there to raise the cue for a jump shot. With ball in hand, drag the cue ball to place it.",
@@ -604,13 +621,15 @@ class MenuActivity : Activity() {
             for (c in 0 until cols) {
                 val i = r * cols + c
                 if (i >= options.size) break
-                val v = label(options[i], 15f, Color.WHITE, true).apply {
+                val v = label(options[i], if (cols > 3) 14f else 15f, Color.WHITE, true).apply {
                     gravity = Gravity.CENTER
                     setOnClickListener { paint(i); onPick(i) }
                 }
                 views += v
                 row.addView(v, LinearLayout.LayoutParams(0, dpi(42f), 1f))
             }
+            // A short last row keeps the same cell widths as the full ones.
+            repeat(cols - minOf(cols, options.size - r * cols)) { row.addView(View(this), LinearLayout.LayoutParams(0, dpi(42f), 1f)) }
             col.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         paint(selected)

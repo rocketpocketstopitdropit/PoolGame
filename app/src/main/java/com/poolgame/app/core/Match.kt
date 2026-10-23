@@ -12,8 +12,9 @@ import kotlin.random.Random
  * BUMPER: bumper pool on its own small table (two cups, twelve bumpers, five balls each, no cue ball).
  * CIRCUIT: Circuit Pool — each player is secretly dealt three of the fifteen balls; first to sink all three wins.
  * POCKET_WARS: claim pockets by sinking balls in them; balls score their number; bank into a rival's pocket to steal it.
+ * CUTTHROAT: three players, groups 1–5, 6–10 and 11–15; sink the others' balls, last one with a ball left wins.
  */
-enum class GameMode { EIGHT_BALL, NINE_BALL, TRICK, BUMPER, CIRCUIT, POCKET_WARS }
+enum class GameMode { EIGHT_BALL, NINE_BALL, TRICK, BUMPER, CIRCUIT, POCKET_WARS, CUTTHROAT }
 enum class Group { OPEN, SOLIDS, STRIPES }
 
 /** Called-pocket rule: off, only for the money ball (the 8 in 8-ball, the 9 in 9-ball), or every shot. */
@@ -35,7 +36,7 @@ class ShotOutcome(
  * Game state + rules for 8-ball and 9-ball (simplified WPA-style, no called pockets,
  * ball-in-hand anywhere after any foul, ball-in-hand behind the head string for the break).
  */
-class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "Player 2")) {
+class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "Player 2", "Player 3")) {
     val world = World()
     var current = 0
     val groups = arrayOf(Group.OPEN, Group.OPEN)
@@ -59,6 +60,12 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     /** Pocket Wars: who owns each pocket, and the points (only used in GameMode.POCKET_WARS). */
     val pockets = PocketWarsState()
+
+    /** Cutthroat: each player's group (only used in GameMode.CUTTHROAT, the one three-player game). */
+    val cut = CutthroatState()
+
+    /** How many players take turns: three in Cutthroat, two in everything else. */
+    val players get() = if (mode == GameMode.CUTTHROAT) 3 else 2
 
     /**
      * Bumper pool's opening: both players shoot their marked ball at the same moment. Each sets a
@@ -99,6 +106,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         trick.copyFrom(o.trick)
         circuit.copyFrom(o.circuit)
         pockets.copyFrom(o.pockets)
+        cut.copyFrom(o.cut)
     }
 
     // "You win" / "CPU wins" — the player named "You" takes the plural verb form.
@@ -108,7 +116,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     private fun continues(p: Int) = if (you(p)) "You continue" else "${names[p]} continues"
 
     fun ballIds(): List<Int> = when (mode) {
-        GameMode.EIGHT_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS -> IDS_8
+        GameMode.EIGHT_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS, GameMode.CUTTHROAT -> IDS_8
         GameMode.NINE_BALL -> IDS_9
         GameMode.TRICK -> Trick.LEVELS[trick.level].ids
         GameMode.BUMPER -> IDS_BUMPER
@@ -121,6 +129,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         if (mode == GameMode.BUMPER) { startBumper(rng); return }
         if (mode == GameMode.CIRCUIT) circuit.deal(rng)
         pockets.reset()
+        cut.reset()
         rackBalls(rng)
         val c = world.balls[0]
         c.x = P.HEAD_X; c.y = P.FOOT_Y; c.onTable = true
@@ -144,6 +153,18 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             for (row in 0..4) for (k in 0..row)
                 positions += (P.FOOT_X + row * dx) to (P.FOOT_Y + (k - row / 2.0) * 2 * r)
             order = (1..15).shuffled(rng)
+        } else if (mode == GameMode.CUTTHROAT) {
+            // Cutthroat: the 1 on the foot spot, the 6 and 11 on the back corners, the rest anywhere.
+            for (row in 0..4) for (k in 0..row)
+                positions += (P.FOOT_X + row * dx) to (P.FOOT_Y + (k - row / 2.0) * 2 * r)
+            val slots = IntArray(15)
+            slots[0] = 1
+            val six = rng.nextBoolean()
+            slots[10] = if (six) 6 else 11
+            slots[14] = if (six) 11 else 6
+            val rest = (2..15).filter { it != 6 && it != 11 }.shuffled(rng).toMutableList()
+            for (i in 0 until 15) if (slots[i] == 0) slots[i] = rest.removeAt(0)
+            order = slots.toList()
         } else if (mode == GameMode.EIGHT_BALL) {
             for (row in 0..4) for (k in 0..row)
                 positions += (P.FOOT_X + row * dx) to (P.FOOT_Y + (k - row / 2.0) * 2 * r)
@@ -217,7 +238,8 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         // Bumper pool: your ball may hit anything first.
         if (mode == GameMode.BUMPER) return IDS_BUMPER.filter { it != world.cue && world.balls[it].onTable }.toIntArray()
         // Circuit Pool: any ball may be hit first.
-        if (mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS) return (1..15).filter { world.balls[it].onTable }.toIntArray()
+        if (mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS || mode == GameMode.CUTTHROAT)
+            return (1..15).filter { world.balls[it].onTable }.toIntArray()
         if (mode == GameMode.NINE_BALL) return intArrayOf(lowestBall())
         if (isBreak) return (1..15).filter { world.balls[it].onTable }.toIntArray()
         val g = groups[player]
@@ -247,7 +269,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     /** Whether the shooter must call a pocket before this shot. */
     fun callRequired(): Boolean = !isBreak && mode != GameMode.TRICK && mode != GameMode.BUMPER && mode != GameMode.CIRCUIT &&
-        mode != GameMode.POCKET_WARS && when (callMode) {
+        mode != GameMode.POCKET_WARS && mode != GameMode.CUTTHROAT && when (callMode) {
         CallMode.OFF -> false
         CallMode.MONEY_BALL -> if (mode == GameMode.EIGHT_BALL) onEight(current) else lowestBall() == 9
         CallMode.EVERY_SHOT -> true
@@ -255,7 +277,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     /** Calling is allowed whenever the rule is on (e.g. to call a 9-ball combo). */
     fun callAllowed(): Boolean = callMode != CallMode.OFF && !isBreak && mode != GameMode.TRICK && mode != GameMode.BUMPER &&
-        mode != GameMode.CIRCUIT && mode != GameMode.POCKET_WARS
+        mode != GameMode.CIRCUIT && mode != GameMode.POCKET_WARS && mode != GameMode.CUTTHROAT
 
     fun beginShot() {
         preTargets = legalTargets(current)
@@ -279,6 +301,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         if (mode == GameMode.TRICK) return trickAttempt(false, "the shot clock ran out")
         if (mode == GameMode.BUMPER) return bumperTimeFoul()
         if (mode == GameMode.CIRCUIT) return circuitTimeFoul()
+        if (mode == GameMode.CUTTHROAT) return cutthroatTimeFoul()
         val shooter = current
         val opp = 1 - shooter
         isBreak = false
@@ -302,6 +325,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         if (mode == GameMode.BUMPER) return resolveBumper()
         if (mode == GameMode.CIRCUIT) return resolveCircuit()
         if (mode == GameMode.POCKET_WARS) return resolvePocketWars()
+        if (mode == GameMode.CUTTHROAT) return resolveCutthroat()
         val log = world.log
         val shooter = current
         val opp = 1 - shooter
@@ -1140,6 +1164,178 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             notes += "${names[opp]} to shoot"
         }
         message = notes.joinToString(" · ")
+        val heckle = foul && (reason == "No ball hit" || reason == "No rail after contact")
+        return ShotOutcome(foul, reason, keep, -1, message, heckle)
+    }
+
+    // ------------------------------------------------------------------ cutthroat
+
+    /** Cutthroat: player [p]'s group (0 = 1–5, 1 = 6–10, 2 = 11–15), or -1 while the table is open for them. */
+    fun cutGroup(p: Int) = cut.group[p]
+
+    /** Cutthroat: how many of player [p]'s balls are still on the table (5 while they haven't got a group). */
+    fun cutLeft(p: Int): Int {
+        val g = cut.group[p]
+        return if (g < 0) 5 else CutthroatState.ballsOf(g).count { world.balls[it].onTable }
+    }
+
+    /** Cutthroat: player [p] has a group and none of it is left — they're out (until a foul puts one back). */
+    fun cutOut(p: Int) = cut.group[p] >= 0 && cutLeft(p) == 0
+
+    /** Cutthroat: the player whose group ball [id] is in, or -1 (the cue ball, or a group nobody has yet). */
+    fun cutOwner(id: Int) = cut.ownerOfGroup(CutthroatState.groupOf(id))
+
+    /** Cutthroat: the next player after [p] (in turn order) who is still in. */
+    fun cutNext(p: Int): Int {
+        for (k in 1..3) { val q = (p + k) % 3; if (!cutOut(q)) return q }
+        return p
+    }
+
+    /** Cutthroat's fouls (shared with the computer's look-ahead): a reason, or "" for none. */
+    fun cutthroatFoul(log: ShotLog): String = when {
+        0 in log.pocketed -> "Scratch"
+        0 in log.jumpedOff -> "Cue ball jumped off the table"
+        log.scooped -> "Scoop shot — the cue ball was dug under and lifted"
+        log.firstHit < 0 -> "No ball hit"
+        log.jumpedOff.isNotEmpty() -> "Ball jumped off the table"
+        log.pocketed.none { it != 0 } && !log.railAfterHit -> "No rail after contact"
+        else -> ""
+    }
+
+    /**
+     * The penalty for a foul: each of the shooter's opponents who has a group gets one of their pocketed
+     * balls back (the lowest), spotted on the foot spot. A player who was out is back in.
+     */
+    private fun cutPenalty(shooter: Int): List<String> {
+        val notes = ArrayList<String>()
+        for (k in 1..2) {
+            val q = (shooter + k) % 3
+            val g = cut.group[q]
+            if (g < 0) continue
+            val id = CutthroatState.ballsOf(g).firstOrNull { !world.balls[it].onTable } ?: continue
+            respot(id)
+            notes += if (you(q)) "your $id comes back" else "${names[q]}'s $id comes back"
+        }
+        return notes
+    }
+
+    /** Cutthroat, open table: the group the computer picks — of those nobody has, the one with most balls left. */
+    fun cutSuggestedGroup(): Int = cut.free().maxWithOrNull(compareBy<Int> { g ->
+        CutthroatState.ballsOf(g).count { world.balls[it].onTable } }.thenByDescending { it }) ?: 0
+
+    /**
+     * Cutthroat: the player who just sank a ball on an open table ([CutthroatState.choosing]) takes group [g].
+     * When that makes two players with a group, the third gets the one that's left. Then the turn carries on.
+     */
+    fun cutPick(g: Int): ShotOutcome {
+        val p = cut.choosing
+        require(p >= 0 && g in cut.free())
+        val inBefore = BooleanArray(3) { !cutOut(it) }
+        cut.group[p] = g
+        cut.choosing = -1
+        val notes = ArrayList<String>()
+        notes += (if (you(p)) "You take " else "${names[p]} takes ") + CutthroatState.groupName(g)
+        if (cut.group.count { it < 0 } == 1) {
+            val q = cut.group.indexOf(-1)
+            val last = cut.free().first()
+            cut.group[q] = last
+            notes += (if (you(q)) "you get " else "${names[q]} gets ") + CutthroatState.groupName(last)
+        }
+        return cutFinish(p, false, "", !cutOut(p), inBefore, notes)
+    }
+
+    private fun cutthroatTimeFoul(): ShotOutcome {
+        val shooter = current
+        isBreak = false
+        val notes = arrayListOf("Foul: shot clock expired")
+        notes += cutPenalty(shooter)
+        val next = cutNext(shooter)
+        current = next
+        ballInHand = true
+        kitchenOnly = false
+        if (!world.balls[0].onTable) restoreCue()
+        notes += "${has(next)} ball in hand"
+        message = notes.joinToString(" · ")
+        return ShotOutcome(true, "Shot clock", false, -1, message)
+    }
+
+    /**
+     * Cutthroat (three players):
+     *  - Groups: 1–5, 6–10, 11–15. The table is open after the break; the first player to sink a ball on a legal
+     *    shot picks any group ([cutPick]), the next picks one of the other two, and the third gets the last.
+     *  - Any ball may be hit first. Any ball down on a legal shot keeps you shooting — your own too, which is
+     *    "cutting your own throat". Balls stay down.
+     *  - Fouls (scratch, cue ball off the table, scoop, no ball hit, an object ball off the table — it's
+     *    spotted — or no rail after contact): the next player has ball in hand anywhere, and each of the
+     *    fouler's opponents gets one of their pocketed balls back on the table.
+     *  - A player with none of their group left is out (a foul can bring them back). The last player with a
+     *    ball on the table wins. If one shot clears everyone, the player whose last ball dropped last wins.
+     *  - Turns go in order, Player 1 → 2 → 3, skipping anyone who's out.
+     */
+    private fun resolveCutthroat(): ShotOutcome {
+        val log = world.log
+        val shooter = current
+        val brk = isBreak
+        val objects = log.pocketed.filter { it != 0 }
+        val reason = cutthroatFoul(log)
+        val foul = reason.isNotEmpty()
+        for (id in log.jumpedOff) if (id != 0) respot(id)
+        val preGroup = cut.group[shooter]
+        // Who was still in before this shot (their balls sunk now were on the table then).
+        val inBefore = BooleanArray(3) { p ->
+            val g = cut.group[p]
+            g < 0 || cutLeft(p) + objects.count { CutthroatState.groupOf(it) == g } > 0
+        }
+        val notes = ArrayList<String>()
+        val own = objects.count { preGroup >= 0 && CutthroatState.groupOf(it) == preGroup }
+        if (!foul && own > 0 && own == objects.size) notes += if (you(shooter)) "that was your own" else "${names[shooter]} sank their own"
+        // Open table: the first legal pot lets the shooter pick a group.
+        if (!foul && !brk && objects.isNotEmpty() && preGroup < 0) cut.choosing = shooter
+        if (foul) notes += cutPenalty(shooter)
+        isBreak = false
+        // Any ball down on a legal shot keeps you at the table (even your own — that's cutting your own throat).
+        val keep = !foul && objects.isNotEmpty() && (cut.choosing == shooter || !cutOut(shooter))
+        return cutFinish(shooter, foul, reason, keep, inBefore, notes)
+    }
+
+    /** Cutthroat, after a shot (or a group pick): who's out, whether that's the game, and whose turn it is. */
+    private fun cutFinish(shooter: Int, foul: Boolean, reason: String, keep: Boolean, inBefore: BooleanArray,
+                          notes: MutableList<String>): ShotOutcome {
+        val log = world.log
+        for (p in 0..2) if (inBefore[p] && cutOut(p)) notes += if (you(p)) "you're out" else "${names[p]} is out"
+        val alive = (0..2).filter { !cutOut(it) }
+        val win = when {
+            alive.size == 1 -> alive[0]
+            // Everyone cleared at once: whoever's last ball dropped last.
+            alive.isEmpty() -> (0..2).filter { inBefore[it] }.maxByOrNull { p ->
+                log.pocketed.indexOfLast { CutthroatState.groupOf(it) == cut.group[p] }
+            } ?: shooter
+            else -> -1
+        }
+        winner = win
+        if (win >= 0) {
+            cut.choosing = -1
+            message = winsText(win) + if (notes.isNotEmpty()) " (${notes.joinToString(", ")})" else ""
+            return ShotOutcome(foul, reason, false, win, message)
+        }
+        if (cut.choosing == shooter) {
+            notes += if (you(shooter)) "pick your group" else "${names[shooter]} picks a group"
+        } else if (foul) {
+            val next = cutNext(shooter)
+            current = next
+            ballInHand = true
+            kitchenOnly = false
+            if (!world.balls[0].onTable) restoreCue()
+            notes.add(0, "Foul: $reason")
+            notes += "${has(next)} ball in hand"
+        } else if (!keep) {
+            val next = cutNext(shooter)
+            current = next
+            notes += "${names[next]} to shoot"
+        } else {
+            notes += continues(shooter)
+        }
+        message = notes.joinToString(" · ").replaceFirstChar { it.uppercase() }
         val heckle = foul && (reason == "No ball hit" || reason == "No rail after contact")
         return ShotOutcome(foul, reason, keep, -1, message, heckle)
     }

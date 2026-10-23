@@ -63,9 +63,10 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             GameMode.TRICK -> trickShot(m)
             GameMode.BUMPER -> bumperShot(m)
             GameMode.CIRCUIT -> choose(circuitView(m))
-            else -> { pocketWars = m.mode == GameMode.POCKET_WARS; choose(m) }
+            else -> { pocketWars = m.mode == GameMode.POCKET_WARS; cutthroat = m.mode == GameMode.CUTTHROAT; choose(m) }
         }
         pocketWars = false
+        cutthroat = false
         return Plan(
             ideal.angle + gauss() * aimSigma,
             (ideal.speed * (1 + gauss() * speedSigma)).coerceIn(0.2, P.MAX_CUE_SPEED),
@@ -81,6 +82,48 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
 
     /** Circuit Pool: what the computer knows about the opponent's targets (worked out from public counts only). */
     private var belief: CircuitBelief? = null
+
+    // ------------------------------------------------------------------ cutthroat
+
+    private var cutthroat = false
+
+    /**
+     * Cutthroat: how much player [me] wants ball [id] down. Its own balls are the ones it must keep up;
+     * a rival's are the point (the one with the most left a little more); a ball from a group nobody has
+     * yet will be somebody else's (or, on an open table, lets it pick its group).
+     */
+    private fun cutDesire(m: Match, me: Int, id: Int): Double {
+        val owner = m.cutOwner(id)
+        return when {
+            owner == me -> -1.2
+            owner >= 0 -> 0.75 + 0.05 * (m.cutLeft(owner) - 1)
+            else -> 0.6
+        }
+    }
+
+    /** Cutthroat: scores a shot the computer has run — balls each group lost (by who owns it now), then who's next. */
+    private fun cutEval(work: Match, s: Match, out: ShotOutcome, me: Int, target: Int): Eval {
+        if (out.winner == me) return Eval(3.0, true, false)
+        if (out.winner >= 0) return Eval(-3.0, false, true)
+        var v = 0.0
+        val myG = s.cutGroup(me)
+        for (g in 0..2) {
+            val before = CutthroatState.ballsOf(g).count { work.world.balls[it].onTable }
+            val after = CutthroatState.ballsOf(g).count { s.world.balls[it].onTable }
+            val lost = before - after
+            if (lost == 0) continue
+            // (Sinking a group's ball on an open table can make it yours: it then counts against you.)
+            v += lost * when { g == myG -> -0.8; s.cut.ownerOfGroup(g) >= 0 -> 0.45; else -> 0.15 }
+        }
+        for (p in 0..2) if (p != me && !work.cutOut(p) && s.cutOut(p)) v += 0.2
+        val potted = !out.foul && target > 0 && target in s.world.log.pocketed
+        val next = when {
+            out.foul -> -0.9
+            out.keepTurn -> 1.0 + posWeight * bestP(s, me, aimSigma)
+            else -> -0.5 * bestP(s, s.current, aimSigma)
+        }
+        return Eval(v + next, potted, out.foul)
+    }
 
     // ------------------------------------------------------------------ pocket wars
 
@@ -513,6 +556,8 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         if (pocketWars) return candidates(m, player, sigma).maxOfOrNull { c ->
             if (m.pockets.owner.getOrElse(c.pocket) { -1 } == 1 - player) 0.0 else c.p * (0.6 + c.target / 37.5)
         } ?: 0.0
+        // Cutthroat: the best shot at someone else's ball.
+        if (cutthroat) return candidates(m, player, sigma).maxOfOrNull { it.p * cutDesire(m, player, it.target).coerceIn(0.0, 1.0) } ?: 0.0
         // Circuit Pool: the best shot at a ball worth sinking.
         if (belief != null) return candidates(m, player, sigma).maxOfOrNull { it.p * desire(it.target).coerceIn(0.0, 1.0) } ?: 0.0
         return candidates(m, player, sigma).firstOrNull()?.p ?: 0.0
@@ -527,6 +572,10 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
     /** Balls worth getting position on with ball in hand: all legal ones, or in Circuit Pool those it wants down. */
     private fun placementTargets(work: Match): List<Int> {
         val legal = work.legalTargets(work.current).toList()
+        if (cutthroat) {
+            val good = legal.filter { cutDesire(work, work.current, it) > 0.2 }.sortedByDescending { cutDesire(work, work.current, it) }
+            return good.ifEmpty { legal }
+        }
         if (belief == null) return legal
         val good = legal.filter { desire(it) > 0.2 }.sortedByDescending { desire(it) }
         return good.ifEmpty { legal }
@@ -552,7 +601,11 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         for (t in placementTargets(work)) {
             val tb = w.balls[t]
             if (!tb.onTable) continue
-            val want = if (belief != null) desire(t) else 1.0
+            val want = when {
+                belief != null -> desire(t)
+                cutthroat -> cutDesire(work, me, t).coerceAtLeast(0.05)
+                else -> 1.0
+            }
             for ((pi, pk) in Table.pockets.withIndex()) {
                 // Pocket Wars: set up a pot into your own or an open pocket, the bigger the ball the better.
                 val pwWant = if (pocketWars) pocketValue(work, me, t, pi) else 1.0
@@ -618,6 +671,8 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         if (belief != null) return circuitEval(s, me, target)
         val out = s.resolve()
         if (pocketWars) return pocketWarsEval(work, s, out, me, target)
+        // (Cutthroat: a pot on an open table means picking a group — it takes the one it would really pick.)
+        if (cutthroat) return cutEval(work, s, if (s.cut.choosing >= 0) s.cutPick(s.cutSuggestedGroup()) else out, me, target)
         return when {
             out.winner == me -> Eval(3.0, true, false)
             out.winner >= 0 -> Eval(-3.0, false, true)
@@ -632,6 +687,8 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         var cands = candidates(work, me, aimSigma)
         // Circuit Pool: go for the balls worth sinking, best chance first (weighted by how much it wants each one).
         if (belief != null) cands = ArrayList(cands.filter { desire(it.target) > 0.0 }.sortedByDescending { it.p * desire(it.target) })
+        // Cutthroat: other players' balls, best chance first (the leader's a little before the rest).
+        if (cutthroat) cands = ArrayList(cands.filter { cutDesire(work, me, it.target) > 0.0 }.sortedByDescending { it.p * cutDesire(work, me, it.target) })
         // Pocket Wars: big balls into your own or open pockets first; from level 5 it also looks at banks to steal a pocket.
         if (pocketWars) {
             val pool = ArrayList(cands.filter { pocketValue(work, me, it.target, it.pocket) > 0.0 })

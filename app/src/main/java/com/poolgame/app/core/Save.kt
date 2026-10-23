@@ -46,6 +46,7 @@ object GameSave {
             kv("co", m.circuit.writeObs())
         }
         if (m.mode == GameMode.POCKET_WARS) kv("pw", m.pockets.write())
+        if (m.mode == GameMode.CUTTHROAT) kv("cut", m.cut.write())
         for (b in m.world.balls) {
             kv("b${b.id}", "${b.x},${b.y},${if (b.onTable) 1 else 0},${b.qw},${b.qx},${b.qy},${b.qz}")
         }
@@ -97,6 +98,7 @@ object GameSave {
         }
         if (m.mode == GameMode.CIRCUIT) m.circuit.read(p.getValue("ct"), p["co"])
         if (m.mode == GameMode.POCKET_WARS) m.pockets.read(p.getValue("pw"))
+        if (m.mode == GameMode.CUTTHROAT) m.cut.read(p.getValue("cut"))
         for (b in m.world.balls) {
             val f = p.getValue("b${b.id}").split(',')
             b.stop()

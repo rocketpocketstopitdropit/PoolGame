@@ -190,12 +190,17 @@ object Store {
     private fun key(mode: String, vsCpu: Boolean, level: Int, slot: String) =
         if (vsCpu) "rec_${mode}_cpu${level}_$slot" else "rec_${mode}_pp_$slot"
 
+    /** winner: 0 = you / player 1, 1 = CPU / player 2 (Cutthroat: 2 = CPU 2 / player 3). */
     fun record(mode: String, vsCpu: Boolean, level: Int, winner: Int) {
-        val k = key(mode, vsCpu, level, if (winner == 0) "w" else "l")
+        // Cutthroat pass & play keeps a win count for each of the three players.
+        val slot = if (mode == "CUTTHROAT" && !vsCpu) "p${winner + 1}" else if (winner == 0) "w" else "l"
+        val k = key(mode, vsCpu, level, slot)
         set(k, (getInt(k, 0) + 1).toString())
     }
     fun wins(mode: String, vsCpu: Boolean, level: Int) = getInt(key(mode, vsCpu, level, "w"), 0)
     fun losses(mode: String, vsCpu: Boolean, level: Int) = getInt(key(mode, vsCpu, level, "l"), 0)
+    /** Cutthroat pass & play: games won by player [p] (0, 1 or 2). */
+    fun cutthroatWins(p: Int) = getInt(key("CUTTHROAT", false, 0, "p${p + 1}"), 0)
     /** One finished rock-paper-scissors game: [winner] 0 = you / player 1; [rounds] counts ties too. */
     fun recordRps(vsCpu: Boolean, winner: Int, rounds: Int) {
         val k = if (vsCpu) (if (winner == 0) "rec_rps_cpu_w" else "rec_rps_cpu_l") else (if (winner == 0) "rec_rps_pp_1" else "rec_rps_pp_2")

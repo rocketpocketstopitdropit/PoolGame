@@ -10,14 +10,19 @@ class Stats(context: Context) {
     private fun key(mode: GameMode, vsCpu: Boolean, level: Int, slot: String) =
         if (vsCpu) "${mode.name}_cpu${level}_$slot" else "${mode.name}_pp_$slot"
 
-    /** winner: 0 = you / player 1, 1 = CPU / player 2. */
+    /** winner: 0 = you / player 1, 1 = CPU / player 2 (Cutthroat: 2 = CPU 2 / player 3). */
     fun record(mode: GameMode, vsCpu: Boolean, level: Int, winner: Int) {
-        val k = key(mode, vsCpu, level, if (winner == 0) "w" else "l")
+        // Cutthroat pass & play keeps a win count for each of the three players.
+        val slot = if (mode == GameMode.CUTTHROAT && !vsCpu) "p${winner + 1}" else if (winner == 0) "w" else "l"
+        val k = key(mode, vsCpu, level, slot)
         prefs.edit().putInt(k, prefs.getInt(k, 0) + 1).apply()
     }
 
     fun wins(mode: GameMode, vsCpu: Boolean, level: Int) = prefs.getInt(key(mode, vsCpu, level, "w"), 0)
     fun losses(mode: GameMode, vsCpu: Boolean, level: Int) = prefs.getInt(key(mode, vsCpu, level, "l"), 0)
+
+    /** Cutthroat pass & play: games won by player [p] (0, 1 or 2). */
+    fun cutthroatWins(p: Int) = prefs.getInt(key(GameMode.CUTTHROAT, false, 0, "p${p + 1}"), 0)
 
     fun totalWinsVsCpu(mode: GameMode) = (1..10).sumOf { wins(mode, true, it) }
     fun totalLossesVsCpu(mode: GameMode) = (1..10).sumOf { losses(mode, true, it) }
@@ -26,6 +31,8 @@ class Stats(context: Context) {
     fun summary(mode: GameMode, vsCpu: Boolean, level: Int): String {
         val name = modeName(mode)
         val w = wins(mode, vsCpu, level); val l = losses(mode, vsCpu, level)
+        if (mode == GameMode.CUTTHROAT) return if (vsCpu) "Your $name record vs two level $level CPUs: $w–$l"
+            else "$name wins: Player 1 ${cutthroatWins(0)} · Player 2 ${cutthroatWins(1)} · Player 3 ${cutthroatWins(2)}"
         return if (vsCpu) "Your $name record vs level $level: $w–$l"
         else "$name pass & play: Player 1 $w – Player 2 $l"
     }
@@ -72,6 +79,7 @@ class Stats(context: Context) {
             GameMode.BUMPER -> "Bumper pool"
             GameMode.CIRCUIT -> "Circuit Pool"
             GameMode.POCKET_WARS -> "Pocket Wars"
+            GameMode.CUTTHROAT -> "Cutthroat"
         }
     }
 }

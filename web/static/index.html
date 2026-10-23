@@ -33,6 +33,7 @@
   .seg button.on { background: #2F8F5B; color: #fff; }
   .seg.wrap { flex-wrap: wrap; }
   .seg.wrap button { flex: 1 1 30%; }
+  #seg-mode button { flex: 1 1 22%; font-size: 14px; }
   .val { color: #fff; font: bold 15px "Arial Narrow", Arial, sans-serif; margin: 2px 0; }
   input[type=range] { width: 100%; accent-color: #F2C94C; height: 32px; }
   input[type=range]:disabled { opacity: 0.35; }
@@ -91,10 +92,10 @@
 <div id="menu">
   <div class="card">
     <h1>POOL</h1>
-    <p class="sub">8-Ball · 9-Ball · Circuit Pool · Pocket Wars · bumper pool · trick shots</p>
+    <p class="sub">8-Ball · 9-Ball · Circuit Pool · Pocket Wars · Cutthroat · bumper pool · trick shots</p>
 
     <div class="sec">GAME</div>
-    <div class="seg wrap" id="seg-mode"><button>8-Ball</button><button>9-Ball</button><button>Circuit</button><button>Pocket Wars</button><button>Bumper</button><button>Trick</button></div>
+    <div class="seg wrap" id="seg-mode"><button>8-Ball</button><button>9-Ball</button><button>Circuit</button><button>Pocket Wars</button><button>Cutthroat</button><button>Bumper</button><button>Trick</button></div>
     <p class="help" id="circuitHelp" style="display:none">Circuit Pool: each player is secretly dealt three of the fifteen
       balls; the other nine are neutral. Hit any ball first. Sinking your own or a neutral ball keeps you shooting;
       sinking one of your opponent's counts for them and ends your turn. You see your own targets and how many your
@@ -103,6 +104,12 @@
       pocket to claim it (it's ringed in your colour); every ball scores its number. Your own pockets keep you shooting;
       a ball in your opponent's pocket scores for them and ends your turn, unless you banked it in off a rail, which
       steals the pocket. A foul spots the balls back. First to 61 points wins.</p>
+    <p class="help" id="cutHelp" style="display:none">Cutthroat: three players, three groups — 1–5, 6–10 and 11–15.
+      After the break the table is open: the first player to sink a ball picks any group, the next picks one of the
+      other two, and the last player gets what's left. Keep your own balls up and sink everyone else's; any ball you
+      sink keeps you shooting. A foul gives the next player ball in hand and each opponent one of their balls back.
+      The last player with a ball on the table wins. Against the computer you play two CPUs, both at the level below;
+      pass &amp; play is for three people sharing the phone.</p>
     <p class="help" id="bumperHelp" style="display:none">Bumper pool: a small table with a cup at each end and twelve
       bumpers in the way. No cue ball: you shoot your own five balls (red, or white) into the far cup, your marked
       (spotted) ball first. Both marked balls go at once to open. Your ball in your own cup, a ball off the table or a
@@ -133,7 +140,7 @@
     </div>
     <div id="matchOpts">
       <div id="skillBlock">
-        <div class="sec">COMPUTER SKILL</div>
+        <div class="sec" id="skillTitle">COMPUTER SKILL</div>
         <div class="val" id="skillLabel"></div>
         <input type="range" id="skill" min="1" max="10" step="1">
       </div>
@@ -173,7 +180,7 @@
     <button class="play" id="play">PLAY</button>
 
     <p class="help" id="iosHint">On iPhone: tap the Share button, then <b>Add to Home Screen</b> to install Pool like an app (full screen, works offline).</p>
-    <p class="help">Turn your phone sideways to play. Rock, paper, scissors decides who breaks. Drag on the table to
+    <p class="help">Turn your phone sideways to play. Rock, paper, scissors decides who breaks (in Cutthroat the break goes round). Drag on the table to
       aim, fine-tune with the wheel (slow drags are extra fine, fast swipes swing the cue a long way), touch the
       cue ball on the right to add spin, then pull the power bar down and let go to shoot. Tap a ball to look down the
       cue in 3D: drag up there to raise the cue for a jump shot. With ball in hand, drag the cue ball to place it. You can hold the power bar and aim with another finger.</p>

@@ -1152,4 +1152,142 @@ class EngineTest {
         assertTrue(s.practice && s.practiceRules)
         assertFalse(GameSave.readSettings(GameSave.write(m, GameSettings(GameMode.POCKET_WARS, false, 5, 0, true, 0)))!!.practiceRules)
     }
+
+    // ------------------------------------------------------------------ cutthroat
+
+    private fun cutthroat(): Match {
+        val m = Match(GameMode.CUTTHROAT, arrayOf("You", "CPU 1", "CPU 2")); m.rack(Random(4), 0)
+        m.isBreak = false; m.ballInHand = false
+        return m
+    }
+
+    /** Cutthroat: as if [ids] went down (in that order) on a shot that hit [ids]'s first ball; [scratch] sinks the cue ball too. */
+    private fun cutFake(m: Match, vararg ids: Int, scratch: Boolean = false): ShotOutcome {
+        m.beginShot()
+        val log = m.world.log
+        log.reset(); log.firstHit = if (ids.isNotEmpty()) ids[0] else 1; log.railAfterHit = true
+        for (id in ids) { log.pocketed += id; log.pocketIn[id] = 0; m.world.balls[id].onTable = false }
+        if (scratch) { log.pocketed += 0; log.pocketIn[0] = 0; m.world.balls[0].onTable = false }
+        return m.resolve()
+    }
+
+    private fun Match.sink(vararg ids: Int) { for (id in ids) world.balls[id].onTable = false }
+
+    @Test fun cutthroatRacksFifteenWithTheOneOnTheSpot() {
+        val m = cutthroat()
+        assertEquals(15, (1..15).count { m.world.balls[it].onTable })
+        assertEquals(P.FOOT_X, m.world.balls[1].x, 1e-9)
+        assertEquals(3, m.players)
+        assertEquals(15, m.legalTargets().size)
+    }
+
+    @Test fun cutthroatFirstPotPicksAnyGroupAndTheLastOneIsHandedOut() {
+        val m = cutthroat()
+        val a = cutFake(m, 7)
+        assertTrue(a.keepTurn); assertEquals(0, m.cut.choosing); assertEquals(-1, m.cutGroup(0))
+        assertEquals(listOf(0, 1, 2), m.cut.free())
+        assertTrue(m.cutPick(2).keepTurn)         // any group, not just the 7's
+        assertEquals(2, m.cutGroup(0)); assertEquals(-1, m.cut.choosing); assertEquals(0, m.current)
+        cutFake(m, 3)                              // already has a group: no pick
+        assertEquals(-1, m.cut.choosing)
+        m.current = 1
+        m.sink(4)
+        cutFake(m, 13)
+        assertEquals(1, m.cut.choosing); assertEquals(listOf(0, 1), m.cut.free())
+        assertEquals(1, m.cutSuggestedGroup())     // the group with more balls left (1–5 is down to three)
+        m.cutPick(0)
+        assertEquals(0, m.cutGroup(1)); assertEquals(1, m.cutGroup(2))
+        assertTrue(m.message.contains("6–10"))
+    }
+
+    @Test fun cutthroatPickingAnEmptyGroupPutsYouOut() {
+        val m = cutthroat()
+        m.cut.group[1] = 1
+        m.sink(1, 2, 3, 4, 5)
+        cutFake(m, 12)
+        m.cutPick(0)
+        assertTrue(m.cutOut(0)); assertEquals(2, m.cutGroup(2)); assertEquals(1, m.current)
+    }
+
+    @Test fun cutthroatBreakPicksNoGroups() {
+        val m = cutthroat(); m.isBreak = true
+        val out = cutFake(m, 4)
+        assertTrue(out.keepTurn); assertEquals(-1, m.cutGroup(0)); assertFalse(m.isBreak)
+    }
+
+    @Test fun cutthroatAnyBallKeepsYouShootingAndTurnsGoRound() {
+        val m = cutthroat()
+        m.cut.group[0] = 0; m.cut.group[1] = 1; m.cut.group[2] = 2
+        assertTrue(cutFake(m, 9).keepTurn); assertEquals(0, m.current)
+        // Your own ball keeps you at the table too (cutting your own throat).
+        val own = cutFake(m, 2)
+        assertTrue(own.keepTurn); assertFalse(own.foul); assertEquals(0, m.current)
+        // Turns go round all three.
+        cutFake(m); assertEquals(1, m.current)
+        cutFake(m); assertEquals(2, m.current)
+        cutFake(m); assertEquals(0, m.current)
+    }
+
+    @Test fun cutthroatFoulGivesEachOpponentABallBack() {
+        val m = cutthroat()
+        m.cut.group[0] = 0; m.cut.group[1] = 1; m.cut.group[2] = 2
+        m.sink(6, 8, 12, 3)
+        val out = cutFake(m, 9, scratch = true)
+        assertTrue(out.foul); assertEquals(1, m.current); assertTrue(m.ballInHand)
+        assertTrue(m.world.balls[6].onTable)         // CPU 1's lowest down comes back
+        assertFalse(m.world.balls[8].onTable); assertFalse(m.world.balls[9].onTable)
+        assertTrue(m.world.balls[12].onTable)        // CPU 2's
+        assertFalse(m.world.balls[3].onTable)        // not the fouler's own
+        assertTrue(m.world.balls[0].onTable)
+    }
+
+    @Test fun cutthroatOutPlayersAreSkippedAndTheLastOneLeftWins() {
+        val m = cutthroat()
+        m.cut.group[0] = 0; m.cut.group[1] = 1; m.cut.group[2] = 2
+        m.sink(6, 7, 8, 9, 11, 12, 13)
+        val out = cutFake(m, 10)
+        assertTrue(out.keepTurn); assertTrue(m.cutOut(1)); assertTrue(m.message.contains("CPU 1 is out"))
+        cutFake(m)   // a miss: CPU 1 is out, so CPU 2 is next
+        assertEquals(2, m.current)
+        m.current = 0
+        cutFake(m, 14, 15)
+        assertEquals(0, m.winner)
+    }
+
+    @Test fun cutthroatAFoulCanBringAPlayerBack() {
+        val m = cutthroat()
+        m.cut.group[0] = 0; m.cut.group[1] = 1; m.cut.group[2] = 2
+        m.sink(6, 7, 8, 9, 10)
+        assertTrue(m.cutOut(1))
+        m.current = 2
+        cutFake(m, scratch = true)
+        assertFalse(m.cutOut(1)); assertTrue(m.world.balls[6].onTable); assertEquals(0, m.current)
+    }
+
+    @Test fun cutthroatSurvivesSaving() {
+        val m = cutthroat()
+        m.cut.group[0] = 2; m.cut.group[1] = 0; m.cut.group[2] = 1; m.current = 2
+        val text = GameSave.write(m, GameSettings(GameMode.CUTTHROAT, true, 6, 0, false, 1))
+        val r = Match(GameMode.CUTTHROAT, arrayOf("You", "CPU 1", "CPU 2"))
+        assertTrue(GameSave.restore(text, r))
+        assertEquals(m.cut.group.toList(), r.cut.group.toList())
+        assertEquals(2, r.current)
+    }
+
+    @Test fun cpuFinishesCutthroatGames() {
+        for (seed in 0 until 3) {
+            val m = Match(GameMode.CUTTHROAT, arrayOf("A", "B", "C")); m.rack(Random(seed), seed % 3)
+            val ai = arrayOf(Ai(8, seed.toLong()), Ai(5, seed + 50L), Ai(3, seed + 99L))
+            var shots = 0
+            while (m.winner < 0 && shots < 400) {
+                val p = ai[m.current].plan(Match(m.mode, m.names).also { it.copyFrom(m) }, 500)
+                if (m.ballInHand && p.hasPlacement) assertTrue(m.placeCue(p.placeX, p.placeY))
+                m.shoot(p.angle, p.speed, p.side, p.vert, p.elevation); m.world.simulate(); m.resolve(); shots++
+                if (m.cut.choosing >= 0) m.cutPick(m.cutSuggestedGroup())
+            }
+            assertTrue("seed $seed unfinished", m.winner >= 0)
+            assertFalse(m.cutOut(m.winner))
+            assertEquals(1, (0..2).count { !m.cutOut(it) })
+        }
+    }
 }

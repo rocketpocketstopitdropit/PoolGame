@@ -1,7 +1,7 @@
 # Pool — 8-Ball, 9-Ball & Trick Shots for Android
 
 A landscape pool game on a 7, 8 or 9 ft table, with real cue-ball spin, a 3D view down the cue, physically real jump shots (and
-illegal scoops), 8-ball and 9-ball rules, Circuit Pool (three secret target balls each), Pocket Wars (a fight over the six pockets), bumper pool on its own table, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people. Pure Kotlin, no third-party libraries,
+illegal scoops), 8-ball and 9-ball rules, Circuit Pool (three secret target balls each), Pocket Wars (a fight over the six pockets), Cutthroat (three players, three groups of five), bumper pool on its own table, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people (three in Cutthroat). Pure Kotlin, no third-party libraries,
 no image or sound assets (balls are rendered per-pixel and sounds are synthesized).
 
 ## Build & run
@@ -91,6 +91,8 @@ sideways peace sign). Against the CPU you pick and it picks at random; in pass &
 side (the pick stays hidden until both are in). Ties go again; the winner breaks. The two hands point at each
 other: the left one is the mirror image of the right one. Your rock, paper, scissors wins and losses, the longest
 game (most throws, ties included) and the average number of throws to a winner are kept with your record.
+Cutthroat has three players, so no rock, paper, scissors: the first breaker is drawn at random and each rematch
+passes the break to the next player.
 
 **Crowd**: scratching the cue ball or knocking any ball off the table gets a synthesized crowd "awww".
 **Shot guide**: the cue ball's path is shown up to the first ball it hits (or just past its first cushion), then
@@ -104,7 +106,7 @@ A table foul — hitting nothing, hitting the wrong ball first, or no rail and n
 It's trimmed and levelled automatically and kept on that device. Until you record one, a synthesized cough plays.
 
 **Table size** (menu → TABLE SIZE): 7 ft (bar box, 78″ × 39″, the default), 8 ft (88″ × 44″) or 9 ft (tournament,
-100″ × 50″) for 8-ball, 9-ball, Circuit Pool, Pocket Wars and their practice. Balls and pockets are the same size on all three, so a smaller
+100″ × 50″) for 8-ball, 9-ball, Circuit Pool, Pocket Wars, Cutthroat and their practice. Balls and pockets are the same size on all three, so a smaller
 table means shorter shots and bigger balls on screen. Trick shots and the tutorial always use the 9 ft table. A paused
 game keeps the table it was started on.
 
@@ -114,13 +116,15 @@ apps or close it. A shot that was still rolling is replayed from the start of th
 **Shot clock** (menu): optional 10–120 s per shot for human players; running out is a foul. With
 ball in hand the clock waits until you aim (table or fine-aim wheel) or touch the power bar.
 
-**Every game three ways**: pick the game (8-Ball, 9-Ball, Circuit, Pocket Wars, Bumper, Trick), then the
-**Opponent**: *Computer* (ten levels), *Pass & Play*, or *Practice* on your own.
+**Every game three ways**: pick the game (8-Ball, 9-Ball, Circuit, Pocket Wars, Cutthroat, Bumper, Trick), then the
+**Opponent**: *Computer* (ten levels), *Pass & Play*, or *Practice* on your own. In Cutthroat, *Computer* means you
+against two CPUs, both at the level on the skill slider, and *Pass & Play* is three people sharing the phone.
 
-**Practice** (Opponent → Practice). For 8-ball, 9-ball, Circuit Pool and Pocket Wars:
+**Practice** (Opponent → Practice). For 8-ball, 9-ball, Circuit Pool, Pocket Wars and Cutthroat:
 - *With the rules* (the default): the game's own rack and rules, but you take every shot. Each shot is judged as in a
   match — fouls give you ball in hand, groups are assigned, Circuit Pool deals you three targets and hides three for an
-  absent opponent (sink theirs and they count against you), Pocket Wars claims pockets for you. The card on the right
+  absent opponent (sink theirs and they count against you), Pocket Wars claims pockets for you, Cutthroat lets you pick
+  your group and gives the other two to two absent opponents (clear both to win the rack; lose yours and it's lost). The card on the right
   shows where the rack stands and your shots and fouls; the rack ends as it would in a game (*Rack won!* or *Rack lost*,
   with your shot count), and *Re-rack* starts again. *Retry shot* undoes your last shot, rules and all, and you can hold
   any ball to move it. (Clear table and the tray are off, since they'd change the score.)
@@ -200,6 +204,28 @@ card (and dashed gold rings round them on the table); for your opponent you only
   that player taps to see their targets. Against the CPU yours are always on show.
 - No called pockets (the menu's Call pocket setting doesn't apply). Rules from a sheet written for this app by
   Gemini; where it was silent (an illegal break, a time foul on the break) the app re-racks for the other player.
+
+## Cutthroat (menu → Game → Cutthroat)
+
+Three players on the regulation table with all fifteen balls (the 1 on the foot spot, the 6 and 11 on the back
+corners). The balls come in three groups — **1–5, 6–10 and 11–15** — and your group is the one you want to keep on the
+table: you're trying to sink the other two players' balls. Turns go Player 1 → 2 → 3 (You → CPU 1 → CPU 2).
+
+- **Picking groups**: the table is open after the break. The first player to sink a ball on a legal shot (not the
+  break) picks any group they like — a panel shows the three groups and how many of each are left; the CPU takes the
+  one with most balls up. The next player to sink a ball picks one of the other two, and the third player gets the
+  last. Each player's card then shows their five balls, dimmed as they go down.
+- **Any ball, any order**: any ball may be hit first. Any ball down on a legal shot keeps you shooting — your own too
+  ("cutting your own throat"). The break is from behind the head string; anything in keeps the breaker shooting.
+- **Fouls** — scratch, cue ball off the table, no ball hit, an object ball off the table (it's spotted), no rail after
+  contact or a scoop jump: the next player gets ball in hand anywhere, and each of the fouler's opponents gets their
+  lowest pocketed ball back on the foot spot.
+- **Out**: a player with none of their group left is out and their turns are skipped — until a foul by someone else
+  brings one of their balls back.
+- **Winning**: the last player with a ball on the table. If one shot clears everyone, the player whose last ball
+  dropped last wins.
+- No called pockets. Rules after the common open-table version of Cutthroat; fouls follow the rest of the app (ball in
+  hand anywhere) with the usual Cutthroat penalty of a ball back for each opponent.
 
 ## Pocket Wars (menu → Game → Pocket Wars)
 
@@ -313,14 +339,21 @@ that may be yours is avoided (strongly once you're on your last one). Its copy o
 those sets in place of your real targets. Games are short and luck plays a part (neutral balls keep a good player
 running): headless, L10 beat L1 9/10 and L7 beat L4 5/10.
 
+Cutthroat: it goes for the other players' balls (the one with most left a little more), stays off its own, and scores
+each shot it simulates on the balls each group lost, counted against whoever owns the group after the shot (so sinking
+a ball on an open table and then picking that group counts against it), then on who shoots next. On an open table it
+picks the group with the most balls still up. Against you there are two of them, at the same level.
+Headless, one strong CPU against two weaker ones (a third each by chance): L10 beat two L1s 10/10, L7 beat two L4s 8/10.
+
 ## Layout
 
 ```
 app/src/main/java/com/poolgame/app/
   core/   Table.kt (constants, sizes, rails)    World.kt (physics)
-          Match.kt (racks + rules, bumper pool, Circuit Pool, Pocket Wars)  Ai.kt (computer player)
+          Match.kt (racks + rules, bumper pool, Circuit Pool, Pocket Wars, Cutthroat)  Ai.kt (computer player)
           Circuit.kt (Circuit Pool's secret targets, and what a player can work out about the opponent's)
           PocketWars.kt (Pocket Wars: who owns each pocket, and the points)
+          Cutthroat.kt (Cutthroat: each player's group, and the open-table pick)
           Crowd.kt (synthesized crowd "aww", shared with the web version)
           Trick.kt (trick-shot levels, match state, known shots)
           Cough.kt (synthesized cough, the foul sound until you record one)

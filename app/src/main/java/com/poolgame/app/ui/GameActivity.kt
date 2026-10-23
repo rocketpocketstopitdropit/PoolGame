@@ -44,6 +44,7 @@ class GameActivity : Activity(), GameView.Host {
                 s.practice && s.practiceRules -> "$name practice$size"
                 s.mode == GameMode.TRICK -> if (s.vsCpu) "$name vs CPU level ${s.level}" else "$name pass & play"
                 s.practice -> "Free-table practice$size"
+                s.vsCpu && s.mode == GameMode.CUTTHROAT -> "$name vs 2 CPUs level ${s.level}$size"
                 s.vsCpu -> "$name vs CPU level ${s.level}$size"
                 else -> "$name pass & play$size"
             }
@@ -98,7 +99,8 @@ class GameActivity : Activity(), GameView.Host {
             else if (!practiceRules) mode = GameMode.EIGHT_BALL
             vsCpu = false; clock = 0; call = CallMode.OFF
         }
-        if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS) call = CallMode.OFF
+        if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS ||
+            mode == GameMode.CUTTHROAT) call = CallMode.OFF
 
         game = GameView(
             this, mode, vsCpu, level,
