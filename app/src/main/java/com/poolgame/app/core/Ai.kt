@@ -42,12 +42,20 @@ class Cand(
  *  - whether it plays safeties when nothing is makeable
  * Every candidate is checked by running the real physics engine on a copy of the table.
  */
-class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
+class Ai(val level: Int, seed: Long = Random.Default.nextLong(), defence: Boolean = level >= 8) {
     private val rng = Random(seed)
     val aimSigma = toRad(1.8 * 0.72.pow(level - 1))
     private val speedSigma = 0.14 * 0.8.pow(level - 1)
     private val spinSigma = 0.10 * 0.8.pow(level - 1)
     private val posWeight = if (level <= 2) 0.0 else 0.1 * level
+    /**
+     * Levels 8–10 play defence: what the next player is left counts for more (0.75, 1.0, 1.25 against 0.5),
+     * a pot is judged on where the balls end up if it misses, and safeties are looked for harder and more often.
+     */
+    private val defensive = defence
+    private val oppWeight = if (defensive) 0.5 + 0.25 * (level - 7).coerceAtLeast(1) else 0.5
+    /** Bumper pool: how much it values leaving the next player's balls far from their cup. */
+    private val defW = if (defensive) 1.2 + 0.4 * (level - 7).coerceAtLeast(1) else 1.2
     private var started = TimeSource.Monotonic.markNow()
     private var budget = 0L
     private var sim: Match? = null
@@ -121,7 +129,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         val next = when {
             out.foul -> -0.9
             out.keepTurn -> 1.0 + posWeight * bestP(s, me, aimSigma)
-            else -> -0.5 * bestP(s, s.current, aimSigma)
+            else -> -oppWeight * bestP(s, s.current, aimSigma)
         }
         return Eval(v + next, potted, out.foul)
     }
@@ -200,7 +208,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         val next = when {
             out.foul -> -0.9
             out.keepTurn -> 0.6 + posWeight * bestP(s, me, aimSigma)
-            else -> -0.5 * bestP(s, opp, aimSigma)
+            else -> -oppWeight * bestP(s, opp, aimSigma)
         }
         return Eval(points * urgency + 0.3 * pocketsGained + next, potted, out.foul)
     }
@@ -265,7 +273,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
                     0.8 * myNew - 0.8 * oppNew + when {
                         cont -> { if (nextMine.isNaN()) nextMine = bestP(s, me, aimSigma); 1.0 + posWeight * nextMine }
                         foul -> afterFoul
-                        else -> { if (nextTheirs.isNaN()) nextTheirs = rawBestP(s, 1 - me); -0.5 * nextTheirs }
+                        else -> { if (nextTheirs.isNaN()) nextTheirs = rawBestP(s, 1 - me); -oppWeight * nextTheirs }
                     }
                 }
             }
@@ -319,7 +327,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         val hints = Trick.HINTS.getOrNull(m.trick.level) ?: emptyList()
         // Weaker players don't know every trick: they try a couple of the known shots at random.
         for (h in if (level <= 3) hints.shuffled(rng).take(2) else hints) consider(h)
-        val tb = base.balls[Trick.TARGET]
+        val tb = base.balls[if (lv.firstBall >= 0) lv.firstBall else Trick.TARGET]
         val searchUntil = if (level <= 3) 0.25 else 1.0
         while (started.elapsedNow().inWholeMilliseconds < budget * searchUntil) {
             val b0 = best
@@ -331,6 +339,19 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
                 t[3] = (t[3] * (1 + 0.02 * gauss())).coerceIn(1.0, P.MAX_CUE_SPEED)
                 t[6] = (t[6] + toRad(1.5) * gauss()).coerceIn(0.0, toRad(P.MAX_ELEVATION))
                 t
+            } else if (lv.standard) {
+                // The classics: ordinary shots, kicks off the cushions, massé and jumps.
+                val z = if (lv.zones.isEmpty()) doubleArrayOf(0.06, 0.06, P.L - 0.06, P.W - 0.06) else lv.zones[rng.nextInt(lv.zones.size)]
+                val cx = rng.nextDouble(z[0], z[2])
+                val cy = rng.nextDouble(z[1], z[3])
+                doubleArrayOf(
+                    cx, cy,
+                    if (rng.nextDouble() < 0.6) atan2(tb.y - cy, tb.x - cx) + toRad(rng.nextDouble(-40.0, 40.0)) else rng.nextDouble(0.0, 2 * PI),
+                    rng.nextDouble(0.6, P.MAX_CUE_SPEED),
+                    if (rng.nextDouble() < 0.5) 0.0 else rng.nextDouble(-0.55, 0.55),
+                    if (rng.nextDouble() < 0.5) 0.0 else rng.nextDouble(-0.5, 0.5),
+                    if (rng.nextDouble() < 0.55) 0.0 else toRad(rng.nextDouble(8.0, 70.0))
+                )
             } else {
                 val z = if (lv.zones.isEmpty()) doubleArrayOf(0.06, 0.06, Table.GAP_X0 - 0.03, P.W - 0.06) else lv.zones[rng.nextInt(lv.zones.size)]
                 val cx = rng.nextDouble(z[0], z[2])
@@ -348,8 +369,9 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         }
         val s = best
         if (s != null) return Plan(s[2], s[3], s[4], s[5], "trick", s[0], s[1], s[6])
-        // Nothing found: a hopeful jump straight at the 1.
+        // Nothing found: a hopeful jump straight at the 1 (on the classics, a plain shot at it).
         val c = base.balls[0]
+        if (lv.standard) return Plan(atan2(tb.y - c.y, tb.x - c.x), 3.0, 0.0, 0.0, "trick")
         return Plan(atan2(tb.y - c.y, tb.x - c.x), 6.5, 0.0, 0.0, "trick", elevation = toRad(40.0))
     }
 
@@ -396,7 +418,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             if (out.winner >= 0) return -100.0
             var v = 5.0 * (myLeft - s.ballsLeft(me)) - 5.0 * (theirLeft - s.ballsLeft(opp))
             if (out.foul) v -= 3.0
-            v += if (out.keepTurn) 2.0 - 1.5 * nearest(s, me) else 1.2 * nearest(s, opp) - 0.8 * nearest(s, me)
+            v += if (out.keepTurn) 2.0 - 1.5 * nearest(s, me) else defW * nearest(s, opp) - 0.8 * nearest(s, me)
             return v
         }
         val samples = if (level >= 7) 8 else 5
@@ -517,7 +539,10 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
                 v += if (s.sameTeam(p, me)) 5.0 * down else -5.0 * down * (1.0 + (5 - left0[p]) * 0.15) / opps
             }
             if (out.foul) v -= 3.0
-            v += if (out.keepTurn) 2.0 - 1.5 * nearest(s, me) else 1.2 * nearest(s, s.current) - 0.8 * nearest(s, me)
+            v += if (out.keepTurn) 2.0 - 1.5 * nearest(s, me)
+                else defW * nearest(s, s.current) - 0.8 * nearest(s, me)
+            // Defence: leave every opponent badly placed, not just the one who shoots next.
+            if (defensive && !out.keepTurn) for (p in 0 until n) if (p != s.current && !s.sameTeam(p, me)) v += 0.3 * nearest(s, p)
             return v
         }
         val samples = if (level >= 7) 8 else 5
@@ -804,7 +829,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
             out.winner >= 0 -> Eval(-3.0, false, true)
             out.foul -> Eval(-0.9, false, true)
             out.keepTurn -> Eval(1.0 + posWeight * bestP(s, me, aimSigma), true, false)
-            else -> Eval(-0.5 * bestP(s, 1 - me, aimSigma), false, false)
+            else -> Eval(-oppWeight * bestP(s, 1 - me, aimSigma), false, false)
         }
     }
 
@@ -837,6 +862,10 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         }
         var best: Plan? = null
         var bestScore = -10.0
+        // Every pot tried, for the defensive rescoring below: (plan, candidate, value if it goes).
+        val tried = ArrayList<Triple<Plan, Cand, Eval>>()
+        var nonPot: Plan? = null
+        var nonPotScore = -10.0
         // Weaker players sometimes go for a shot that isn't their best look.
         val pool = if (level <= 3 && cands.size > 1 && rng.nextDouble() < 0.4) cands.shuffled(rng) else cands
         loop@ for (c in pool.take(k)) {
@@ -846,10 +875,28 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
                 val speed = (base * f * (if (vt < 0) 1.15 else 1.0)).coerceAtMost(7.0)
                 val e = evaluate(work, c.angle, speed, sd, vt, pocket = c.pocket, target = c.target)
                 val score = if (e.potted) c.p * e.value - (1 - c.p) * 0.3 else e.value - 0.6
+                val plan = Plan(c.angle, speed, sd, vt, "pot ${c.target}", pocket = c.pocket)
+                if (e.potted) tried += Triple(plan, c, e)
+                else if (score > nonPotScore) { nonPotScore = score; nonPot = plan }
                 if (score > bestScore) {
                     bestScore = score
-                    best = Plan(c.angle, speed, sd, vt, "pot ${c.target}", pocket = c.pocket)
+                    best = plan
                 }
+            }
+        }
+        // Defence (levels 8–10): judge the best few pots on what a miss leaves the opponent, not a flat penalty.
+        if (defensive && tried.isNotEmpty() && !timeUp()) {
+            var rBest: Plan? = null
+            var rScore = -10.0
+            for ((plan, c, e) in tried.sortedByDescending { it.second.p * it.third.value }.take(4)) {
+                if (timeUp() && rBest != null) break
+                val miss = missValue(work, plan, c)
+                val sc = c.p * e.value + (1 - c.p) * miss
+                if (sc > rScore) { rScore = sc; rBest = plan }
+            }
+            if (rBest != null) {
+                best = rBest; bestScore = rScore
+                if (nonPot != null && nonPotScore > rScore) { best = nonPot; bestScore = nonPotScore }
             }
         }
         // Strong players will jump over a blocker to reach a makeable ball.
@@ -868,9 +915,9 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
                 }
             }
         }
-        val needSafety = best == null || (level >= 5 && bestScore < 0.15)
+        val needSafety = best == null || (level >= 5 && bestScore < 0.15) || (defensive && bestScore < 0.45)
         if (needSafety && !timeUp()) {
-            val (safe, safeScore) = safetySearch(work, if (level >= 5) 7 else 3)
+            val (safe, safeScore) = safetySearch(work, if (defensive) 11 else if (level >= 5) 7 else 3)
             if (safe != null && (best == null || safeScore > bestScore)) {
                 best = safe; bestScore = safeScore
             }
@@ -882,13 +929,30 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
         return best ?: Plan(rng.nextDouble(0.0, 2 * PI), 2.0, 0.0, 0.0, "desperation")
     }
 
+    /**
+     * What a pot leaves if it misses: the same shot with the aim pushed off either side until the ball
+     * doesn't drop, averaged. (If every try still goes in, a flat small penalty as before.)
+     */
+    private fun missValue(work: Match, plan: Plan, c: Cand): Double {
+        var total = 0.0; var count = 0
+        for (k in doubleArrayOf(-1.0, 1.0)) for (off in doubleArrayOf(1.2, 2.5)) {
+            val d = k * (toRad(off) + 2 * aimSigma) * (0.06 / max(c.d2, 0.06)).coerceIn(0.25, 1.0)
+            val e = evaluate(work, plan.angle + d, plan.speed, plan.side, plan.vert, plan.elevation, plan.pocket, c.target)
+            if (e.potted) continue
+            total += e.value; count++
+            if (count >= 2) return total / count
+        }
+        return if (count > 0) total / count else -0.3
+    }
+
     /** Hit a legal ball at varying thickness and speed; prefer leaving the opponent nothing. */
     private fun safetySearch(work: Match, n: Int): Pair<Plan?, Double> {
         val w = work.world
         val c = w.balls[0]
         var best: Plan? = null
         var bestScore = -10.0
-        val speeds = if (level >= 6) doubleArrayOf(0.9, 1.5, 2.4) else doubleArrayOf(1.2, 2.2)
+        val speeds = if (defensive) doubleArrayOf(0.7, 1.1, 1.5, 2.4, 3.2) else if (level >= 6) doubleArrayOf(0.9, 1.5, 2.4) else doubleArrayOf(1.2, 2.2)
+        val found = ArrayList<Pair<Plan, Double>>()
         outer@ for (t in work.legalTargets(work.current)) {
             val tb = w.balls[t]
             if (!tb.onTable) continue
@@ -903,9 +967,24 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong()) {
                 for (s in speeds) {
                     if (timeUp() && best != null) break@outer
                     val e = evaluate(work, angle, s, 0.0, 0.0)
+                    if (defensive) found += Plan(angle, s, 0.0, 0.0, "safety") to e.value
                     if (e.value > bestScore) { bestScore = e.value; best = Plan(angle, s, 0.0, 0.0, "safety") }
                 }
             }
+        }
+        // Defence: a safety has to hold up with its own aim and speed error, not just when hit perfectly.
+        if (defensive && found.size > 1) {
+            var rBest: Plan? = null
+            var rScore = -10.0
+            for ((pl, v) in found.sortedByDescending { it.second }.take(4)) {
+                if (timeUp() && rBest != null) break
+                var t = v
+                repeat(2) {
+                    t += evaluate(work, pl.angle + gauss() * aimSigma, pl.speed * (1 + gauss() * speedSigma), 0.0, 0.0).value
+                }
+                if (t / 3 > rScore) { rScore = t / 3; rBest = pl }
+            }
+            if (rBest != null) return rBest to rScore
         }
         return best to bestScore
     }

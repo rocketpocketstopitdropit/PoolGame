@@ -11,12 +11,15 @@ enum class TrickRule {
     /** The cue ball may touch only the 1. */
     ONLY_THE_1,
     /** Cut the 1 (no straight-on hit) and thread it through: the cue ball must hit the 1 first and the 1 may touch nothing else. */
-    THREAD
+    THREAD,
+    /** The 1 has to hit a cushion before it drops. */
+    BANK
 }
 
 /**
- * Trick shots on the gap table. Every level is a fixed layout: the cue ball starts in the break
- * area on the near section and has to jump the gap to sink the 1-ball (yellow) on the far section.
+ * A trick-shot level: a fixed layout of balls and a rule. The gap jumps are on the gap table: the cue ball starts in
+ * the break area on the near section and has to jump the gap to sink the 1-ball (yellow) on the far section. The
+ * classics ([standard]) are well-known trick shots on an ordinary 9 ft table.
  */
 class TrickLevel(
     val name: String,
@@ -36,8 +39,18 @@ class TrickLevel(
      * for every zone): they move to whichever zone the cue ball is put in.
      */
     val zones: List<DoubleArray> = emptyList(),
-    val pens: List<List<Triple<Int, Double, Double>>> = emptyList()
+    val pens: List<List<Triple<Int, Double, Double>>> = emptyList(),
+    /** On the ordinary 9 ft table (the classics) rather than the gap table. */
+    val standard: Boolean = false,
+    /** The ball the cue ball has to hit first, or -1 for no rule about it. */
+    val firstBall: Int = -1,
+    /** Every one of these has to go down (the 1, or the 1 and others). */
+    val mustSink: List<Int> = listOf(Trick.TARGET),
+    /** THREAD levels: how much the 1 has to be cut, in degrees (0 = any hit). */
+    val minCut: Double = Trick.MIN_CUT_DEG
 ) {
+    /** Which set of levels this is in: 0 the gap jumps, 1 the classics. */
+    val set: Int get() = if (standard) 1 else 0
     val ids: List<Int> = balls.map { it.first }
     private val others = ids.filter { it != Trick.TARGET }
     /** Bit mask of the balls other than the 1. */
@@ -46,6 +59,7 @@ class TrickLevel(
     val maxBonus: Int = when (rule) {
         TrickRule.THREAD -> 0
         TrickRule.CUSHION -> 2
+        TrickRule.BANK -> 1
         else -> minOf(2, others.size)
     }
 }
@@ -59,6 +73,8 @@ class TrickState {
     var levelNo = 0
     /** Index into Trick.LEVELS of the level being played. */
     var level = 0
+    /** The set of levels a match plays: 0 the gap jumps, 1 the classics (see [Trick.SETS]). */
+    var set = 0
     /** Who shoots first on this level (it alternates level to level). */
     var starter = 0
     var suddenDeath = false
@@ -84,12 +100,12 @@ class TrickState {
     }
 
     fun reset() {
-        levelNo = 0; level = 0; starter = 0; suddenDeath = false
+        levelNo = 0; level = Trick.levelsOf(set).first(); starter = 0; suddenDeath = false
         clearLevel(); levelWins.fill(0); results.clear(); resetPending = false
     }
 
     fun copyFrom(o: TrickState) {
-        levelNo = o.levelNo; level = o.level; starter = o.starter; suddenDeath = o.suddenDeath
+        levelNo = o.levelNo; level = o.level; set = o.set; starter = o.starter; suddenDeath = o.suddenDeath
         o.tries.copyInto(tries); o.made.copyInto(made); o.bonus.copyInto(bonus); o.done.copyInto(done)
         o.levelWins.copyInto(levelWins)
         results.clear(); results.addAll(o.results); resetPending = o.resetPending
@@ -104,6 +120,12 @@ object Trick {
     const val MIN_CUT_DEG = 12.0
 
     private val MID = TableSize.NINE.width / 2   // trick shots are always on the 9 ft table
+
+    /** The two sets of levels a match can play. */
+    val SETS = listOf("Gap jumps", "Classics")
+
+    /** The levels (indices into [LEVELS]) in set [set], in the order a match plays them. */
+    fun levelsOf(set: Int): List<Int> = LEVELS.indices.filter { LEVELS[it].set == set }.ifEmpty { listOf(0) }
 
     val LEVELS: List<TrickLevel> = listOf(
         TrickLevel(
@@ -137,7 +159,7 @@ object Trick {
             trafficLayout()
         ),
         bankJob()
-    )
+    ) + Classics.LEVELS
 
     /**
      * Bank job: start from either pen of balls on the near section (drag the cue ball into the top
@@ -194,6 +216,7 @@ object Trick {
     /** The nearest allowed spot for the cue ball's centre to (x, y), for dragging it around. */
     fun clampPlacement(lv: TrickLevel, x: Double, y: Double): DoubleArray {
         val r = P.R
+        if (lv.zones.isEmpty() && lv.standard) return doubleArrayOf(x.coerceIn(r, P.L - r), y.coerceIn(r, P.W - r))
         if (lv.zones.isEmpty()) return doubleArrayOf(x.coerceIn(r, Table.GAP_X0 - 0.61 * r), y.coerceIn(r, P.W - r))
         var best = doubleArrayOf(x, y); var bd = Double.MAX_VALUE
         for (z in lv.zones) {
@@ -211,11 +234,11 @@ object Trick {
     fun place(lv: TrickLevel, w: World, x: Double, y: Double): Boolean {
         val r = P.R
         if (lv.zones.isEmpty()) {
-            if (x > Table.GAP_X0 - 0.61 * r || !w.isFree(x, y, 0)) return false
+            if ((!lv.standard && x > Table.GAP_X0 - 0.61 * r) || !w.isFree(x, y, 0)) return false
         } else {
             val zi = zoneAt(lv, x, y)
             if (zi < 0) return false
-            for ((id, px, py) in lv.pens[zi]) {
+            for ((id, px, py) in lv.pens.getOrNull(zi) ?: emptyList()) {
                 val b = w.balls[id]
                 b.x = px; b.y = py; b.onTable = true; b.stop()
             }
@@ -238,6 +261,7 @@ object Trick {
             TARGET in log.fell -> return miss("the 1 fell into the gap")
             TARGET in log.jumpedOff -> return miss("the 1 flew off the table")
             log.firstHit < 0 -> return miss("didn't hit a ball")
+            lv.firstBall >= 0 && log.firstHit != lv.firstBall -> return miss("the cue ball has to hit the ${lv.firstBall} first")
         }
         when (lv.rule) {
             TrickRule.CUSHION -> if (log.firstHit != TARGET || log.cueCushionsBeforeHit < 1)
@@ -249,11 +273,14 @@ object Trick {
             TrickRule.THREAD -> {
                 if (log.firstHit != TARGET) return miss("the cue ball touched the traffic first")
                 if (log.touched[TARGET] and lv.otherMask != 0) return miss("the 1 touched the traffic")
-                if (log.firstHit == TARGET && !(log.cutDeg >= MIN_CUT_DEG)) return miss("hit straight on — the 1 has to be cut")
+                if (lv.minCut > 0 && log.firstHit == TARGET && !(log.cutDeg >= lv.minCut)) return miss("hit straight on — the 1 has to be cut")
             }
+            TrickRule.BANK -> if (TARGET in log.pocketed && (log.banked and (1 shl TARGET)) == 0)
+                return miss("the 1 has to hit a cushion before it drops")
             TrickRule.PLAIN -> {}
         }
         if (TARGET !in log.pocketed || cueLost) return miss("the 1 stayed up")
+        for (id in lv.mustSink) if (id !in log.pocketed) return miss("the $id stayed up")
         return when (lv.rule) {
             TrickRule.CUSHION -> {
                 val extra = log.cueCushionsBeforeHit - 1
@@ -261,7 +288,7 @@ object Trick {
             }
             TrickRule.THREAD -> TrickJudgement(true, "", 0, "")
             else -> {
-                val extra = log.pocketed.filter { it != 0 && it != TARGET }
+                val extra = log.pocketed.filter { it != 0 && it !in lv.mustSink }
                 TrickJudgement(true, "", extra.size,
                     if (extra.isEmpty()) "" else "+${extra.size} for the ${extra.joinToString(" and ")}")
             }
@@ -324,5 +351,5 @@ object Trick {
             doubleArrayOf(0.44956, 0.14907, 0.39302, 8.50000, 0.00000, 0.00000, 0.73471),
             doubleArrayOf(0.38261, 0.29520, -0.27361, 8.46140, -0.15993, 0.00000, 0.62353),
         )
-    )
+    ) + Classics.HINTS
 }

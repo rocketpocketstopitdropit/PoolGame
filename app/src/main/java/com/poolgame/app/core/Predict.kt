@@ -11,6 +11,14 @@ class Prediction {
     var contactIndex = -1          // cue points from here on are after first contact
     var hitId = -1
     var hitX = 0.0; var hitY = 0.0 // cue-ball centre at contact (ghost ball)
+
+    /** Whether the cue ball's centre gets past [x] (down the table) before it first touches a ball. */
+    fun crossedLine(x: Double): Boolean {
+        if (hitId >= 0 && hitX > x) return true
+        val n = if (contactIndex >= 0) contactIndex else cueN
+        for (i in 0 until minOf(n, cueN)) if (cueX[i] > x) return true
+        return false
+    }
     val objX = FloatArray(MAX); val objY = FloatArray(MAX)
     var objN = 0
     var scratch = false

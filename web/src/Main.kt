@@ -34,6 +34,8 @@ class App : GameHost {
     private var sound = Store.getBool("sound", true)
     private var aimSens = Store.getInt("aimSens", 5).coerceIn(1, 10)
     private var callIdx = Store.getInt("callMode", 0).coerceIn(0, 2)
+    private var scratchKitchen = Store.get("scratchKitchen", "false") == "true"
+    private var trickSet = Store.getInt("trickSet", 0).coerceIn(0, 1)
     private var prediction = Store.getBool("prediction", true)
     /** Practice a pool game with its rules (false: the free table). */
     private var practiceRules = Store.getBool("practiceRules", true)
@@ -179,6 +181,8 @@ class App : GameHost {
         segment("seg-opp") { opp = it; vsCpu = it == 0; save(); refreshMenu() }
         segment("seg-prules") { practiceRules = it == 0; save(); refreshMenu() }
         segment("seg-call") { callIdx = it; save(); refreshMenu() }
+        segment("seg-scratch") { scratchKitchen = it == 1; save(); refreshMenu() }
+        segment("seg-tset") { trickSet = it; save(); refreshMenu() }
         segment("seg-size") { tableSize = TableSize.values()[it]; save(); refreshMenu() }
         segment("seg-octp") { octTeams = it == 3; octPlayers = if (it == 3) 4 else it + 2; save(); refreshMenu() }
         segment("seg-octl") { octLayout = it; save(); refreshMenu() }
@@ -329,6 +333,8 @@ class App : GameHost {
         setSegment("seg-mode", GAMES.indexOf(gameMode))
         setSegment("seg-opp", opp)
         setSegment("seg-call", callIdx)
+        setSegment("seg-scratch", if (scratchKitchen) 1 else 0)
+        setSegment("seg-tset", trickSet)
         el("matchOpts").style.display = if (practice) "none" else "block"
         el("practiceOpts").style.display = if (practice) "block" else "none"
         el("prulesBlock").style.display = if (poolTable) "block" else "none"
@@ -353,8 +359,12 @@ class App : GameHost {
         if (oct) window.setTimeout({ drawOctPreview() }, 0)
         el("plevelBlock").style.display = if (gameMode == GameMode.TRICK) "block" else "none"
         setSegment("seg-plevel", practiceLevel)
-        el("callBlock").style.display = if (gameMode == GameMode.EIGHT_BALL || gameMode == GameMode.NINE_BALL) "block" else "none"
+        val poolGame = gameMode == GameMode.EIGHT_BALL || gameMode == GameMode.NINE_BALL || gameMode == GameMode.CIRCUIT ||
+            gameMode == GameMode.POCKET_WARS || gameMode == GameMode.CUTTHROAT
+        el("callBlock").style.display = if (poolGame) "block" else "none"
+        el("scratchBlock").style.display = if (poolGame) "block" else "none"
         el("trickHelp").style.display = if (gameMode == GameMode.TRICK) "block" else "none"
+        el("trickSetBlock").style.display = if (gameMode == GameMode.TRICK && opp != 2) "block" else "none"
         el("bumperHelp").style.display = if (gameMode == GameMode.BUMPER) "block" else "none"
         el("circuitHelp").style.display = if (gameMode == GameMode.CIRCUIT) "block" else "none"
         el("warsHelp").style.display = if (gameMode == GameMode.POCKET_WARS) "block" else "none"
@@ -406,7 +416,7 @@ class App : GameHost {
         Store.set("game", gameMode.name); Store.set("opp", opp.toString()); Store.set("vsCpu", vsCpu.toString())
         Store.set("level", level.toString()); Store.set("clockOn", clockOn.toString())
         Store.set("clockSec", clockSec.toString()); Store.set("sound", sound.toString())
-        Store.set("aimSens", aimSens.toString()); Store.set("callMode", callIdx.toString()); Store.set("prediction", prediction.toString())
+        Store.set("aimSens", aimSens.toString()); Store.set("callMode", callIdx.toString()); Store.set("scratchKitchen", scratchKitchen.toString()); Store.set("trickSet", trickSet.toString()); Store.set("prediction", prediction.toString())
         Store.set("practiceRules", practiceRules.toString()); Store.set("practiceLevel", practiceLevel.toString())
         Store.set("tableSize", tableSize.name)
         Store.set("octPlayers", octPlayers.toString()); Store.set("octTeams", octTeams.toString()); Store.set("octLayout", octLayout.toString())
@@ -449,6 +459,8 @@ class App : GameHost {
         var text: String? = null
         var size = tableSize
         var oPlayers = octPlayers; var oTeams = octTeams; var oLayout = octLayout
+        var barScratch = scratchKitchen
+        var tSet = trickSet
         if (resume) {
             val saved = Store.get("savedGame", "")
             val s = GameSave.readSettings(saved)
@@ -459,6 +471,8 @@ class App : GameHost {
                 call = s.callMode
                 size = s.tableSize   // a paused game keeps the table it was started on
                 oPlayers = s.octPlayers; oTeams = s.octTeams; oLayout = s.octLayout
+                barScratch = s.scratchKitchen
+                tSet = s.trickSet
             }
         } else Store.set("savedGame", "")
         // Practice: a game with its own rules on your own, the free table (8-ball's balls), one trick shot, or the bumper table.
@@ -467,8 +481,8 @@ class App : GameHost {
             else if (!rules) mode = GameMode.EIGHT_BALL
             cpu = false; clock = 0
         }
-        if (practice || mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS ||
-            mode == GameMode.CUTTHROAT || mode == GameMode.OCTAGON) call = CallMode.OFF
+        // Pockets can be called in every game on the regulation table (not trick shots or bumper pool).
+        if (practice || mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.OCTAGON) call = CallMode.OFF
         oTeams = oTeams && oPlayers == 4
         playingOct = Store.octVariant(oPlayers, oTeams)
         sounds.enabled = sound
@@ -477,7 +491,7 @@ class App : GameHost {
         el("restart").textContent = if (mode == GameMode.TRICK) "Restart match" else "Restart rack"
         el("quit").textContent = "Main menu (game is saved)"
         game = Game(mode, cpu, lvl, clock, practice, practiceLevel, aimSens, prediction, text, call, sounds, this, tableSize = size, practiceRules = rules,
-            octPlayers = oPlayers, octTeams = oTeams, octLayout = oLayout)
+            octPlayers = oPlayers, octTeams = oTeams, octLayout = oLayout, scratchKitchen = barScratch, trickSet = tSet)
         showGame()
     }
 

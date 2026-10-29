@@ -72,7 +72,9 @@ class GameView(
     private val practiceRules: Boolean = false,  // practice: play the game's own rules on your own (not the free table)
     private val octPlayers: Int = 4,             // octagon table: how many players (2 to 4)
     private val octTeams: Boolean = false,       // octagon table, four players: two teams of two
-    private val octLayout: Int = 0               // octagon table: the bumper layout
+    private val octLayout: Int = 0,              // octagon table: the bumper layout
+    private val scratchKitchen: Boolean = false, // bar rules: ball in hand in the kitchen after a scratch
+    private val trickSet: Int = 0                // trick-shot match: 0 the gap jumps, 1 the classics
 ) : View(context), Choreographer.FrameCallback {
 
     interface Host {
@@ -363,11 +365,13 @@ class GameView(
         breaker = breakerPlayer
         useTable()
         match = Match(mode, names)
+        match.trick.set = trickSet.coerceIn(0, Trick.SETS.size - 1)
         match.teams = octTeams && names.size == 4 && !practiceMode
         match.world.trackOrientation = true
         match.world.listener = makeListener()
         match.rack(rng, breaker)
         match.callMode = if (practice) CallMode.OFF else callMode
+        match.scratchKitchen = scratchKitchen && !practice
         revealTo = if (vsCpu || practiceMode) 0 else -1
         rpShots = 0; rpFouls = 0; practiceMatch = null; practiceSnapshot = null
         if (rulesPractice) match.message = "${Stats.modeName(mode)} practice · you take every shot · place the cue ball and break"
@@ -457,7 +461,7 @@ class GameView(
     fun isPractice() = practiceMode
 
     private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practiceMode, breaker, match.callMode, tableSize, rulesPractice,
-        octPlayers, octTeams, octLayout)
+        octPlayers, octTeams, octLayout, match.scratchKitchen, match.trick.set)
 
     private fun useTable() {
         when (mode) {
@@ -575,7 +579,7 @@ class GameView(
 
     /** Cutthroat: the shooter takes group [g] (one nobody has), and play goes on. */
     private fun cutPick(g: Int) {
-        if (match.cut.choosing < 0 || g !in match.cut.free()) return
+        if (match.cut.choosing < 0 || g !in match.cutPickable()) return
         val out = match.cutPick(g)
         // On your own, the two absent opponents get the other groups as soon as you've picked yours.
         if (rulesPractice) for (q in 1..2) if (match.cut.group[q] < 0) match.cut.group[q] = match.cut.free()[0]
@@ -1768,7 +1772,7 @@ class GameView(
         }
         guide.pathEffect = null
         if (pr.hitId >= 0) {
-            val legal = practice || pr.hitId in match.legalTargets()
+            val legal = practice || match.legalFirstHit(pr.hitId, pr.crossedLine(P.HEAD_X))
             guide.color = if (legal) 0xE0FFFFFF.toInt() else 0xE0FF5050.toInt()
             guide.strokeWidth = 2f * dp
             // Ghost ball: where the cue ball will be at contact.
@@ -1867,7 +1871,7 @@ class GameView(
         val head = when {
             trickPractice -> "PRACTICE · ${lv.name.uppercase()}"
             t.suddenDeath -> "SUDDEN DEATH · ${lv.name.uppercase()}"
-            else -> "LEVEL ${t.levelNo + 1} OF ${Trick.LEVELS.size} · ${lv.name.uppercase()}"
+            else -> "LEVEL ${t.levelNo + 1} OF ${Trick.levelsOf(t.set).size} · ${lv.name.uppercase()}"
         }
         canvas.drawText(ellipsize(head, bw - 20 * dp), cx, top + 27 * dp, text)
         text.typeface = regular; text.textSize = 13 * dp
@@ -1972,7 +1976,7 @@ class GameView(
         guide.pathEffect = null
 
         if (pr.hitId >= 0) {
-            val legal = practice || pr.hitId in match.legalTargets()
+            val legal = practice || match.legalFirstHit(pr.hitId, pr.crossedLine(P.HEAD_X))
             val gx = sx(pr.hitX); val gy = sy(pr.hitY)
             guide.strokeWidth = 1.7f * dp
             guide.color = if (legal) 0xE0FFFFFF.toInt() else 0xE0FF5050.toInt()
@@ -2108,7 +2112,7 @@ class GameView(
         } else if (trick) {
             val t = match.trick
             text.textSize = min(12 * dp, hudH * 0.2f); text.color = 0xFFF2C94C.toInt()
-            val lvl = if (t.suddenDeath) "Sudden death" else "Level ${t.levelNo + 1} of ${Trick.LEVELS.size}"
+            val lvl = if (t.suddenDeath) "Sudden death" else "Level ${t.levelNo + 1} of ${Trick.levelsOf(t.set).size}"
             canvas.drawText(ellipsize("$lvl · ${Trick.LEVELS[t.level].name} · fewest shots wins", midR - midL), (midL + midR) / 2, subY, text)
         } else if (bumper && phase == Phase.HUMAN) {
             text.textSize = min(12 * dp, hudH * 0.2f); text.color = 0xFFF2C94C.toInt()
@@ -2707,7 +2711,7 @@ class GameView(
         val bw = (pw - 32 * dp - 2 * gap) / 3
         val bh = ph * 0.56f
         val by = overPanel.top + ph * 0.34f
-        val free = match.cut.free()
+        val free = match.cutPickable()
         for (g in 0..2) {
             val r = pickBtn[g]
             r.set(overPanel.left + 16 * dp + g * (bw + gap), by, overPanel.left + 16 * dp + g * (bw + gap) + bw, by + bh)
@@ -2731,7 +2735,7 @@ class GameView(
             text.typeface = regular; text.textSize = min(12 * dp, bh * 0.11f)
             text.color = if (open) 0xFFCED6DD.toInt() else 0xFF6B7780.toInt()
             val owner = match.cut.ownerOfGroup(g)
-            canvas.drawText(if (open) "$left on the table" else "${names[owner]}'s", r.centerX(), r.top + bh * 0.82f, text)
+            canvas.drawText(if (open) "$left on the table" else if (owner >= 0) "${names[owner]}'s" else "all down", r.centerX(), r.top + bh * 0.82f, text)
         }
     }
 

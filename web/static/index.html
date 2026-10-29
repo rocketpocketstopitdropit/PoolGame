@@ -130,9 +130,14 @@
       <p class="help" id="octlHelp" style="margin-top:6px"></p>
       <canvas id="octPreview" style="display:block;width:100%;height:190px;margin-top:8px"></canvas>
     </div>
-    <p class="help" id="trickHelp" style="display:none">Trick shots: half the table's missing between the break area and the
-      far end. Jump the cue ball across the gap and sink the 1. Five levels, taking turns with the computer or a friend:
-      whoever makes it in fewer shots wins the level, and most levels wins the match.</p>
+    <p class="help" id="trickHelp" style="display:none">Trick shots, taking turns with the computer or a friend: whoever makes
+      each level in fewer shots wins it, and most levels wins the match. Gap jumps: half the table's missing between the
+      break area and the far end; jump the cue ball across and sink the 1. Classics: famous trick shots on an ordinary
+      table, mostly getting the 1 in round, over or between other balls.</p>
+    <div id="trickSetBlock" style="display:none">
+      <div class="sec">TRICK SHOTS</div>
+      <div class="seg" id="seg-tset"><button>Gap jumps</button><button>Classics</button></div>
+    </div>
 
     <div class="sec">OPPONENT</div>
     <div class="seg" id="seg-opp"><button>Computer</button><button>Pass &amp; Play</button><button>Practice</button></div>
@@ -166,7 +171,16 @@
       <div class="sec">CALL POCKET</div>
       <div class="seg" id="seg-call"><button>Off</button><button>8 &amp; 9 only</button><button>Every shot</button></div>
       <p class="help" style="margin-top:6px">Tap a pocket to call it. A ball in the wrong pocket is slop: your turn ends
-        (the 8 in the wrong pocket loses; a 9 in the wrong pocket is respotted).</p>
+        (the 8 in the wrong pocket loses; a 9 in the wrong pocket is respotted). Circuit, Pocket Wars and Cutthroat
+        use Every shot only (in Pocket Wars a slopped ball is spotted and scores nothing).</p>
+      </div>
+
+      <div id="scratchBlock">
+      <div class="sec">AFTER A SCRATCH</div>
+      <div class="seg" id="seg-scratch"><button>Ball in hand anywhere</button><button>In the kitchen (bar rules)</button></div>
+      <p class="help" style="margin-top:6px">Bar rules: after a scratch the next player places the cue ball behind the
+        head string and must shoot out of the kitchen: a ball behind the line can't be hit until the cue ball has crossed
+        it. Other fouls still give ball in hand anywhere.</p>
       </div>
 
       <div class="sec">SHOT CLOCK</div>

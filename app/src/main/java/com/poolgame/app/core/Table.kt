@@ -116,6 +116,8 @@ object Table {
     /** True while the bumper pool table is in use. */
     var bumper = false
         private set
+    /** The ordinary table is in use for one of the classic trick shots (so a trick match's copies keep it). */
+    var trickClassic = false
     /** True while the gap table is in use (balls over the gap fall to the floor). */
     var gap = false
         private set
@@ -134,6 +136,7 @@ object Table {
 
     /** The regulation table: four corner pockets and two side pockets, in [s] (default: the size in use). */
     fun useStandard(s: TableSize = size) {
+        trickClassic = false
         if (segs.isNotEmpty() && !gap && !bumper && !octagon && s == size) return
         size = s
         P.resize(s)

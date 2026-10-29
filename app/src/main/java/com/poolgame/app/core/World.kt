@@ -42,6 +42,8 @@ class ShotLog {
     var railAfterHit = false          // any ball touched a cushion after first contact
     var cueCushionsBeforeHit = 0
     var hitX = 0.0; var hitY = 0.0     // cue-ball centre at first contact
+    /** Furthest down the table (largest x) the cue ball's centre got before it first touched a ball. */
+    var cueMaxX = Double.NEGATIVE_INFINITY
     val jumpedOff = ArrayList<Int>()   // balls that flew off the table (or fell into the gap)
     val fell = ArrayList<Int>()        // of those, the ones that fell into the gap (trick-shot table)
     val pocketIn = IntArray(NB) { -1 } // which pocket (index into Table.pockets) each ball dropped in
@@ -76,7 +78,7 @@ class ShotLog {
 
     fun reset() {
         firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0; jumpedOff.clear()
-        fell.clear()
+        fell.clear(); cueMaxX = Double.NEGATIVE_INFINITY
         pocketIn.fill(-1)
         touched.fill(0); cueLanded = false; cueAirTouched = 0; cutDeg = Double.NaN
         cueLandX = Double.NaN; cueLandY = Double.NaN
@@ -86,7 +88,7 @@ class ShotLog {
     fun copyFrom(o: ShotLog) {
         firstHit = o.firstHit; pocketed.clear(); pocketed.addAll(o.pocketed)
         railAfterHit = o.railAfterHit; cueCushionsBeforeHit = o.cueCushionsBeforeHit
-        hitX = o.hitX; hitY = o.hitY
+        hitX = o.hitX; hitY = o.hitY; cueMaxX = o.cueMaxX
         jumpedOff.clear(); jumpedOff.addAll(o.jumpedOff)
         fell.clear(); fell.addAll(o.fell)
         o.pocketIn.copyInto(pocketIn)
@@ -268,6 +270,10 @@ class World {
         collideCushions()
         if (Table.posts.isNotEmpty()) collidePosts()
         checkPockets()
+        if (log.firstHit < 0) {
+            val c = balls[cue]
+            if (c.onTable && c.x > log.cueMaxX) log.cueMaxX = c.x
+        }
         return dt
     }
 

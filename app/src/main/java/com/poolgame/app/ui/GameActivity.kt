@@ -31,6 +31,7 @@ class GameActivity : Activity(), GameView.Host {
         const val EXTRA_OCT_PLAYERS = "octPlayers"
         const val EXTRA_OCT_TEAMS = "octTeams"
         const val EXTRA_OCT_LAYOUT = "octLayout"
+        const val EXTRA_TRICK_SET = "trickSet"
 
         const val PREFS = "pool"
         const val KEY_SAVED = "savedGame"
@@ -86,6 +87,8 @@ class GameActivity : Activity(), GameView.Host {
         var octPlayers = intent.getIntExtra(EXTRA_OCT_PLAYERS, prefs.getInt("octPlayers", 4)).coerceIn(2, 4)
         var octTeams = intent.getBooleanExtra(EXTRA_OCT_TEAMS, prefs.getBoolean("octTeams", false))
         var octLayout = intent.getIntExtra(EXTRA_OCT_LAYOUT, prefs.getInt("octLayout", 0)).coerceIn(0, 2)
+        var scratchKitchen = prefs.getBoolean("scratchKitchen", false)
+        var trickSet = intent.getIntExtra(EXTRA_TRICK_SET, prefs.getInt("trickSet", 0)).coerceIn(0, 1)
 
         // Continue a saved game: its own settings win over the menu's current ones.
         var resume: String? = null
@@ -102,6 +105,8 @@ class GameActivity : Activity(), GameView.Host {
                 call = s.callMode
                 tableSize = s.tableSize   // a paused game keeps the table it was started on
                 octPlayers = s.octPlayers; octTeams = s.octTeams; octLayout = s.octLayout
+                scratchKitchen = s.scratchKitchen
+                trickSet = s.trickSet
             }
         } else {
             prefs.edit().remove(KEY_SAVED).apply()   // starting fresh replaces any paused game
@@ -112,8 +117,8 @@ class GameActivity : Activity(), GameView.Host {
             else if (!practiceRules) mode = GameMode.EIGHT_BALL
             vsCpu = false; clock = 0; call = CallMode.OFF
         }
-        if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.CIRCUIT || mode == GameMode.POCKET_WARS ||
-            mode == GameMode.CUTTHROAT || mode == GameMode.OCTAGON) call = CallMode.OFF
+        // Pockets can be called in every game on the regulation table (not trick shots or bumper pool).
+        if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.OCTAGON) call = CallMode.OFF
         octTeams = octTeams && octPlayers == 4
         this.octVariant = Stats.octVariant(octPlayers, octTeams)
 
@@ -133,7 +138,9 @@ class GameActivity : Activity(), GameView.Host {
             practiceRules,
             octPlayers,
             octTeams,
-            octLayout
+            octLayout,
+            scratchKitchen,
+            trickSet
         )
         setContentView(game)
         hideSystemBars()

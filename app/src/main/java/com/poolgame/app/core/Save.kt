@@ -16,7 +16,11 @@ class GameSettings(
     /** Octagon table: how many players (2 to 4), whether the four play as two teams, and the bumper layout. */
     val octPlayers: Int = 2,
     val octTeams: Boolean = false,
-    val octLayout: Int = 0
+    val octLayout: Int = 0,
+    /** Bar rules: a scratch gives ball in hand in the kitchen (behind the head string) instead of anywhere. */
+    val scratchKitchen: Boolean = false,
+    /** Trick-shot match: which set of levels (0 the gap jumps, 1 the classics). */
+    val trickSet: Int = 0
 )
 
 /**
@@ -34,6 +38,7 @@ object GameSave {
         kv("table", s.tableSize.name)
         kv("prules", s.practiceRules)
         kv("octp", s.octPlayers); kv("octt", s.octTeams); kv("octl", s.octLayout)
+        kv("barscr", s.scratchKitchen); kv("tset", s.trickSet)
         kv("current", m.current)
         kv("g0", m.groups[0].name); kv("g1", m.groups[1].name)
         kv("bih", m.ballInHand); kv("kitchen", m.kitchenOnly); kv("brk", m.isBreak)
@@ -72,7 +77,9 @@ object GameSave {
             p["prules"]?.toBoolean() ?: false,
             p["octp"]?.toIntOrNull()?.coerceIn(2, 4) ?: 2,
             p["octt"]?.toBoolean() ?: false,
-            p["octl"]?.toIntOrNull()?.coerceIn(0, Table.OCT_LAYOUTS.size - 1) ?: 0
+            p["octl"]?.toIntOrNull()?.coerceIn(0, Table.OCT_LAYOUTS.size - 1) ?: 0,
+            p["barscr"]?.toBoolean() ?: false,
+            p["tset"]?.toIntOrNull()?.coerceIn(0, Trick.SETS.size - 1) ?: 0
         )
     } catch (e: Throwable) { null }
 
@@ -93,6 +100,7 @@ object GameSave {
         m.message = p["msg"] ?: ""
         m.winner = -1
         m.callMode = p["call"]?.let { CallMode.valueOf(it) } ?: CallMode.OFF
+        m.scratchKitchen = p["barscr"]?.toBoolean() ?: false
         m.teams = m.mode == GameMode.OCTAGON && m.players == 4 && p["octt"]?.toBoolean() == true
         if (m.mode == GameMode.TRICK) {
             val f = p.getValue("tl").split(',').map { it.toInt() }
@@ -103,6 +111,7 @@ object GameSave {
             t.tries[0] = f[4]; t.tries[1] = f[5]; t.made[0] = f[6]; t.made[1] = f[7]
             t.bonus[0] = f[8]; t.bonus[1] = f[9]; t.done[0] = f[10] == 1; t.done[1] = f[11] == 1
             t.levelWins[0] = f[12]; t.levelWins[1] = f[13]; t.resetPending = f[14] == 1
+            t.set = Trick.LEVELS[t.level].set
             t.results.clear()
             p["tr"]?.split(';')?.filter { it.isNotEmpty() }?.forEach { t.results += it.toInt() }
             m.applyTrickLayout()

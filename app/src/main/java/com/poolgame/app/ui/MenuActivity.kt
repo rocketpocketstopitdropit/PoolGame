@@ -36,6 +36,8 @@ class MenuActivity : Activity() {
     private var practiceLevel = 0
     private var aimSens = 5
     private var callMode = 0
+    private var scratchKitchen = false
+    private var trickSet = 0
     private var tableSize = TableSize.DEFAULT
     private var prediction = true
     private var resumeBtn: TextView? = null
@@ -87,6 +89,8 @@ class MenuActivity : Activity() {
         practiceLevel = prefs.getInt("practiceLevel", 0).coerceIn(0, com.poolgame.app.core.Trick.LEVELS.size - 1)
         aimSens = prefs.getInt("aimSens", 5).coerceIn(1, 10)
         callMode = prefs.getInt("callMode", 0).coerceIn(0, 2)
+        scratchKitchen = prefs.getBoolean("scratchKitchen", false)
+        trickSet = prefs.getInt("trickSet", 0).coerceIn(0, 1)
         tableSize = TableSize.fromName(prefs.getString("tableSize", null)) ?: TableSize.DEFAULT
         prediction = prefs.getBoolean("prediction", true)
         clockOn = prefs.getBoolean("clockOn", false)
@@ -172,7 +176,7 @@ class MenuActivity : Activity() {
             .putBoolean("clockOn", clockOn).putInt("clockSec", clockSec)
             .putBoolean("practice", practice)
             .putInt("opp", opp).putBoolean("practiceRules", practiceRules).putInt("practiceLevel", practiceLevel)
-            .putInt("aimSens", aimSens).putInt("callMode", callMode).putString("tableSize", tableSize.name)
+            .putInt("aimSens", aimSens).putInt("callMode", callMode).putBoolean("scratchKitchen", scratchKitchen).putInt("trickSet", trickSet).putString("tableSize", tableSize.name)
             .putBoolean("prediction", prediction)
             .putInt("octPlayers", octPlayers).putBoolean("octTeams", octTeams).putInt("octLayout", octLayout).apply()
         refreshRecord()
@@ -224,9 +228,10 @@ class MenuActivity : Activity() {
         var skillTitleRef: TextView? = null
         var refresh: () -> Unit = {}
         fun help(t: String) = label(t, 12.5f, 0xFF8A97A1.toInt()).apply { setPadding(0, dpi(8f), 0, 0); setLineSpacing(0f, 1.15f) }
-        val trickHelp = help("Trick shots: half the table's missing between the break area and the far end. " +
-            "Jump the cue ball across the gap and sink the 1. Five levels, taking turns with the computer " +
-            "or a friend: whoever makes it in fewer shots wins the level, and most levels wins the match.")
+        val trickHelp = help("Trick shots, taking turns with the computer or a friend: whoever makes each level in " +
+            "fewer shots wins it, and most levels wins the match. Gap jumps: half the table's missing between the " +
+            "break area and the far end; jump the cue ball across and sink the 1. Classics: famous trick shots on an " +
+            "ordinary table, mostly getting the 1 in round, over or between other balls.")
         val bumperHelp = help("Bumper pool: a small table with a cup at each end and twelve bumpers in the way. " +
             "No cue ball: you shoot your own five balls (red, or white) into the far cup, your marked (spotted) ball " +
             "first. Both marked balls go at once to open. Your ball in your own cup, a ball off the table or a jump " +
@@ -257,6 +262,11 @@ class MenuActivity : Activity() {
         card.addView(segmentedGrid(listOf("8-Ball", "9-Ball", "Circuit", "Pocket Wars", "Cutthroat", "Bumper", "Octagon", "Trick"), 4,
             modes.indexOf(mode).coerceAtLeast(0)) { mode = modes[it]; refresh(); save() })
         for (h in listOf(circuitHelp, warsHelp, cutHelp, trickHelp, bumperHelp, octHelp)) card.addView(h)
+        // Trick shots: which set of levels a match plays.
+        val trickSetBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        trickSetBlock.addView(section("TRICK SHOTS"))
+        trickSetBlock.addView(segmented(com.poolgame.app.core.Trick.SETS, trickSet) { trickSet = it; save() })
+        card.addView(trickSetBlock)
 
         // The octagon table: how many play, and which bumpers (with a picture of the table).
         val octBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -359,8 +369,9 @@ class MenuActivity : Activity() {
                 else "No rules: plain red and yellow balls (and the black). Hold any ball to move it anywhere."
             matchBlockRef?.visibility = if (practice) View.GONE else View.VISIBLE
             skillBlockRef?.visibility = if (vsCpu) View.VISIBLE else View.GONE
-            callBlockRef?.visibility = if (mode == GameMode.EIGHT_BALL || mode == GameMode.NINE_BALL) View.VISIBLE else View.GONE
+            callBlockRef?.visibility = if (poolTable) View.VISIBLE else View.GONE
             trickHelp.visibility = if (mode == GameMode.TRICK) View.VISIBLE else View.GONE
+            trickSetBlock.visibility = if (mode == GameMode.TRICK && !practice) View.VISIBLE else View.GONE
             bumperHelp.visibility = if (mode == GameMode.BUMPER) View.VISIBLE else View.GONE
             circuitHelp.visibility = if (mode == GameMode.CIRCUIT) View.VISIBLE else View.GONE
             warsHelp.visibility = if (mode == GameMode.POCKET_WARS) View.VISIBLE else View.GONE
@@ -418,7 +429,17 @@ class MenuActivity : Activity() {
         callBlock.addView(section("CALL POCKET"))
         callBlock.addView(segmented(listOf("Off", "8 & 9 only", "Every shot"), callMode) { callMode = it; save() })
         callBlock.addView(label("Tap a pocket to call it. A ball in the wrong pocket is slop: your turn ends " +
-            "(the 8 in the wrong pocket loses; a 9 in the wrong pocket is respotted).", 12f, 0xFF8A97A1.toInt())
+            "(the 8 in the wrong pocket loses; a 9 in the wrong pocket is respotted). Circuit, Pocket Wars and Cutthroat " +
+            "use Every shot only (in Pocket Wars a slopped ball is spotted and scores nothing).", 12f, 0xFF8A97A1.toInt())
+            .apply { setPadding(0, dpi(6f), 0, 0) })
+        // Bar rules: ball in hand in the kitchen after a scratch.
+        callBlock.addView(section("AFTER A SCRATCH"))
+        callBlock.addView(segmented(listOf("Ball in hand anywhere", "In the kitchen (bar rules)"), if (scratchKitchen) 1 else 0) {
+            scratchKitchen = it == 1; save()
+        })
+        callBlock.addView(label("Bar rules: after a scratch the next player places the cue ball behind the head string and " +
+            "must shoot out of the kitchen: a ball behind the line can't be hit until the cue ball has crossed it. " +
+            "Other fouls still give ball in hand anywhere.", 12f, 0xFF8A97A1.toInt())
             .apply { setPadding(0, dpi(6f), 0, 0) })
         matchBlock.addView(callBlock)
         callBlockRef = callBlock
@@ -734,6 +755,7 @@ class MenuActivity : Activity() {
             putExtra(GameActivity.EXTRA_OCT_PLAYERS, octPlayers)
             putExtra(GameActivity.EXTRA_OCT_TEAMS, octTeams)
             putExtra(GameActivity.EXTRA_OCT_LAYOUT, octLayout)
+            putExtra(GameActivity.EXTRA_TRICK_SET, trickSet)
         })
     }
 

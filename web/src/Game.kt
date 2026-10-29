@@ -65,7 +65,9 @@ class Game(
     private val practiceRules: Boolean = false,  // practice: play the game's own rules on your own (not the free table)
     private val octPlayers: Int = 4,             // octagon table: how many players (2 to 4)
     private val octTeams: Boolean = false,       // octagon table, four players: two teams of two
-    private val octLayout: Int = 0               // octagon table: the bumper layout
+    private val octLayout: Int = 0,              // octagon table: the bumper layout
+    private val scratchKitchen: Boolean = false, // bar rules: ball in hand in the kitchen after a scratch
+    private val trickSet: Int = 0                // trick-shot match: 0 the gap jumps, 1 the classics
 ) {
     private enum class Phase { RPS, HANDOFF, PICK, HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
     private enum class Rps { PICK, SHAKE, REVEAL }
@@ -305,11 +307,13 @@ class Game(
         breaker = breakerPlayer
         useTable()
         match = Match(mode, names)
+        match.trick.set = trickSet.coerceIn(0, Trick.SETS.size - 1)
         match.teams = octTeams && names.size == 4 && !practiceMode
         match.world.trackOrientation = true
         match.world.listener = makeListener()
         match.rack(rng, breaker)
         match.callMode = if (practice) CallMode.OFF else callMode
+        match.scratchKitchen = scratchKitchen && !practice
         revealTo = if (vsCpu || practiceMode) 0 else -1
         rpShots = 0; rpFouls = 0; practiceMatch = null; practiceSnapshot = null
         if (rulesPractice) match.message = "${gameName()} practice · you take every shot · place the cue ball and break"
@@ -398,7 +402,7 @@ class Game(
     fun isPractice() = practiceMode
 
     private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practiceMode, breaker, match.callMode, tableSize, rulesPractice,
-        octPlayers, octTeams, octLayout)
+        octPlayers, octTeams, octLayout, match.scratchKitchen, match.trick.set)
 
     private fun gameName() = when (mode) {
         GameMode.EIGHT_BALL -> "8-Ball"; GameMode.NINE_BALL -> "9-Ball"; GameMode.CIRCUIT -> "Circuit Pool"
@@ -519,7 +523,7 @@ class Game(
 
     /** Cutthroat: the shooter takes group [g] (one nobody has), and play goes on. */
     private fun cutPick(g: Int) {
-        if (match.cut.choosing < 0 || g !in match.cut.free()) return
+        if (match.cut.choosing < 0 || g !in match.cutPickable()) return
         val out = match.cutPick(g)
         // On your own, the two absent opponents get the other groups as soon as you've picked yours.
         if (rulesPractice) for (q in 1..2) if (match.cut.group[q] < 0) match.cut.group[q] = match.cut.free()[0]
@@ -1460,7 +1464,7 @@ class Game(
         val head = when {
             trickPractice -> "PRACTICE · ${lv.name.uppercase()}"
             t.suddenDeath -> "SUDDEN DEATH · ${lv.name.uppercase()}"
-            else -> "LEVEL ${t.levelNo + 1} OF ${Trick.LEVELS.size} · ${lv.name.uppercase()}"
+            else -> "LEVEL ${t.levelNo + 1} OF ${Trick.levelsOf(t.set).size} · ${lv.name.uppercase()}"
         }
         ctx.fillText(ellipsize(ctx, head, bw - 20), cx, top + 27)
         ctx.font = font(13.0, false); ctx.fillStyle = "#CED6DD"
@@ -1552,7 +1556,7 @@ class Game(
         }
         ctx.setLineDash(noDash)
         if (pr.hitId >= 0) {
-            val legal = practice || pr.hitId in match.legalTargets()
+            val legal = practice || match.legalFirstHit(pr.hitId, pr.crossedLine(P.HEAD_X))
             val gx = sx(pr.hitX); val gy = sy(pr.hitY)
             ctx.strokeStyle = if (legal) "rgba(255,255,255,0.88)" else "rgba(255,80,80,0.88)"
             ctx.circle(gx, gy, rpx); ctx.stroke()
@@ -1669,7 +1673,7 @@ class Game(
         } else if (trick) {
             val t = match.trick
             ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
-            val lvl = if (t.suddenDeath) "Sudden death" else "Level ${t.levelNo + 1} of ${Trick.LEVELS.size}"
+            val lvl = if (t.suddenDeath) "Sudden death" else "Level ${t.levelNo + 1} of ${Trick.levelsOf(t.set).size}"
             ctx.fillText(ellipsize(ctx, "$lvl · ${Trick.LEVELS[t.level].name} · fewest shots wins", midR - midL), (midL + midR) / 2, subY)
         } else if (bumper && phase == Phase.HUMAN) {
             ctx.font = font(min(12.0, hudH * 0.2), false); ctx.fillStyle = "#F2C94C"
@@ -2190,7 +2194,7 @@ class Game(
         val bw = (pw - 32 - 2 * gap) / 3
         val bh = ph * 0.56
         val by = overPanel.t + ph * 0.34
-        val free = match.cut.free()
+        val free = match.cutPickable()
         for (g in 0..2) {
             val r = pickBtn[g]
             r.set(overPanel.l + 16 + g * (bw + gap), by, overPanel.l + 16 + g * (bw + gap) + bw, by + bh)
@@ -2207,7 +2211,7 @@ class Game(
             ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"
             ctx.font = font(min(12.0, bh * 0.11), false); ctx.fillStyle = if (open) "#CED6DD" else "#6B7780"
             val owner = match.cut.ownerOfGroup(g)
-            ctx.fillText(if (open) "$left on the table" else "${names[owner]}'s", r.cx, r.t + bh * 0.82)
+            ctx.fillText(if (open) "$left on the table" else if (owner >= 0) "${names[owner]}'s" else "all down", r.cx, r.t + bh * 0.82)
         }
     }
 
@@ -2802,7 +2806,7 @@ class Game(
         }
         ctx.setLineDash(noDash)
         if (pr.hitId >= 0) {
-            val legal = practice || pr.hitId in match.legalTargets()
+            val legal = practice || match.legalFirstHit(pr.hitId, pr.crossedLine(P.HEAD_X))
             ctx.strokeStyle = if (legal) "rgba(255,255,255,0.88)" else "rgba(255,80,80,0.88)"
             ctx.lineWidth = 2.0
             if (povCam.project(pr.hitX, pr.hitY, P.R, povPt)) {

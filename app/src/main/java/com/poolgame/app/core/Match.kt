@@ -53,6 +53,13 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     /** Pocket the shooter has called for the next shot (index into Table.pockets), or -1. */
     var calledPocket = -1
 
+    /**
+     * Bar rules: after a scratch (the cue ball pocketed or off the table) the next player has ball in hand
+     * behind the head string ("in the kitchen") instead of anywhere, and has to shoot out of it — the cue
+     * ball must cross the head string before it touches a ball, unless that ball is on or past the line.
+     */
+    var scratchKitchen = false
+
     /** Trick-shot match state (only used in GameMode.TRICK). */
     val trick = TrickState()
 
@@ -71,6 +78,10 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         GameMode.OCTAGON -> names.size.coerceIn(2, 4)
         else -> 2
     }
+
+    /** The games on the regulation table with a cue ball and six pockets (not trick shots or bumper pool). */
+    val poolGame get() = mode == GameMode.EIGHT_BALL || mode == GameMode.NINE_BALL || mode == GameMode.CIRCUIT ||
+        mode == GameMode.POCKET_WARS || mode == GameMode.CUTTHROAT
 
     /** Bumper pool on either table: no cue ball, each player shoots their own five balls. */
     val bumperGame get() = mode == GameMode.BUMPER || mode == GameMode.OCTAGON
@@ -92,7 +103,8 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         // The trick-shot game uses the gap table, bumper pool its own table, everything else the regulation table.
         // (A trick match keeps whatever holes the current level has: the CPU's copies are made mid-game.)
         when (mode) {
-            GameMode.TRICK -> if (!Table.gap) Table.useGap()
+            // (The classics are on the ordinary 9 ft table; a copy made mid-match keeps whichever table is in use.)
+            GameMode.TRICK -> if (!Table.gap && !Table.trickClassic) Table.useGap()
             GameMode.BUMPER -> Table.useBumper()
             GameMode.OCTAGON -> if (!Table.octagon) Table.useOctagon()
             else -> Table.useStandard()
@@ -104,6 +116,10 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     private var preCalled = -1
     private var preCallActive = false
     private var preCue = 0
+    /** This shot is from the kitchen after a scratch (or a foul on the break): it has to go out of it. */
+    private var preShootOut = false
+    /** Object balls behind the head string when the shot started (bit n = ball n). */
+    private var preBehind = 0
     private val preMarked = BooleanArray(4)
     /** Octagon table: whose balls each player is shooting this turn (their own, or their partner's once theirs are all down). */
     private val prePlays = intArrayOf(0, 1, 2, 3)
@@ -119,6 +135,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         callMode = o.callMode; calledPocket = o.calledPocket
         preCalled = o.preCalled; preCallActive = o.preCallActive
         preCue = o.preCue
+        preShootOut = o.preShootOut; preBehind = o.preBehind; scratchKitchen = o.scratchKitchen
         o.preMarked.copyInto(preMarked); o.prePlays.copyInto(prePlays)
         teams = o.teams
         for (p in 0..3) { opening[p] = o.opening[p]?.copyOf(); openIds[p] = o.openIds[p] }
@@ -292,17 +309,49 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
 
     // ------------------------------------------------------------------ shooting
 
+    /** 8-ball and 9-ball have a money ball; in the other pool games only "call every shot" means anything. */
+    private val moneyBallGame get() = mode == GameMode.EIGHT_BALL || mode == GameMode.NINE_BALL
+
     /** Whether the shooter must call a pocket before this shot. */
-    fun callRequired(): Boolean = !isBreak && mode != GameMode.TRICK && !bumperGame && mode != GameMode.CIRCUIT &&
-        mode != GameMode.POCKET_WARS && mode != GameMode.CUTTHROAT && when (callMode) {
+    fun callRequired(): Boolean = !isBreak && poolGame && when (callMode) {
         CallMode.OFF -> false
-        CallMode.MONEY_BALL -> if (mode == GameMode.EIGHT_BALL) onEight(current) else lowestBall() == 9
+        CallMode.MONEY_BALL -> moneyBallGame && (if (mode == GameMode.EIGHT_BALL) onEight(current) else lowestBall() == 9)
         CallMode.EVERY_SHOT -> true
     }
 
     /** Calling is allowed whenever the rule is on (e.g. to call a 9-ball combo). */
-    fun callAllowed(): Boolean = callMode != CallMode.OFF && !isBreak && mode != GameMode.TRICK && !bumperGame &&
-        mode != GameMode.CIRCUIT && mode != GameMode.POCKET_WARS && mode != GameMode.CUTTHROAT
+    fun callAllowed(): Boolean = !isBreak && poolGame &&
+        (callMode == CallMode.EVERY_SHOT || (callMode == CallMode.MONEY_BALL && moneyBallGame))
+
+    /** "Call every shot" is on for this shot: only a ball in the called pocket counts as a pot for the shooter. */
+    private val everyShot get() = callMode == CallMode.EVERY_SHOT && preCallActive
+
+    /** With "call every shot": did any of [ids] go in the called pocket? (Always true when it's off.) */
+    private fun calledIn(ids: List<Int>, log: ShotLog) = !everyShot || ids.any { log.pocketIn[it] == preCalled }
+
+    /**
+     * Bar rules, shooting out of the kitchen: the first ball hit was behind the head string at the start of the
+     * shot and the cue ball never crossed the line before touching it. A reason, or "" for none.
+     */
+    fun kitchenFoul(log: ShotLog): String {
+        if (!preShootOut || log.firstHit <= 0) return ""
+        val crossed = log.cueMaxX > P.HEAD_X || log.hitX > P.HEAD_X
+        val behind = (preBehind and (1 shl log.firstHit)) != 0
+        return if (!crossed && behind) "Didn't shoot out of the kitchen" else ""
+    }
+
+    /**
+     * For the aim guide: may ball [id] be the first one hit? [crossedHead] says whether the cue ball crosses the
+     * head string before reaching it (shooting out of the kitchen, a ball behind the line needs that).
+     */
+    fun legalFirstHit(id: Int, crossedHead: Boolean): Boolean {
+        if (id !in legalTargets()) return false
+        val fromKitchen = poolGame && kitchenOnly && !isBreak
+        return !(fromKitchen && !crossedHead && world.balls[id].x < P.HEAD_X)
+    }
+
+    /** Ball in hand after a foul: behind the head string after a scratch under bar rules, otherwise anywhere. */
+    private fun kitchenAfter(log: ShotLog) = scratchKitchen && (0 in log.pocketed || 0 in log.jumpedOff)
 
     fun beginShot() {
         preTargets = legalTargets(current)
@@ -311,6 +360,9 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         preCalled = if (preCallActive) calledPocket else -1
         calledPocket = -1
         preCue = world.cue
+        preShootOut = poolGame && kitchenOnly && !isBreak
+        preBehind = 0
+        for (id in 1..15) if (world.balls[id].onTable && world.balls[id].x < P.HEAD_X) preBehind = preBehind or (1 shl id)
         if (bumperGame) for (p in 0 until players) { preMarked[p] = world.balls[markedBall(p)].onTable; prePlays[p] = playsFor(p) }
     }
 
@@ -369,6 +421,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             // bounces it off the slate is).
             log.scooped -> { foul = true; reason = "Scoop shot — the cue ball was dug under and lifted" }
             log.firstHit < 0 -> { foul = true; reason = "No ball hit" }
+            kitchenFoul(log).isNotEmpty() -> { foul = true; reason = kitchenFoul(log) }
             !(mode == GameMode.EIGHT_BALL && isBreak) && log.firstHit !in preTargets -> {
                 foul = true
                 reason = if (mode == GameMode.NINE_BALL) "Must hit the ${preTargets[0]} first" else "Wrong ball hit first"
@@ -441,7 +494,6 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             else -> { id -> groupOf(id) == groups[shooter] }
         }
         // With "call every shot", only your ball in the called pocket keeps the turn; anything else is slop.
-        val everyShot = callMode == CallMode.EVERY_SHOT && preCallActive
         val keep = win < 0 && !foul && objects.any { own(it) && (!everyShot || log.pocketIn[it] == preCalled) }
         if (win < 0 && !foul && !keep && everyShot && objects.isNotEmpty()) notes += "Slop: not in the called pocket"
 
@@ -460,10 +512,10 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         if (foul) {
             current = opp
             ballInHand = true
-            kitchenOnly = false
+            kitchenOnly = kitchenAfter(log)
             if (cueIn || cueOff || !world.balls[0].onTable) restoreCue()
             notes.add(0, "Foul: $reason")
-            notes += "${has(opp)} ball in hand"
+            notes += "${has(opp)} ball in hand" + if (kitchenOnly) " in the kitchen" else ""
         } else if (!keep) {
             current = opp
             notes += "${names[opp]} to shoot"
@@ -487,7 +539,11 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     }
 
     /** The table for the current level (some levels have a hole cut in the cloth). */
-    fun applyTrickLayout() { val lv = Trick.LEVELS[trick.level]; Table.useGap(lv.holes, lv.farCorners) }
+    fun applyTrickLayout() {
+        val lv = Trick.LEVELS[trick.level]
+        if (lv.standard) { Table.useStandard(TableSize.NINE); Table.trickClassic = true }
+        else Table.useGap(lv.holes, lv.farCorners)
+    }
 
     /** Puts the balls where the current level has them, with the cue ball in hand in the break area. */
     fun setupTrickLevel() {
@@ -583,12 +639,13 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             t.levelNo++
             if (t.suddenDeath) {
                 if (levelResult >= 0) win = levelResult
-            } else if (t.levelNo >= Trick.LEVELS.size) {
+            } else if (t.levelNo >= Trick.levelsOf(t.set).size) {
                 if (t.levelWins[0] != t.levelWins[1]) win = if (t.levelWins[0] > t.levelWins[1]) 0 else 1
                 else { t.suddenDeath = true; notes += "Sudden death!" }
             }
             if (win < 0) {
-                t.level = t.levelNo % Trick.LEVELS.size
+                val set = Trick.levelsOf(t.set)
+                t.level = set[t.levelNo % set.size]
                 t.clearLevel()
                 t.starter = 1 - t.starter
                 current = t.starter
@@ -1236,6 +1293,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         0 in log.jumpedOff -> "Cue ball jumped off the table"
         log.scooped -> "Scoop shot — the cue ball was dug under and lifted"
         log.firstHit < 0 -> "No ball hit"
+        kitchenFoul(log).isNotEmpty() -> kitchenFoul(log)
         log.jumpedOff.isNotEmpty() -> "Ball jumped off the table"
         else -> ""
     }
@@ -1327,12 +1385,16 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         if (foul) {
             current = opp
             ballInHand = true
-            kitchenOnly = brk
+            kitchenOnly = brk || kitchenAfter(log)
             if (!world.balls[0].onTable) restoreCue()
             notes.add(0, "Foul: $reason")
-            notes += "${has(opp)} ball in hand" + if (brk) " behind the line" else ""
+            notes += "${has(opp)} ball in hand" + if (kitchenOnly) " behind the line" else ""
         } else if (theirs > 0 && !brk) {
             current = opp
+            notes += "${names[opp]} to shoot"
+        } else if (objects.isNotEmpty() && !calledIn(objects, log)) {
+            current = opp
+            notes += "Slop: not in the called pocket"
             notes += "${names[opp]} to shoot"
         } else if (objects.isNotEmpty()) {
             keep = true
@@ -1360,6 +1422,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             0 in log.jumpedOff -> "Cue ball jumped off the table"
             log.scooped -> "Scoop shot — the cue ball was dug under and lifted"
             log.firstHit < 0 -> "No ball hit"
+            kitchenFoul(log).isNotEmpty() -> kitchenFoul(log)
             log.jumpedOff.isNotEmpty() -> "Ball jumped off the table"
             !brk && !objects && !log.railAfterHit -> "No rail after contact"
             else -> ""
@@ -1400,6 +1463,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         }
         var gift = false
         var scored = 0
+        var slop = false
         if (foul) {
             for (id in objects) respot(id)
             if (objects.isNotEmpty()) notes += if (objects.size == 1) "the ${objects[0]} is spotted" else "${objects.size} balls spotted"
@@ -1408,6 +1472,11 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             val o = if (pk in pw.owner.indices) pw.owner[pk] else -1
             when {
                 brk -> scored += id
+                // Call every shot: a ball you sink anywhere but the called pocket scores nothing and is spotted
+                // (one in the other player's pocket still scores for them, as below).
+                everyShot && pk != preCalled && !(o == opp && (log.banked and (1 shl id)) == 0) -> {
+                    respot(id); slop = true; notes += "the $id wasn't in the called pocket · spotted"
+                }
                 o == -1 -> { pw.owner[pk] = shooter; scored += id; notes += (if (you(shooter)) "you claim" else "${names[shooter]} claims") + " the ${pocketName(pk)}" }
                 o == shooter -> scored += id
                 (log.banked and (1 shl id)) != 0 -> {
@@ -1442,11 +1511,11 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         if (foul) {
             current = opp
             ballInHand = true
-            kitchenOnly = false
+            kitchenOnly = kitchenAfter(log)
             if (!world.balls[0].onTable) restoreCue()
             notes.add(0, "Foul: $reason")
-            notes += "${has(opp)} ball in hand"
-        } else if (gift) {
+            notes += "${has(opp)} ball in hand" + if (kitchenOnly) " in the kitchen" else ""
+        } else if (gift || (slop && scored == 0)) {
             current = opp
             notes += "${names[opp]} to shoot"
         } else if (objects.isNotEmpty()) {
@@ -1472,8 +1541,15 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         return if (g < 0) 5 else CutthroatState.ballsOf(g).count { world.balls[it].onTable }
     }
 
-    /** Cutthroat: player [p] has a group and none of it is left — they're out (until a foul puts one back). */
-    fun cutOut(p: Int) = cut.group[p] >= 0 && cutLeft(p) == 0
+    /**
+     * Cutthroat: player [p] is out — they have a group and none of it is left (until a foul puts one back), or
+     * they never got a group and every group nobody has is already off the table, so there's nothing left for
+     * them to take.
+     */
+    fun cutOut(p: Int) = if (cut.group[p] >= 0) cutLeft(p) == 0 else cutPickable().isEmpty()
+
+    /** Cutthroat: the groups that can still be picked — nobody has them and they have a ball on the table. */
+    fun cutPickable(): List<Int> = cut.free().filter { g -> CutthroatState.ballsOf(g).any { world.balls[it].onTable } }
 
     /** Cutthroat: the player whose group ball [id] is in, or -1 (the cue ball, or a group nobody has yet). */
     fun cutOwner(id: Int) = cut.ownerOfGroup(CutthroatState.groupOf(id))
@@ -1490,6 +1566,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         0 in log.jumpedOff -> "Cue ball jumped off the table"
         log.scooped -> "Scoop shot — the cue ball was dug under and lifted"
         log.firstHit < 0 -> "No ball hit"
+        kitchenFoul(log).isNotEmpty() -> kitchenFoul(log)
         log.jumpedOff.isNotEmpty() -> "Ball jumped off the table"
         log.pocketed.none { it != 0 } && !log.railAfterHit -> "No rail after contact"
         else -> ""
@@ -1513,7 +1590,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
     }
 
     /** Cutthroat, open table: the group the computer picks — of those nobody has, the one with most balls left. */
-    fun cutSuggestedGroup(): Int = cut.free().maxWithOrNull(compareBy<Int> { g ->
+    fun cutSuggestedGroup(): Int = cutPickable().maxWithOrNull(compareBy<Int> { g ->
         CutthroatState.ballsOf(g).count { world.balls[it].onTable } }.thenByDescending { it }) ?: 0
 
     /**
@@ -1522,7 +1599,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
      */
     fun cutPick(g: Int): ShotOutcome {
         val p = cut.choosing
-        require(p >= 0 && g in cut.free())
+        require(p >= 0 && g in cutPickable())
         val inBefore = BooleanArray(3) { !cutOut(it) }
         cut.group[p] = g
         cut.choosing = -1
@@ -1530,7 +1607,7 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         notes += (if (you(p)) "You take " else "${names[p]} takes ") + CutthroatState.groupName(g)
         if (cut.group.count { it < 0 } == 1) {
             val q = cut.group.indexOf(-1)
-            val last = cut.free().first()
+            val last = cutPickable().firstOrNull() ?: cut.free().first()
             cut.group[q] = last
             notes += (if (you(q)) "you get " else "${names[q]} gets ") + CutthroatState.groupName(last)
         }
@@ -1577,17 +1654,20 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
         // Who was still in before this shot (their balls sunk now were on the table then).
         val inBefore = BooleanArray(3) { p ->
             val g = cut.group[p]
-            g < 0 || cutLeft(p) + objects.count { CutthroatState.groupOf(it) == g } > 0
+            if (g >= 0) cutLeft(p) + objects.count { CutthroatState.groupOf(it) == g } > 0
+            else cut.free().any { f -> CutthroatState.ballsOf(f).any { world.balls[it].onTable || it in objects } }
         }
         val notes = ArrayList<String>()
         val own = objects.count { preGroup >= 0 && CutthroatState.groupOf(it) == preGroup }
         if (!foul && own > 0 && own == objects.size) notes += if (you(shooter)) "that was your own" else "${names[shooter]} sank their own"
         // Open table: the first legal pot lets the shooter pick a group.
-        if (!foul && !brk && objects.isNotEmpty() && preGroup < 0) cut.choosing = shooter
+        val called = calledIn(objects, log)
+        if (!foul && !brk && objects.isNotEmpty() && !called) notes += "Slop: not in the called pocket"
+        if (!foul && !brk && objects.isNotEmpty() && called && preGroup < 0 && cutPickable().isNotEmpty()) cut.choosing = shooter
         if (foul) notes += cutPenalty(shooter)
         isBreak = false
         // Any ball down on a legal shot keeps you at the table (even your own — that's cutting your own throat).
-        val keep = !foul && objects.isNotEmpty() && (cut.choosing == shooter || !cutOut(shooter))
+        val keep = !foul && objects.isNotEmpty() && called && (cut.choosing == shooter || !cutOut(shooter))
         return cutFinish(shooter, foul, reason, keep, inBefore, notes)
     }
 
@@ -1617,10 +1697,10 @@ class Match(val mode: GameMode, val names: Array<String> = arrayOf("Player 1", "
             val next = cutNext(shooter)
             current = next
             ballInHand = true
-            kitchenOnly = false
+            kitchenOnly = kitchenAfter(log)
             if (!world.balls[0].onTable) restoreCue()
             notes.add(0, "Foul: $reason")
-            notes += "${has(next)} ball in hand"
+            notes += "${has(next)} ball in hand" + if (kitchenOnly) " in the kitchen" else ""
         } else if (!keep) {
             val next = cutNext(shooter)
             current = next

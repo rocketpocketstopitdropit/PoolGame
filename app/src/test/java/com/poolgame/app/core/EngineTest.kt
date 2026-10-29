@@ -507,12 +507,12 @@ class EngineTest {
         var guard = 0
         while (m.winner < 0 && guard++ < 80) attempt(m, m.current == 0)
         assertEquals(0, m.winner)
-        assertEquals(Trick.LEVELS.size, m.trick.levelWins[0])
+        assertEquals(Trick.levelsOf(0).size, m.trick.levelWins[0])
     }
 
     @Test fun tiedTrickMatchGoesToSuddenDeath() {
         val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.rack(Random(1), 0)
-        repeat(Trick.LEVELS.size) { attempt(m, true); attempt(m, true) }   // the same shot both ways: every level tied
+        repeat(Trick.levelsOf(0).size) { attempt(m, true); attempt(m, true) }   // the same shot both ways: every level tied
         assertTrue(m.trick.suddenDeath); assertEquals(-1, m.winner)
         attempt(m, m.current == 1); attempt(m, m.current == 1)
         assertEquals(1, m.winner)
@@ -1200,13 +1200,39 @@ class EngineTest {
         assertTrue(m.message.contains("6–10"))
     }
 
-    @Test fun cutthroatPickingAnEmptyGroupPutsYouOut() {
+    @Test fun cutthroatAnEmptyGroupCantBePickedAndWhoeverGetsItIsOut() {
         val m = cutthroat()
         m.cut.group[1] = 1
         m.sink(1, 2, 3, 4, 5)
         cutFake(m, 12)
-        m.cutPick(0)
-        assertTrue(m.cutOut(0)); assertEquals(2, m.cutGroup(2)); assertEquals(1, m.current)
+        assertEquals(listOf(2), m.cutPickable())
+        assertEquals(2, m.cutSuggestedGroup())
+        m.cutPick(2)
+        assertEquals(0, m.cutGroup(2)); assertTrue(m.cutOut(2)); assertFalse(m.cutOut(0))
+        assertEquals(0, m.current); assertEquals(-1, m.winner)
+    }
+
+    @Test fun cutthroatPlayersWithNoGroupLeftToPickAreOut() {
+        // Player 1 has 1–5 and sinks every other ball before anyone else gets a group: the others are out.
+        val m = cutthroat()
+        m.cut.group[0] = 0
+        m.sink(6, 7, 8, 9, 10, 11, 12, 13)
+        assertFalse(m.cutOut(1))
+        val out = cutFake(m, 14, 15)
+        assertTrue(m.cutOut(1)); assertTrue(m.cutOut(2))
+        assertEquals(0, out.winner); assertEquals(0, m.winner)
+    }
+
+    @Test fun cutthroatGrouplessPlayersAreOutOnceTheFreeGroupsAreGone() {
+        // Players 1 and 2 have groups; player 3 never got one, and the last free group goes down.
+        val m = cutthroat()
+        m.cut.group[0] = 0; m.cut.group[1] = 1
+        m.sink(11, 12, 13, 14)
+        val out = cutFake(m, 15)
+        assertTrue(m.cutOut(2)); assertEquals(-1, out.winner)
+        assertTrue(out.keepTurn)
+        cutFake(m); assertEquals(1, m.current)
+        cutFake(m); assertEquals(0, m.current)   // player 3 is skipped
     }
 
     @Test fun cutthroatBreakPicksNoGroups() {
@@ -1289,5 +1315,134 @@ class EngineTest {
             assertFalse(m.cutOut(m.winner))
             assertEquals(1, (0..2).count { !m.cutOut(it) })
         }
+    }
+
+    // ------------------------------------------------------------------ call pocket in every pool game
+
+    @Test fun callEveryShotInCircuitPool() {
+        val m = circuit(); m.callMode = CallMode.EVERY_SHOT
+        m.calledPocket = 5
+        val slop = circuitPot(m, 9)            // a neutral ball, but not in the called pocket
+        assertFalse(slop.keepTurn); assertFalse(slop.foul); assertEquals(1, m.current)
+        assertFalse(m.world.balls[9].onTable)  // slopped balls stay down
+        val m2 = circuit(); m2.callMode = CallMode.EVERY_SHOT
+        m2.calledPocket = 0
+        assertTrue(circuitPot(m2, 9).keepTurn)
+        // "8 & 9 only" means nothing in Circuit Pool: no calling at all.
+        val m3 = circuit(); m3.callMode = CallMode.MONEY_BALL; m3.isBreak = false
+        assertFalse(m3.callAllowed()); assertFalse(m3.callRequired())
+    }
+
+    @Test fun callEveryShotInPocketWarsSpotsSlop() {
+        val m = wars(); m.callMode = CallMode.EVERY_SHOT
+        m.calledPocket = 3
+        val out = warsFake(m, 5, 2)            // into open pocket 2, but 3 was called
+        assertFalse(out.keepTurn); assertFalse(out.foul)
+        assertTrue(m.world.balls[5].onTable); assertEquals(0, m.pockets.score[0]); assertEquals(-1, m.pockets.owner[2])
+        assertEquals(1, m.current)
+        val m2 = wars(); m2.callMode = CallMode.EVERY_SHOT
+        m2.calledPocket = 2
+        assertTrue(warsFake(m2, 5, 2).keepTurn)
+        assertEquals(0, m2.pockets.owner[2]); assertEquals(5, m2.pockets.score[0])
+        // Into the opponent's pocket unbanked still scores for them, called or not.
+        val m3 = wars(); m3.callMode = CallMode.EVERY_SHOT; m3.pockets.owner[4] = 1
+        m3.calledPocket = 0
+        assertFalse(warsFake(m3, 7, 4).keepTurn); assertEquals(7, m3.pockets.score[1])
+    }
+
+    @Test fun callEveryShotInCutthroat() {
+        val m = cutthroat(); m.callMode = CallMode.EVERY_SHOT
+        m.calledPocket = 4
+        val slop = cutFake(m, 7)               // goes in pocket 0
+        assertFalse(slop.keepTurn); assertEquals(-1, m.cut.choosing); assertEquals(1, m.current)
+        val m2 = cutthroat(); m2.callMode = CallMode.EVERY_SHOT
+        m2.calledPocket = 0
+        assertTrue(cutFake(m2, 7).keepTurn); assertEquals(0, m2.cut.choosing)
+    }
+
+    // ------------------------------------------------------------------ bar rules: the kitchen after a scratch
+
+    private fun eightFake(m: Match, first: Int, scratch: Boolean): ShotOutcome {
+        m.beginShot()
+        val log = m.world.log
+        log.reset(); log.firstHit = first; log.railAfterHit = true
+        if (scratch) { log.pocketed += 0; log.pocketIn[0] = 0; m.world.balls[0].onTable = false }
+        return m.resolve()
+    }
+
+    @Test fun scratchGivesBallInHandInTheKitchenUnderBarRules() {
+        val m = Match(GameMode.EIGHT_BALL, arrayOf("You", "CPU")); m.rack(Random(5), 0)
+        m.isBreak = false; m.ballInHand = false; m.kitchenOnly = false; m.scratchKitchen = true
+        val out = eightFake(m, 3, true)
+        assertTrue(out.foul); assertTrue(m.ballInHand); assertTrue(m.kitchenOnly)
+        assertTrue(m.message.contains("kitchen"))
+        // A foul that isn't a scratch: ball in hand anywhere.
+        val m2 = Match(GameMode.EIGHT_BALL, arrayOf("You", "CPU")); m2.rack(Random(5), 0)
+        m2.isBreak = false; m2.ballInHand = false; m2.scratchKitchen = true
+        m2.groups[0] = Group.SOLIDS; m2.groups[1] = Group.STRIPES
+        assertTrue(eightFake(m2, 12, false).foul); assertFalse(m2.kitchenOnly)
+        // Without bar rules a scratch is ball in hand anywhere.
+        val m3 = Match(GameMode.EIGHT_BALL, arrayOf("You", "CPU")); m3.rack(Random(5), 0)
+        m3.isBreak = false; m3.ballInHand = false
+        eightFake(m3, 3, true); assertFalse(m3.kitchenOnly)
+    }
+
+    private fun kitchenShot(objX: Double): ShotOutcome {
+        val m = Match(GameMode.NINE_BALL, arrayOf("You", "CPU"))
+        m.world.clearAll()
+        m.world.put(1, objX, P.W / 2)
+        m.world.put(9, P.L - 0.2, P.W - 0.2)
+        m.world.put(0, P.HEAD_X - 0.5, P.W / 2)
+        m.isBreak = false; m.ballInHand = true; m.kitchenOnly = true; m.scratchKitchen = true
+        assertEquals(objX >= P.HEAD_X, m.legalFirstHit(1, false))
+        m.shoot(0.0, 1.6, 0.0, 0.0); m.world.simulate()
+        return m.resolve()
+    }
+
+    @Test fun fromTheKitchenYouMustShootOut() {
+        val behind = kitchenShot(P.HEAD_X - 0.2)
+        assertTrue(behind.foul); assertEquals("Didn't shoot out of the kitchen", behind.foulReason)
+        val past = kitchenShot(P.HEAD_X + 0.3)
+        assertFalse(past.foulReason == "Didn't shoot out of the kitchen")
+    }
+
+    // ------------------------------------------------------------------ the classic trick shots
+
+    @Test fun classicsArePlayedOnTheOrdinaryTable() {
+        val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.trick.set = 1; m.rack(Random(1), 0)
+        assertEquals(Trick.levelsOf(1).first(), m.trick.level)
+        assertTrue(Trick.LEVELS[m.trick.level].standard)
+        assertFalse(Table.gap); assertEquals(6, Table.pockets.size)
+        assertEquals(8, Trick.levelsOf(1).size)
+        // A copy made mid-match (as the CPU does) keeps the ordinary table.
+        val copy = Match(GameMode.TRICK, arrayOf("You", "CPU")); copy.copyFrom(m)
+        assertFalse(Table.gap)
+        Table.useGap()
+    }
+
+    @Test fun classicRules() {
+        val idx = Trick.levelsOf(1)
+        val byName = idx.associateBy { Trick.LEVELS[it].name }
+        val combo = Trick.LEVELS[byName.getValue("Frozen combo")]
+        assertFalse(Trick.judge(combo, log(1, listOf(1))).made)                 // has to hit the 2 first
+        assertTrue(Trick.judge(combo, log(2, listOf(1))).made)
+        val rail = Trick.LEVELS[byName.getValue("Railroad")]
+        assertFalse(Trick.judge(rail, log(1, listOf(1))).made)                  // both have to go
+        assertTrue(Trick.judge(rail, log(2, listOf(1, 2))).made)
+        val bank = Trick.LEVELS[byName.getValue("Bank it")]
+        assertFalse(Trick.judge(bank, log(1, listOf(1))).made)
+        assertTrue(Trick.judge(bank, log(1, listOf(1)) { banked = 1 shl 1 }).made)
+        val needle = Trick.LEVELS[byName.getValue("Eye of the needle")]
+        assertFalse(Trick.judge(needle, log(1, listOf(1)) { touched[1] = 1 shl 2 }).made)
+        assertTrue(Trick.judge(needle, log(1, listOf(1)) { cutDeg = 0.0 }).made)   // no cut needed here
+    }
+
+    @Test fun classicsMatchRunsThroughAllEightLevels() {
+        val m = Match(GameMode.TRICK, arrayOf("You", "CPU")); m.trick.set = 1; m.rack(Random(1), 0)
+        var guard = 0
+        while (m.winner < 0 && guard++ < 200) attempt(m, m.current == 0)
+        assertEquals(0, m.winner)
+        assertTrue(m.trick.results.size >= 8)
+        Table.useGap()
     }
 }
