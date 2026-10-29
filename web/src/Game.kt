@@ -149,6 +149,9 @@ class Game(
     // While balls roll (and while dragging a ball in 3D) the camera holds still instead of following the cue ball.
     private var povLocked = false
     private var povLockX = 0.0; private var povLockY = 0.0
+    /** 3D view: the player tapped the empty table to look from there (the aim stays as it is), or false: the cue ball. */
+    private var povFocus = false
+    private var povFocusX = 0.0; private var povFocusY = 0.0
     private val povXY = DoubleArray(2)
     private val resetViewBtn = Rect()
     private val view3dBtn = Rect()
@@ -489,7 +492,7 @@ class Game(
         }
         power = 0.0
         elevDeg = 0.0
-        povLocked = false
+        povLocked = false; povFocus = false
         // Cutthroat: a ball down on an open table — the shooter picks a group first (the CPU straight away).
         val chooser = if (cutthroat) match.cut.choosing else -1
         if (chooser >= 0) {
@@ -2320,7 +2323,7 @@ class Game(
         if (!pov && inView && view3dBtn.contains(x, y) && povAllowed()) { setPov(true); ptrMode[id] = Touch.BUTTON; return }
         if (pov && inView) {
             if (topViewBtn.contains(x, y)) { setPov(false); ptrMode[id] = Touch.BUTTON; return }
-            if (resetViewBtn.contains(x, y)) { povCtl.reset(); ptrMode[id] = Touch.BUTTON; return }
+            if (resetViewBtn.contains(x, y)) { povCtl.reset(); povFocus = false; ptrMode[id] = Touch.BUTTON; return }
             ptrX[id] = x; ptrY[id] = y
             if (anyTouch(Touch.CAM)) { ptrMode[id] = Touch.BUTTON; return }
             // A second finger on the 3D view: both fingers now move the camera.
@@ -2522,7 +2525,7 @@ class Game(
     /** Hold the camera where it is (it otherwise follows the cue ball). */
     private fun lockPov() {
         val c = match.world.cueBall
-        povLocked = true; povLockX = c.x; povLockY = c.y
+        povLocked = true; povLockX = if (povFocus) povFocusX else c.x; povLockY = if (povFocus) povFocusY else c.y
     }
 
     /** Screen point to table coordinates (on the plane of the balls' centres in 3D) into [povXY]. */
@@ -2644,7 +2647,15 @@ class Game(
             val r = povCam.ballRadius(povPt[2])
             if (hypot(x - povPt[0], y - povPt[1]) < max(r * 1.3, 16.0) && povPt[2] < bestD) { best = b.id; bestD = povPt[2] }
         }
-        if (best > 0 && !pickBumperBall(best)) aimAtBall(best)
+        if (best > 0) { if (!pickBumperBall(best)) aimAtBall(best); return }
+        // The cue ball: look from behind it again.
+        val cb = match.world.cueBall
+        if (cb.onTable && povCam.project(cb.x, cb.y, P.R + cb.z, povPt) &&
+            hypot(x - povPt[0], y - povPt[1]) < max(povCam.ballRadius(povPt[2]) * 1.3, 16.0)) { povFocus = false; return }
+        // The empty table: move the point of view there. The aim, the guide and the shot stay exactly as they are.
+        if (povCam.unproject(x, y, 0.0, povPt) && povPt[0] in 0.0..P.L && povPt[1] in 0.0..P.W) {
+            povFocus = true; povFocusX = povPt[0]; povFocusY = povPt[1]
+        }
     }
 
     // ------------------------------------------------------------------ 3D view (drawing)
@@ -2663,8 +2674,8 @@ class Game(
             cueX = animFromX + (plan.placeX - animFromX) * k
             cueY = animFromY + (plan.placeY - animFromY) * k
         }
-        val pivX = if (povLocked) povLockX else cueX
-        val pivY = if (povLocked) povLockY else cueY
+        val pivX = if (povLocked) povLockX else if (povFocus) povFocusX else cueX
+        val pivY = if (povLocked) povLockY else if (povFocus) povFocusY else cueY
         povCam.setup(pivX, pivY, aimAngle + povCtl.yaw, povCtl.pitch, povCtl.dist, a.l, a.t, a.r, a.b)
         val sc = povScene
         sc.build(povCam, w, cueX, cueY)

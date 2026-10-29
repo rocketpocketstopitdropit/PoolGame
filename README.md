@@ -75,6 +75,9 @@ swap whenever you like; **◀ Top view** goes back.
   level it. Tap a ball to line up on it, or a pocket to call it.
 - Two fingers: spread to zoom in, pinch to zoom out, move them up or down together to tilt the camera, sideways to
   swing it round the cue ball. ⟲ puts it back behind the cue. (In a browser on a computer, the mouse wheel zooms.)
+- Tap the empty table to move your point of view there: the camera looks along your aim line from that spot (for
+  example behind the object ball, to line it up with the pocket), and aiming, the guide and the shot work exactly as
+  from behind the cue ball. Tap the cue ball or ⟲ to go back; each new turn starts behind the cue ball.
 - The camera follows the cue ball, and holds still while the balls roll so you can watch the shot. CPU turns play out
   in 3D too.
 - Ball in hand: drag the cue ball where you want it. Practice: hold a ball for a moment, then drag it.

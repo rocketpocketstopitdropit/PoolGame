@@ -156,6 +156,9 @@ object ControlsGuide {
                 "a ball to line up on it, or a pocket to call it. The fine-aim roller, spin ball and power bar work as usual.",
             "Two fingers: spread to zoom in, pinch to zoom out, move them up or down together to tilt the camera, and " +
                 "sideways to swing it round the cue ball. ⟲ puts the camera back behind the cue.",
+            "Tap the empty table to move your point of view there: the camera looks down your aim line from that " +
+                "spot (say, behind the ball you're cutting), and aiming, the guide and the shot work exactly as before. " +
+                "Tap the cue ball or ⟲ to look from behind the cue ball again; a new turn starts there too.",
             "The camera follows the cue ball, and holds still while the balls roll so you can watch the shot.",
             "Ball in hand: drag the cue ball where you want it. Practice: hold a ball for a moment, then drag it.",
             "Jump shots: there's no jump button. Raise the cue, set where the tip hits and pull the power: an " +
