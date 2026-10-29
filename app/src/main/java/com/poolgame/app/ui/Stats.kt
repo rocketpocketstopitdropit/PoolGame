@@ -30,26 +30,28 @@ class Stats(context: Context) {
     // ------------------------------------------------------------------ octagon table
     // Kept per setup: 2, 3 or 4 players, or "T" for two teams of two.
 
-    private fun octKey(variant: String, vsCpu: Boolean, level: Int, slot: String) =
-        if (vsCpu) "OCTAGON${variant}_cpu${level}_$slot" else "OCTAGON${variant}_pp_$slot"
+    private fun octKey(variant: String, vsCpu: Boolean, level: Int, slot: String, mode: GameMode = GameMode.OCTAGON) =
+        if (vsCpu) "${mode.name}${variant}_cpu${level}_$slot" else "${mode.name}${variant}_pp_$slot"
 
     /** One octagon game: [youWon] against the CPUs; in pass & play, [seat] is the winner (in teams, 0 red & white, 1 blue & yellow). */
-    fun recordOctagon(variant: String, vsCpu: Boolean, level: Int, youWon: Boolean, seat: Int) {
-        val k = octKey(variant, vsCpu, level, if (vsCpu) (if (youWon) "w" else "l") else "p${seat + 1}")
+    fun recordOctagon(variant: String, vsCpu: Boolean, level: Int, youWon: Boolean, seat: Int, mode: GameMode = GameMode.OCTAGON) {
+        val k = octKey(variant, vsCpu, level, if (vsCpu) (if (youWon) "w" else "l") else "p${seat + 1}", mode)
         prefs.edit().putInt(k, prefs.getInt(k, 0) + 1).apply()
     }
-    fun octWins(variant: String, level: Int) = prefs.getInt(octKey(variant, true, level, "w"), 0)
-    fun octLosses(variant: String, level: Int) = prefs.getInt(octKey(variant, true, level, "l"), 0)
-    fun octSeatWins(variant: String, seat: Int) = prefs.getInt(octKey(variant, false, 0, "p${seat + 1}"), 0)
+    fun octWins(variant: String, level: Int, mode: GameMode = GameMode.OCTAGON) = prefs.getInt(octKey(variant, true, level, "w", mode), 0)
+    fun octLosses(variant: String, level: Int, mode: GameMode = GameMode.OCTAGON) = prefs.getInt(octKey(variant, true, level, "l", mode), 0)
+    fun octSeatWins(variant: String, seat: Int, mode: GameMode = GameMode.OCTAGON) = prefs.getInt(octKey(variant, false, 0, "p${seat + 1}", mode), 0)
 
     /** The octagon record for a setup, in a line or two. */
-    fun octSummary(variant: String, vsCpu: Boolean, level: Int): String {
-        val name = "Octagon ${octVariantName(variant)}"
-        if (vsCpu) return "$name vs level $level:  ${octWins(variant, level)} W – ${octLosses(variant, level)} L\n" +
-            "$name vs all levels:  ${(1..10).sumOf { octWins(variant, it) }} W – ${(1..10).sumOf { octLosses(variant, it) }} L"
-        if (variant == "T") return "$name pass & play wins:  Red & White  ${octSeatWins(variant, 0)} · Blue & Yellow  ${octSeatWins(variant, 1)}"
+    fun octSummary(variant: String, vsCpu: Boolean, level: Int, mode: GameMode = GameMode.OCTAGON): String {
+        val name = "${if (mode == GameMode.GAUNTLET) "Gauntlet" else "Octagon"} ${octVariantName(variant)}"
+        if (vsCpu) return "$name vs level $level:  ${octWins(variant, level, mode)} W – ${octLosses(variant, level, mode)} L\n" +
+            "$name vs all levels:  ${(1..10).sumOf { octWins(variant, it, mode) }} W – ${(1..10).sumOf { octLosses(variant, it, mode) }} L"
+        if (variant == "T") return if (mode == GameMode.GAUNTLET)
+            "$name pass & play wins:  Red's team  ${octSeatWins(variant, 0, mode)} · the other team  ${octSeatWins(variant, 1, mode)}"
+            else "$name pass & play wins:  Red & White  ${octSeatWins(variant, 0, mode)} · Blue & Yellow  ${octSeatWins(variant, 1, mode)}"
         val n = variant.toIntOrNull() ?: 2
-        return "$name pass & play wins:  " + (0 until n).joinToString(" · ") { "Player ${it + 1}  ${octSeatWins(variant, it)}" }
+        return "$name pass & play wins:  " + (0 until n).joinToString(" · ") { "Player ${it + 1}  ${octSeatWins(variant, it, mode)}" }
     }
 
     /** Short line for the end-of-game panel. */
@@ -106,6 +108,7 @@ class Stats(context: Context) {
             GameMode.POCKET_WARS -> "Pocket Wars"
             GameMode.CUTTHROAT -> "Cutthroat"
             GameMode.OCTAGON -> "Octagon bumper"
+            GameMode.GAUNTLET -> "Gauntlet"
         }
 
         /** The octagon table's setup as a short key: "2", "3", "4" players or "T" for teams. */

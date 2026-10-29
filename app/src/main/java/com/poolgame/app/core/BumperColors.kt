@@ -17,9 +17,12 @@ object BumperColors {
     /** A cup nobody is shooting at (an empty seat on the octagon table). */
     const val RING_NONE = 0xFF5C646B.toInt()
 
+    /** Balls each player has (five, or 6 to 8 on the Gauntlet): set by the match. */
+    var each = 5
+
     /** Bumper ball [id]'s player (0..3), or -1. */
-    fun ownerOf(id: Int) = if (id in 1..20) (id - 1) / 5 else -1
-    fun isMarked(id: Int) = id in 1..20 && (id - 1) % 5 == 0
+    fun ownerOf(id: Int) = if (id in 1..4 * each) (id - 1) / each else -1
+    fun isMarked(id: Int) = id in 1..4 * each && (id - 1) % each == 0
     fun ball(id: Int) = BALL[ownerOf(id).coerceIn(0, 3)]
     fun spot(id: Int) = SPOT[ownerOf(id).coerceIn(0, 3)]
 

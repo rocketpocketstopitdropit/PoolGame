@@ -45,6 +45,11 @@ class App : GameHost {
     // The octagon table: 2, 3 or 4 players, two teams of two (with 4), and which bumper layout.
     private var octPlayers = Store.getInt("octPlayers", 4).coerceIn(2, 4)
     private var octTeams = Store.getBool("octTeams", false) && octPlayers == 4
+    /** The Gauntlet: players (2 to 4), teams, red's partner in 2 v 2 (1 across, 2 blue, 3 yellow), and balls each. */
+    private var gPlayers = Store.getInt("gPlayers", 4).coerceIn(2, 4)
+    private var gTeams = Store.getBool("gTeams", false) && gPlayers == 4
+    private var gPartner = Store.getInt("gPartner", 1).coerceIn(1, 3)
+    private var gEach = Store.getInt("gEach", 7).coerceIn(6, 8)
     private var octLayout = Store.getInt("octLayout", 0).coerceIn(0, com.poolgame.app.core.Table.OCT_LAYOUTS.size - 1)
     private var playingOct = "4"
     private val guide = Guide()
@@ -185,6 +190,9 @@ class App : GameHost {
         segment("seg-tset") { trickSet = it; save(); refreshMenu() }
         segment("seg-size") { tableSize = TableSize.values()[it]; save(); refreshMenu() }
         segment("seg-octp") { octTeams = it == 3; octPlayers = if (it == 3) 4 else it + 2; save(); refreshMenu() }
+        segment("seg-gp") { gTeams = it == 3; gPlayers = if (it == 3) 4 else it + 2; save(); refreshMenu() }
+        segment("seg-gpartner") { gPartner = it + 1; save(); refreshMenu() }
+        segment("seg-geach") { gEach = it + 6; save(); refreshMenu() }
         segment("seg-octl") { octLayout = it; save(); refreshMenu() }
         val pl = el("seg-plevel")
         for ((i, lv) in com.poolgame.app.core.Trick.LEVELS.withIndex()) {
@@ -308,7 +316,7 @@ class App : GameHost {
     private fun nameOf(m: GameMode) = when (m) {
         GameMode.EIGHT_BALL -> "8-Ball"; GameMode.NINE_BALL -> "9-Ball"; GameMode.TRICK -> "Trick shots"; GameMode.BUMPER -> "Bumper pool"
         GameMode.CIRCUIT -> "Circuit Pool"; GameMode.POCKET_WARS -> "Pocket Wars"; GameMode.CUTTHROAT -> "Cutthroat"
-        GameMode.OCTAGON -> "Octagon bumper"
+        GameMode.OCTAGON -> "Octagon bumper"; GameMode.GAUNTLET -> "Gauntlet"
     }
 
     /** The menu's picture of the octagon table with the chosen bumper layout. */
@@ -329,7 +337,7 @@ class App : GameHost {
 
     private fun refreshMenu() {
         val practice = opp == 2
-        val poolTable = gameMode != GameMode.TRICK && gameMode != GameMode.BUMPER && gameMode != GameMode.OCTAGON
+        val poolTable = gameMode != GameMode.TRICK && gameMode != GameMode.BUMPER && gameMode != GameMode.OCTAGON && gameMode != GameMode.GAUNTLET
         setSegment("seg-mode", GAMES.indexOf(gameMode))
         setSegment("seg-opp", opp)
         setSegment("seg-call", callIdx)
@@ -343,7 +351,23 @@ class App : GameHost {
             "and each one is judged as in a game (fouls give you ball in hand). Retry a shot, re-rack, or hold a ball to move it."
             else "No rules: plain red and yellow balls (and the black). Hold any ball to move it anywhere."
         el("pbumperHelp").style.display = if (gameMode == GameMode.BUMPER) "block" else "none"
-        el("poctHelp").style.display = if (gameMode == GameMode.OCTAGON) "block" else "none"
+        el("poctHelp").style.display = if (gameMode == GameMode.OCTAGON || gameMode == GameMode.GAUNTLET) "block" else "none"
+        el("poctHelp").textContent = if (gameMode == GameMode.GAUNTLET) "The Gauntlet on your own, with every colour's balls, no rules: tap any ball to shoot it, hold one to move it."
+            else "The octagon table on your own, with every colour's balls and the layout above, no rules: tap any ball to shoot it, hold one to move it."
+        val gaunt = gameMode == GameMode.GAUNTLET
+        el("gauntHelp").style.display = if (gaunt) "block" else "none"
+        el("gBlock").style.display = if (gaunt) "block" else "none"
+        el("gPartnerBlock").style.display = if (gTeams) "block" else "none"
+        setSegment("seg-gp", if (gTeams) 3 else gPlayers - 2)
+        setSegment("seg-gpartner", gPartner - 1)
+        setSegment("seg-geach", gEach - 6)
+        val mate = when (gPartner) { 1 -> "white (across the table)"; 2 -> "blue (beside you)"; else -> "yellow (beside you)" }
+        el("gpHelp").textContent = when {
+            gTeams -> "Two teams of two: red & $mate against the other two. Turns always swap teams. " +
+                (if (vsCpu) "You're red, with a CPU as your partner." else "")
+            vsCpu -> "You against ${if (gPlayers == 2) "one CPU" else "${gPlayers - 1} CPUs"}, all at the skill below."
+            else -> "$gPlayers people sharing the phone."
+        }
         val oct = gameMode == GameMode.OCTAGON
         el("octHelp").style.display = if (oct) "block" else "none"
         el("octBlock").style.display = if (oct) "block" else "none"
@@ -372,6 +396,7 @@ class App : GameHost {
         el("skillTitle").textContent = when {
             gameMode == GameMode.CUTTHROAT -> "COMPUTER SKILL (BOTH CPUs)"
             gameMode == GameMode.OCTAGON && octPlayers > 2 -> "COMPUTER SKILL (ALL CPUs)"
+            gameMode == GameMode.GAUNTLET && gPlayers > 2 -> "COMPUTER SKILL (ALL CPUs)"
             else -> "COMPUTER SKILL"
         }
         // Trick shots are always on the 9 ft table (with its gap) and bumper pool on its own table, so the size choice hides for them.
@@ -399,6 +424,8 @@ class App : GameHost {
         val name = nameOf(menuMode())
         el("record").innerHTML = (if (gameMode == GameMode.OCTAGON)
             Store.octSummary(Store.octVariant(octPlayers, octTeams), vsCpu, level)
+        else if (gameMode == GameMode.GAUNTLET)
+            Store.octSummary(Store.octVariant(gPlayers, gTeams), vsCpu, level, game = "GAUNTLET")
         else if (gameMode == GameMode.CUTTHROAT && !vsCpu)
             "$name pass &amp; play wins: Player 1 <b>${Store.cutthroatWins(0)}</b> · Player 2 <b>${Store.cutthroatWins(1)}</b> · " +
                 "Player 3 <b>${Store.cutthroatWins(2)}</b>"
@@ -420,12 +447,14 @@ class App : GameHost {
         Store.set("practiceRules", practiceRules.toString()); Store.set("practiceLevel", practiceLevel.toString())
         Store.set("tableSize", tableSize.name)
         Store.set("octPlayers", octPlayers.toString()); Store.set("octTeams", octTeams.toString()); Store.set("octLayout", octLayout.toString())
+        Store.set("gPlayers", gPlayers.toString()); Store.set("gTeams", gTeams.toString()); Store.set("gPartner", gPartner.toString())
+        Store.set("gEach", gEach.toString())
     }
 
     private fun savedSummary(): String? {
         val s = GameSave.readSettings(Store.get("savedGame", "")) ?: return null
         val name = nameOf(s.mode)
-        val size = if (s.mode == GameMode.BUMPER || s.mode == GameMode.OCTAGON) "" else " · ${s.tableSize.label}"
+        val size = if (s.mode == GameMode.BUMPER || s.mode == GameMode.OCTAGON || s.mode == GameMode.GAUNTLET) "" else " · ${s.tableSize.label}"
         val oct = "${Store.octVariantName(Store.octVariant(s.octPlayers, s.octTeams))} · ${com.poolgame.app.core.Table.OCT_LAYOUTS[s.octLayout]}"
         return when {
             s.practice && s.mode == GameMode.TRICK -> "Trick-shot practice"
@@ -433,6 +462,9 @@ class App : GameHost {
             s.practice && s.mode == GameMode.OCTAGON -> "Octagon practice · ${com.poolgame.app.core.Table.OCT_LAYOUTS[s.octLayout]}"
             s.mode == GameMode.OCTAGON && s.vsCpu -> "$name $oct vs CPU level ${s.level}"
             s.mode == GameMode.OCTAGON -> "$name $oct pass & play"
+            s.practice && s.mode == GameMode.GAUNTLET -> "Gauntlet practice"
+            s.mode == GameMode.GAUNTLET -> "$name ${Store.octVariantName(Store.octVariant(s.octPlayers, s.octTeams))} · ${s.gauntEach} balls" +
+                if (s.vsCpu) " vs CPU level ${s.level}" else " pass & play"
             s.practice && s.practiceRules -> "$name practice$size"
             s.mode == GameMode.TRICK -> if (s.vsCpu) "$name vs CPU level ${s.level}" else "$name pass & play"
             s.practice -> "Free-table practice$size"
@@ -458,7 +490,9 @@ class App : GameHost {
         var call = CallMode.values()[callIdx]
         var text: String? = null
         var size = tableSize
-        var oPlayers = octPlayers; var oTeams = octTeams; var oLayout = octLayout
+        val gaunt = gameMode == GameMode.GAUNTLET
+        var oPlayers = if (gaunt) gPlayers else octPlayers; var oTeams = if (gaunt) gTeams else octTeams; var oLayout = octLayout
+        var each = gEach; var mate = gPartner
         var barScratch = scratchKitchen
         var tSet = trickSet
         if (resume) {
@@ -473,16 +507,17 @@ class App : GameHost {
                 oPlayers = s.octPlayers; oTeams = s.octTeams; oLayout = s.octLayout
                 barScratch = s.scratchKitchen
                 tSet = s.trickSet
+                each = s.gauntEach; mate = s.partner
             }
         } else Store.set("savedGame", "")
         // Practice: a game with its own rules on your own, the free table (8-ball's balls), one trick shot, or the bumper table.
         if (practice) {
-            if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.OCTAGON) rules = false
+            if (mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.OCTAGON || mode == GameMode.GAUNTLET) rules = false
             else if (!rules) mode = GameMode.EIGHT_BALL
             cpu = false; clock = 0
         }
         // Pockets can be called in every game on the regulation table (not trick shots or bumper pool).
-        if (practice || mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.OCTAGON) call = CallMode.OFF
+        if (practice || mode == GameMode.TRICK || mode == GameMode.BUMPER || mode == GameMode.OCTAGON || mode == GameMode.GAUNTLET) call = CallMode.OFF
         oTeams = oTeams && oPlayers == 4
         playingOct = Store.octVariant(oPlayers, oTeams)
         sounds.enabled = sound
@@ -491,7 +526,7 @@ class App : GameHost {
         el("restart").textContent = if (mode == GameMode.TRICK) "Restart match" else "Restart rack"
         el("quit").textContent = "Main menu (game is saved)"
         game = Game(mode, cpu, lvl, clock, practice, practiceLevel, aimSens, prediction, text, call, sounds, this, tableSize = size, practiceRules = rules,
-            octPlayers = oPlayers, octTeams = oTeams, octLayout = oLayout, scratchKitchen = barScratch, trickSet = tSet)
+            octPlayers = oPlayers, octTeams = oTeams, octLayout = oLayout, scratchKitchen = barScratch, trickSet = tSet, gauntEach = each, partner = mate)
         showGame()
     }
 
@@ -543,10 +578,10 @@ class App : GameHost {
         val m = playingMode.name
         val cpu = playingCpu
         val lvl = if (cpu) playingLevel else 0
-        if (playingMode == GameMode.OCTAGON) {
+        if (playingMode == GameMode.OCTAGON || playingMode == GameMode.GAUNTLET) {
             val g = game!!
-            Store.recordOctagon(playingOct, cpu, lvl, g.youWon(), g.winningSeat())
-            return Store.octSummary(playingOct, cpu, lvl, plain = true)
+            Store.recordOctagon(playingOct, cpu, lvl, g.youWon(), g.winningSeat(), playingMode.name)
+            return Store.octSummary(playingOct, cpu, lvl, plain = true, game = playingMode.name)
         }
         Store.record(m, cpu, lvl, winner)
         val name = nameOf(playingMode)
@@ -559,6 +594,6 @@ class App : GameHost {
     private companion object {
         /** The game buttons, in order. */
         val GAMES = listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS, GameMode.CUTTHROAT,
-            GameMode.BUMPER, GameMode.OCTAGON, GameMode.TRICK)
+            GameMode.BUMPER, GameMode.OCTAGON, GameMode.GAUNTLET, GameMode.TRICK)
     }
 }

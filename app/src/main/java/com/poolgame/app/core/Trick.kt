@@ -54,7 +54,7 @@ class TrickLevel(
     val ids: List<Int> = balls.map { it.first }
     private val others = ids.filter { it != Trick.TARGET }
     /** Bit mask of the balls other than the 1. */
-    val otherMask: Int = others.fold(0) { m, id -> m or (1 shl id) }
+    val otherMask: Long = others.fold(0L) { m, id -> m or (1L shl id) }
     /** The most bonus a make here could realistically bring (used to decide when a player is out of it). */
     val maxBonus: Int = when (rule) {
         TrickRule.THREAD -> 0
@@ -266,16 +266,16 @@ object Trick {
         when (lv.rule) {
             TrickRule.CUSHION -> if (log.firstHit != TARGET || log.cueCushionsBeforeHit < 1)
                 return miss("the cue ball has to hit a cushion before the 1")
-            TrickRule.FENCE -> if (log.cueAirTouched and lv.otherMask != 0)
+            TrickRule.FENCE -> if (log.cueAirTouched and lv.otherMask != 0L)
                 return miss("the cue ball touched the fence before it landed")
-            TrickRule.ONLY_THE_1 -> if (log.touched[0] and lv.otherMask != 0)
+            TrickRule.ONLY_THE_1 -> if (log.touched[0] and lv.otherMask != 0L)
                 return miss("the cue ball touched the ring")
             TrickRule.THREAD -> {
                 if (log.firstHit != TARGET) return miss("the cue ball touched the traffic first")
-                if (log.touched[TARGET] and lv.otherMask != 0) return miss("the 1 touched the traffic")
+                if (log.touched[TARGET] and lv.otherMask != 0L) return miss("the 1 touched the traffic")
                 if (lv.minCut > 0 && log.firstHit == TARGET && !(log.cutDeg >= lv.minCut)) return miss("hit straight on — the 1 has to be cut")
             }
-            TrickRule.BANK -> if (TARGET in log.pocketed && (log.banked and (1 shl TARGET)) == 0)
+            TrickRule.BANK -> if (TARGET in log.pocketed && (log.banked and (1L shl TARGET)) == 0L)
                 return miss("the 1 has to hit a cushion before it drops")
             TrickRule.PLAIN -> {}
         }

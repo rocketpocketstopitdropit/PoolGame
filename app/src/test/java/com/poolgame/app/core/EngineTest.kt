@@ -1043,8 +1043,8 @@ class EngineTest {
         val log = m.world.log
         log.reset(); log.firstHit = id; log.railAfterHit = true
         if (id > 0) { log.pocketed += id; log.pocketIn[id] = pk; m.world.balls[id].onTable = false }
-        if (bank || jaw) log.railed = 1 shl id
-        if (bank) log.banked = 1 shl id
+        if (bank || jaw) log.railed = 1L shl id
+        if (bank) log.banked = 1L shl id
         if (cueIn >= 0) { log.pocketed += 0; log.pocketIn[0] = cueIn; m.world.balls[0].onTable = false }
         return m.resolve()
     }

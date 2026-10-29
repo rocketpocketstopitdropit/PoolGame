@@ -20,7 +20,10 @@ class GameSettings(
     /** Bar rules: a scratch gives ball in hand in the kitchen (behind the head string) instead of anywhere. */
     val scratchKitchen: Boolean = false,
     /** Trick-shot match: which set of levels (0 the gap jumps, 1 the classics). */
-    val trickSet: Int = 0
+    val trickSet: Int = 0,
+    /** The Gauntlet: balls each (6 to 8), and in 2 v 2 red's partner (1 across, 2 or 3 beside). */
+    val gauntEach: Int = 7,
+    val partner: Int = 1
 )
 
 /**
@@ -39,6 +42,7 @@ object GameSave {
         kv("prules", s.practiceRules)
         kv("octp", s.octPlayers); kv("octt", s.octTeams); kv("octl", s.octLayout)
         kv("barscr", s.scratchKitchen); kv("tset", s.trickSet)
+        kv("each", s.gauntEach); kv("partner", s.partner)
         kv("current", m.current)
         kv("g0", m.groups[0].name); kv("g1", m.groups[1].name)
         kv("bih", m.ballInHand); kv("kitchen", m.kitchenOnly); kv("brk", m.isBreak)
@@ -79,7 +83,9 @@ object GameSave {
             p["octt"]?.toBoolean() ?: false,
             p["octl"]?.toIntOrNull()?.coerceIn(0, Table.OCT_LAYOUTS.size - 1) ?: 0,
             p["barscr"]?.toBoolean() ?: false,
-            p["tset"]?.toIntOrNull()?.coerceIn(0, Trick.SETS.size - 1) ?: 0
+            p["tset"]?.toIntOrNull()?.coerceIn(0, Trick.SETS.size - 1) ?: 0,
+            p["each"]?.toIntOrNull()?.coerceIn(6, 8) ?: 7,
+            p["partner"]?.toIntOrNull()?.coerceIn(1, 3) ?: 1
         )
     } catch (e: Throwable) { null }
 
@@ -88,7 +94,7 @@ object GameSave {
         val p = parse(text)
         if (GameMode.valueOf(p.getValue("mode")) != m.mode) throw IllegalStateException("mode")
         if (m.mode == GameMode.OCTAGON && (p["octl"]?.toIntOrNull() ?: 0) != Table.octLayout) throw IllegalStateException("layout")
-        if (m.mode != GameMode.TRICK && m.mode != GameMode.BUMPER && m.mode != GameMode.OCTAGON &&
+        if (m.mode != GameMode.TRICK && m.mode != GameMode.BUMPER && m.mode != GameMode.OCTAGON && m.mode != GameMode.GAUNTLET &&
             (TableSize.fromName(p["table"]) ?: TableSize.NINE) != Table.size)
             throw IllegalStateException("table size")   // the match must be made on the saved table
         m.current = p.getValue("current").toInt()
@@ -101,7 +107,11 @@ object GameSave {
         m.winner = -1
         m.callMode = p["call"]?.let { CallMode.valueOf(it) } ?: CallMode.OFF
         m.scratchKitchen = p["barscr"]?.toBoolean() ?: false
-        m.teams = m.mode == GameMode.OCTAGON && m.players == 4 && p["octt"]?.toBoolean() == true
+        m.teams = m.fourWay && m.players == 4 && p["octt"]?.toBoolean() == true
+        if (m.mode == GameMode.GAUNTLET) {
+            m.each = p["each"]?.toIntOrNull()?.coerceIn(6, 8) ?: 7
+            m.partner = p["partner"]?.toIntOrNull()?.coerceIn(1, 3) ?: 1
+        }
         if (m.mode == GameMode.TRICK) {
             val f = p.getValue("tl").split(',').map { it.toInt() }
             if (f.size < 15) throw IllegalStateException("old trick save")

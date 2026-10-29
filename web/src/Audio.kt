@@ -224,20 +224,21 @@ object Store {
     fun octVariant(players: Int, teams: Boolean) = if (teams && players == 4) "T" else players.coerceIn(2, 4).toString()
     fun octVariantName(v: String) = if (v == "T") "2 v 2" else "$v-player"
     /** One octagon game: [youWon] against the CPUs; in pass & play, [seat] is the winner (in teams, 0 red & white, 1 blue & yellow). */
-    fun recordOctagon(v: String, vsCpu: Boolean, level: Int, youWon: Boolean, seat: Int) {
-        val k = key("OCTAGON$v", vsCpu, level, if (vsCpu) (if (youWon) "w" else "l") else "p${seat + 1}")
+    fun recordOctagon(v: String, vsCpu: Boolean, level: Int, youWon: Boolean, seat: Int, game: String = "OCTAGON") {
+        val k = key("$game$v", vsCpu, level, if (vsCpu) (if (youWon) "w" else "l") else "p${seat + 1}")
         set(k, (getInt(k, 0) + 1).toString())
     }
-    fun octSeatWins(v: String, seat: Int) = getInt(key("OCTAGON$v", false, 0, "p${seat + 1}"), 0)
+    fun octSeatWins(v: String, seat: Int, game: String = "OCTAGON") = getInt(key("$game$v", false, 0, "p${seat + 1}"), 0)
     /** The octagon record for a setup (HTML), and [plain] for the end-of-game line. */
-    fun octSummary(v: String, vsCpu: Boolean, level: Int, plain: Boolean = false): String {
-        val name = "Octagon ${octVariantName(v)}"
-        val m = "OCTAGON$v"
+    fun octSummary(v: String, vsCpu: Boolean, level: Int, plain: Boolean = false, game: String = "OCTAGON"): String {
+        val name = "${if (game == "GAUNTLET") "Gauntlet" else "Octagon"} ${octVariantName(v)}"
+        val m = "$game$v"
         if (vsCpu) return if (plain) "Your $name record vs level $level: ${wins(m, true, level)}–${losses(m, true, level)}"
             else "$name vs level $level: <b>${wins(m, true, level)} W – ${losses(m, true, level)} L</b><br>" +
                 "$name vs all levels: ${totalWins(m)} W – ${totalLosses(m)} L"
-        val t = if (v == "T") "Red & White ${octSeatWins(v, 0)} · Blue & Yellow ${octSeatWins(v, 1)}"
-            else (0 until (v.toIntOrNull() ?: 2)).joinToString(" · ") { "Player ${it + 1} ${octSeatWins(v, it)}" }
+        val t = if (v == "T" && game == "GAUNTLET") "Red's team ${octSeatWins(v, 0, game)} · the other team ${octSeatWins(v, 1, game)}"
+            else if (v == "T") "Red & White ${octSeatWins(v, 0, game)} · Blue & Yellow ${octSeatWins(v, 1, game)}"
+            else (0 until (v.toIntOrNull() ?: 2)).joinToString(" · ") { "Player ${it + 1} ${octSeatWins(v, it, game)}" }
         return "$name pass & play wins: $t"
     }
 

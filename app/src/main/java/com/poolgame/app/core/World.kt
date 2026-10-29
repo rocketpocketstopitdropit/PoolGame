@@ -1,5 +1,6 @@
 package com.poolgame.app.core
 
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -11,7 +12,7 @@ import kotlin.math.sqrt
  * How many balls a world holds: the cue ball and the fifteen numbered balls, or on the octagon bumper
  * table up to four players' five balls each (ids 1 to 20; 0 is unused there).
  */
-const val NB = 21
+const val NB = 33
 
 class Ball(val id: Int) {
     var x = 0.0; var y = 0.0
@@ -48,11 +49,11 @@ class ShotLog {
     val fell = ArrayList<Int>()        // of those, the ones that fell into the gap (trick-shot table)
     val pocketIn = IntArray(NB) { -1 } // which pocket (index into Table.pockets) each ball dropped in
     /** For each ball, a bit mask of the balls it touched this shot (bit n = ball n). */
-    val touched = IntArray(NB)
+    val touched = LongArray(NB)
     /** The cue ball has come down on the far section's cloth (trick shots). */
     var cueLanded = false
     /** Balls the cue ball touched before it first came down on the far section. */
-    var cueAirTouched = 0
+    var cueAirTouched = 0L
     /** Cut angle of the cue ball's first contact, in degrees (0 = straight on), or NaN. */
     var cutDeg = Double.NaN
     /** Where the cue ball first came down after a jump, or NaN. */
@@ -66,23 +67,23 @@ class ShotLog {
      */
     var scooped = false
     /** Balls the cue drove down into the slate and bounced up off it (jump shots), bit n = ball n. */
-    var cueJumps = 0
+    var cueJumps = 0L
     /** Balls the tip dug under and scooped up (bit n = ball n): see [scooped]. */
-    var scoops = 0
+    var scoops = 0L
     /** Balls that left the cloth this shot (bit n = ball n), more than a few millimetres up. */
-    var air = 0
+    var air = 0L
     /** Balls that touched a cushion this shot (bit n = ball n). */
-    var railed = 0
+    var railed = 0L
     /** Balls that touched a rail this shot, not counting the pockets' jaws (bit n = ball n). */
-    var banked = 0
+    var banked = 0L
 
     fun reset() {
         firstHit = -1; pocketed.clear(); railAfterHit = false; cueCushionsBeforeHit = 0; jumpedOff.clear()
         fell.clear(); cueMaxX = Double.NEGATIVE_INFINITY
         pocketIn.fill(-1)
-        touched.fill(0); cueLanded = false; cueAirTouched = 0; cutDeg = Double.NaN
+        touched.fill(0L); cueLanded = false; cueAirTouched = 0L; cutDeg = Double.NaN
         cueLandX = Double.NaN; cueLandY = Double.NaN
-        miscue = false; scooped = false; cueJumps = 0; scoops = 0; air = 0; railed = 0; banked = 0
+        miscue = false; scooped = false; cueJumps = 0L; scoops = 0L; air = 0L; railed = 0L; banked = 0L
     }
 
     fun copyFrom(o: ShotLog) {
@@ -129,12 +130,25 @@ class World {
     private var lastDt = 0.0
     /** Octagon table: balls rolling up a ramp (to count the moment each turns back, like a cushion). */
     private val climbing = BooleanArray(NB)
+    /**
+     * The Gauntlet: the loop each ball is going round (0 or 1), or -1; which way along its diagonal (+1 or -1), how
+     * far through the trip (m), its speed along the track (negative: rolling back out), and how far off the line.
+     */
+    private val loopOf = IntArray(NB) { -1 }
+    private val loopDirOf = IntArray(NB)
+    private val loopS = DoubleArray(NB)
+    private val loopV = DoubleArray(NB)
+    private val loopLat = DoubleArray(NB)
+    /** The Gauntlet: is ball [id] going round one of the loops right now? */
+    fun inLoop(id: Int) = loopOf[id] >= 0
 
     fun copyFrom(o: World) {
         for (i in 0 until NB) balls[i].copyFrom(o.balls[i])
         log.copyFrom(o.log)
         cue = o.cue
         o.climbing.copyInto(climbing)
+        o.loopOf.copyInto(loopOf); o.loopDirOf.copyInto(loopDirOf); o.loopS.copyInto(loopS)
+        o.loopV.copyInto(loopV); o.loopLat.copyInto(loopLat)
     }
 
     private companion object {
@@ -211,12 +225,12 @@ class World {
             slateGrip(c, (1 + P.E_SLATE) * jZ)
             c.vz = P.E_SLATE * jZ
             if (c.vz < 0.05) c.vz = 0.0
-            if (c.vz > 0.0) log.cueJumps = log.cueJumps or (1 shl id)
+            if (c.vz > 0.0) log.cueJumps = log.cueJumps or (1L shl id)
         } else if (jZ < -0.05) {
             // Lifted straight up by the tip: a scoop.
             c.vz = -jZ
             log.scooped = true
-            log.scoops = log.scoops or (1 shl id)
+            log.scoops = log.scoops or (1L shl id)
         }
         c.moving = true
     }
@@ -258,6 +272,7 @@ class World {
         for (b in balls) {
             if (!b.onTable || !b.moving) continue
             if (Table.octagon) octMove(b, dt)
+            else if (Table.gauntlet) { if (loopOf[b.id] >= 0) loopStep(b, dt) else gauntMove(b, dt) }
             else {
                 if (b.z > 0.0 || b.vz > 0.0 || Table.overGap(b.x)) flight(b, dt) else cloth(b, dt)
                 b.x += b.vx * dt
@@ -266,6 +281,7 @@ class World {
             if (trackOrientation) rotate(b, dt)
         }
         if (Table.gap) gapEdges()
+        if (Table.gauntlet) gauntletParts()
         collideBalls()
         collideCushions()
         if (Table.posts.isNotEmpty()) collidePosts()
@@ -323,7 +339,7 @@ class World {
         val z0 = b.z; val vz0 = b.vz
         b.z += b.vz * dt
         b.vz -= P.G * dt
-        if (b.z > AIR_Z) log.air = log.air or (1 shl b.id)
+        if (b.z > AIR_Z) log.air = log.air or (1L shl b.id)
         if (b.z <= 0.0 && b.vz < 0.0 && !Table.overGap(b.x)) {
             // Find when in this step it actually touched down, and bounce from that moment, so the
             // landing spot moves smoothly with the stroke instead of in step-sized jumps.
@@ -343,6 +359,205 @@ class World {
             slateGrip(b, impact + up)
             listener?.onCushion(impact * 0.6)
         }
+    }
+
+    // ------------------------------------------------------------------ the Gauntlet
+
+    private val gs = DoubleArray(4)
+    private val gp = DoubleArray(6)
+    private val gl = DoubleArray(4)
+
+    /**
+     * The Gauntlet, for a ball not in a loop. On the flat cloth it moves as on any table. On a ramp or the dish it
+     * rolls in the surface's plane (gravity at 5/7 g along it, natural roll), following the curve. Off the ramp's lip
+     * or the dish's edge it flies, and lands (bouncing if it comes down hard) wherever it meets a surface again.
+     */
+    private fun gauntMove(b: Ball, dt: Double) {
+        val r = P.R
+        Gauntlet.surface(b.x, b.y, b.z, gs)
+        val h0 = gs[0]; val n0x = gs[1]; val n0y = gs[2]; val n0z = gs[3]
+        val grounded = b.z <= h0 + 1e-6
+        if (grounded && h0 <= 1e-9 && b.vz <= 1e-9) {
+            b.z = 0.0; b.vz = 0.0
+            cloth(b, dt)
+            if (!b.moving) return
+        } else if (grounded) {
+            turnAlong(b, n0x, n0y, n0z)
+            val g = 5.0 / 7.0 * P.G
+            b.vx += g * n0z * n0x * dt; b.vy += g * n0z * n0y * dt; b.vz += g * (n0z * n0z - 1) * dt
+            val sp = sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz)
+            val dr = P.MU_ROLL * P.G * n0z * dt
+            if (sp <= dr) { b.vx = 0.0; b.vy = 0.0; b.vz = 0.0 } else { val sc = (sp - dr) / sp; b.vx *= sc; b.vy *= sc; b.vz *= sc }
+            val wux = (n0y * b.vz - n0z * b.vy) / r; val wuy = (n0z * b.vx - n0x * b.vz) / r; val wuz = (n0x * b.vy - n0y * b.vx) / r
+            b.wx = -wux; b.wy = -wuy; b.wz = wuz
+            if (sp < 0.004 && n0z > 0.9995) { b.stop(); b.z = h0; return }
+        } else {
+            b.vz -= P.G * dt
+        }
+        b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt
+        Gauntlet.surface(b.x, b.y, b.z, gs)
+        val h1 = gs[0]
+        if (b.z <= h1) {
+            val nx = gs[1]; val ny = gs[2]; val nz = gs[3]
+            val vn = b.vx * nx + b.vy * ny + b.vz * nz
+            if (!grounded && vn < -0.25) {
+                // A hard landing bounces.
+                val up = -vn * 0.45
+                b.vx -= (vn - up) * nx; b.vy -= (vn - up) * ny; b.vz -= (vn - up) * nz
+                if (nz > 0.9999) slateGrip(b, -vn + up)
+                listener?.onCushion(-vn * 0.6)
+            } else if (grounded) turnAlong(b, nx, ny, nz)
+            else if (vn < 0) { b.vx -= vn * nx; b.vy -= vn * ny; b.vz -= vn * nz }
+            b.z = h1
+            if (h1 <= 1e-9 && b.vz < 1e-9) { b.z = 0.0; b.vz = 0.0 }
+        } else if (grounded && b.z - h1 < 1e-6) b.z = h1
+        if (b.z - h1 > AIR_Z) log.air = log.air or (1L shl b.id)
+    }
+
+    /**
+     * The Gauntlet's solid parts, after everything has moved: the ramps' sides and backs, the dish's edge, and the
+     * loops' tracks where they stand on the cloth. A ball rolling into a loop's mouth along the diagonal, on the
+     * cloth, goes in (see [loopStep]); one that comes at it any other way bounces off the track.
+     */
+    private fun gauntletParts() {
+        val r = P.R
+        val m = Gauntlet.MID
+        for (b in balls) {
+            if (!b.onTable || !b.moving || loopOf[b.id] >= 0) continue
+            // The loops.
+            for (i in 0..1) {
+                Gauntlet.loopDir(i, gl)
+                val ux = gl[0]; val uy = gl[1]
+                val rx = b.x - m; val ry = b.y - m
+                val along = rx * ux + ry * uy
+                val lat = -rx * uy + ry * ux
+                if (abs(along) > Gauntlet.LOOP_MOUTH + r || abs(lat) > Gauntlet.LOOP_HALF_W + r || b.z > Gauntlet.LOOP_TRACK_H) continue
+                val vu = b.vx * ux + b.vy * uy
+                val sp = hypot(b.vx, b.vy)
+                val inward = -sign(along) * vu
+                val lined = sp > 1e-6 && inward > sp * cos(Gauntlet.LOOP_ENTRY_ANGLE)
+                if (lined && abs(lat) < Gauntlet.LOOP_HALF_W && b.z < 0.004) {
+                    // In it goes.
+                    loopOf[b.id] = i
+                    loopDirOf[b.id] = if (along < 0) 1 else -1
+                    loopS[b.id] = (Gauntlet.LOOP_MOUTH - abs(along)).coerceIn(0.0, Gauntlet.LOOP_MOUTH)
+                    loopV[b.id] = inward
+                    loopLat[b.id] = lat * 0.6
+                    b.wz = 0.0
+                    break
+                }
+                // Bounce off the track: its side, or its end.
+                val penSide = Gauntlet.LOOP_HALF_W + r - abs(lat)
+                val penEnd = Gauntlet.LOOP_MOUTH + r - abs(along)
+                if (penSide <= penEnd) {
+                    val s = if (lat >= 0) 1.0 else -1.0
+                    val nx = -uy * s; val ny = ux * s
+                    b.x += nx * penSide; b.y += ny * penSide
+                    bounceOff(b, nx, ny, 0.5)
+                } else {
+                    val s = if (along >= 0) 1.0 else -1.0
+                    b.x += ux * s * penEnd; b.y += uy * s * penEnd
+                    bounceOff(b, ux * s, uy * s, 0.5)
+                }
+            }
+            // The ramps' sides and backs (the front runs down to the cloth).
+            for (k in 0 until 4) {
+                Gauntlet.rampLocal(k, b.x, b.y, gl)
+                val sIn = gl[0]; val lat = gl[1]
+                val len = Gauntlet.RAMP_FOOT - Gauntlet.RAMP_LIP
+                if (sIn < 0 || sIn > len + r || abs(lat) > Gauntlet.RAMP_HALF_W + r) continue
+                val top = Gauntlet.rampHeight(sIn.coerceAtMost(len))
+                if (b.z > top - 0.004) continue                 // on it or above it
+                val penSide = Gauntlet.RAMP_HALF_W + r - abs(lat)
+                val penBack = len + r - sIn
+                val dx = gl[2]; val dy = gl[3]
+                if (penSide <= penBack || sIn < len - 0.5 * r) {
+                    val s = if (lat >= 0) 1.0 else -1.0
+                    val nx = -dy * s; val ny = dx * s
+                    b.x += nx * penSide; b.y += ny * penSide
+                    bounceOff(b, nx, ny, 0.5)
+                } else {
+                    b.x += dx * penBack; b.y += dy * penBack
+                    bounceOff(b, dx, dy, 0.5)
+                }
+            }
+            // The dish's edge: a ball beside it, below its top and above its underside, hits it.
+            val ex = abs(b.x - m); val ey = abs(b.y - m)
+            val half = Gauntlet.DISH_HALF
+            if (ex < half + r && ey < half + r && (ex > half || ey > half)) {
+                val cx = (b.x - m).coerceIn(-half, half) + m; val cy = (b.y - m).coerceIn(-half, half) + m
+                val top = Gauntlet.dishHeight(cx, cy)
+                val under = top - Gauntlet.DISH_THICK
+                if (b.z < top - 0.003 && b.z + 2 * r > under) {
+                    if (ex - half >= ey - half) {
+                        val s = sign(b.x - m)
+                        b.x = m + s * (half + r)
+                        bounceOff(b, s, 0.0, 0.4)
+                    } else {
+                        val s = sign(b.y - m)
+                        b.y = m + s * (half + r)
+                        bounceOff(b, 0.0, s, 0.4)
+                    }
+                }
+            }
+        }
+    }
+
+    /** A ball meets a hard face with outward normal (nx, ny): it loses most of its speed into it. */
+    private fun bounceOff(b: Ball, nx: Double, ny: Double, e: Double) {
+        val vn = b.vx * nx + b.vy * ny
+        if (vn >= 0) return
+        b.vx -= (1 + e) * vn * nx; b.vy -= (1 + e) * vn * ny
+        listener?.onCushion(-vn)
+        if (log.firstHit >= 0) log.railAfterHit = true
+    }
+
+    /**
+     * The Gauntlet: a ball going round a loop. It runs along the track, slowed by gravity on the way up (5/7 g, as a
+     * rolling ball) and rolling resistance. In the top half it needs v²/r of at least g's pull toward the middle to
+     * stay on the track; slower than that it falls back to the bottom and rolls back out the way it came. Out the far
+     * side, it rolls off along the diagonal (toward that corner's deflector bumper).
+     */
+    private fun loopStep(b: Ball, dt: Double) {
+        val id = b.id
+        val i = loopOf[id]; val dir = loopDirOf[id]
+        var s = loopS[id]; var v = loopV[id]
+        val a = Gauntlet.loopAngle(s)
+        val g = P.G
+        if (a >= 0) {
+            if (a > PI / 2 && a < 1.5 * PI && v * v / Gauntlet.LOOP_R + g * cos(a) < 0) {
+                // Off the track: it drops to the bottom and rolls back out the way it came in, slowly.
+                val h = Gauntlet.LOOP_R * (1 - cos(a))
+                v = -sqrt(2 * g * h) * 0.4
+                s = Gauntlet.LOOP_MOUTH - 0.001
+                listener?.onCushion(0.8)
+            } else v -= 5.0 / 7.0 * g * sin(a) * dt
+        }
+        val rr = P.MU_ROLL * g * dt * 1.5
+        v = if (abs(v) <= rr) 0.0 else v - sign(v) * rr
+        s += v * dt
+        val end = Gauntlet.LOOP_TRIP
+        if (s >= end || s <= 0.0 || (v == 0.0 && Gauntlet.loopAngle(s) < 0)) {
+            // Out of the track: forward out the far end, or back out of the mouth it went in by.
+            val fwd = s >= end || (v == 0.0 && s > end / 2)
+            Gauntlet.loopPoint(i, dir, loopLat[id], if (fwd) end else 0.0, gp)
+            loopOf[id] = -1
+            val ux = gp[3]; val uy = gp[4]
+            val sp = abs(v)
+            val k = if (fwd) 1.0 else -1.0
+            // Just outside the track's end, so it doesn't bounce straight back off it.
+            b.x = gp[0] + ux * k * (P.R + 0.002); b.y = gp[1] + uy * k * (P.R + 0.002); b.z = 0.0; b.vz = 0.0
+            b.vx = ux * k * sp; b.vy = uy * k * sp
+            b.wx = b.vy / P.R; b.wy = -b.vx / P.R; b.wz = 0.0
+            if (sp < 0.01) b.stop()
+            return
+        }
+        loopS[id] = s; loopV[id] = v
+        Gauntlet.loopPoint(i, dir, loopLat[id], s, gp)
+        b.x = gp[0]; b.y = gp[1]; b.z = gp[2]
+        b.vx = gp[3] * v; b.vy = gp[4] * v; b.vz = gp[5] * v
+        b.wx = b.vy / P.R; b.wy = -b.vx / P.R
+        b.moving = true
     }
 
     /**
@@ -399,7 +614,7 @@ class World {
         // Meet the surface where the ball is now.
         val d1 = Table.octDist(b.x, b.y)
         val h1 = Table.surfZ(d1)
-        if (h1 == Double.NEGATIVE_INFINITY) { log.air = log.air or (1 shl b.id); return }   // off the edge: falling
+        if (h1 == Double.NEGATIVE_INFINITY) { log.air = log.air or (1L shl b.id); return }   // off the edge: falling
         if (b.z <= h1) {
             val e = Table.octEdge(b.x, b.y)
             val k = Table.surfSlope(d1)
@@ -424,7 +639,7 @@ class World {
             b.z = h1
             if (d1 <= Table.FLAT_D && b.vz < 1e-9) { b.z = 0.0; b.vz = 0.0 }
         } else if (grounded && b.z - h1 < 1e-6) b.z = h1
-        if (b.z - h1 > AIR_Z) log.air = log.air or (1 shl b.id)
+        if (b.z - h1 > AIR_Z) log.air = log.air or (1L shl b.id)
     }
 
     /**
@@ -442,8 +657,8 @@ class World {
 
     /** A ball rolled up a ramp and turned back: logged like a cushion. */
     private fun rampTurn(b: Ball) {
-        log.railed = log.railed or (1 shl b.id)
-        log.banked = log.banked or (1 shl b.id)
+        log.railed = log.railed or (1L shl b.id)
+        log.banked = log.banked or (1L shl b.id)
         if (log.firstHit >= 0) log.railAfterHit = true
         else if (b.id == cue) log.cueCushionsBeforeHit++
     }
@@ -509,10 +724,10 @@ class World {
         val minD2 = 4 * r * r
         for (i in 0 until NB) {
             val a = balls[i]
-            if (!a.onTable) continue
+            if (!a.onTable || loopOf[i] >= 0) continue
             for (j in i + 1 until NB) {
                 val b = balls[j]
-                if (!b.onTable || (!a.moving && !b.moving)) continue
+                if (!b.onTable || loopOf[j] >= 0 || (!a.moving && !b.moving)) continue
                 val dx = b.x - a.x; val dy = b.y - a.y; val dz = b.z - a.z
                 val d2 = dx * dx + dy * dy + dz * dz
                 if (d2 >= minD2) continue
@@ -606,11 +821,11 @@ class World {
 
     /** Who touched whom, and (for the cue ball's first contact) how thin the cut was. Called before the impulse. */
     private fun noteContact(i: Int, j: Int, a: Ball, b: Ball) {
-        log.touched[i] = log.touched[i] or (1 shl j)
-        log.touched[j] = log.touched[j] or (1 shl i)
+        log.touched[i] = log.touched[i] or (1L shl j)
+        log.touched[j] = log.touched[j] or (1L shl i)
         if (i != cue && j != cue) return
         val other = if (i == cue) j else i
-        if (!log.cueLanded) log.cueAirTouched = log.cueAirTouched or (1 shl other)
+        if (!log.cueLanded) log.cueAirTouched = log.cueAirTouched or (1L shl other)
         if (log.firstHit < 0 && log.cutDeg.isNaN()) {
             val c = if (i == cue) a else b
             val o = if (i == cue) b else a
@@ -683,8 +898,8 @@ class World {
                     b.wx += k * (ny * ez); b.wy += k * (-nx * ez); b.wz += k * (nx * ey - ny * ex)
                 }
                 b.x += b.vx * s; b.y += b.vy * s
-                log.railed = log.railed or (1 shl b.id)
-                if (!sg.jaw) log.banked = log.banked or (1 shl b.id)
+                log.railed = log.railed or (1L shl b.id)
+                if (!sg.jaw) log.banked = log.banked or (1L shl b.id)
                 if (log.firstHit >= 0) log.railAfterHit = true
                 else if (b.id == cue) log.cueCushionsBeforeHit++
                 listener?.onCushion(-vn)
@@ -699,7 +914,7 @@ class World {
     private fun collidePosts() {
         val r = P.R
         for (b in balls) {
-            if (!b.onTable || !b.moving || b.z > Table.POST_H) continue
+            if (!b.onTable || !b.moving || b.z > Table.POST_H || loopOf[b.id] >= 0) continue
             for (pt in Table.posts) {
                 val rr = r + pt.r
                 var dx = b.x - pt.x; var dy = b.y - pt.y
@@ -778,7 +993,7 @@ class World {
     private fun checkPockets() {
         val r = P.R
         for (b in balls) {
-            if (!b.onTable || !b.moving) continue
+            if (!b.onTable || !b.moving || loopOf[b.id] >= 0) continue
             if (Table.octagon) {
                 // Past the outside of the ledge there's nothing to hold the ball up: it's off the table.
                 if (Table.octDist(b.x, b.y) > Table.OCT_OUTER + r) {
@@ -805,7 +1020,9 @@ class World {
             val inGap = b.z < -2.0 * P.R && Table.overGap(b.x)
             if (!inGap && !Table.hasHoles && b.x > 0.1 && b.x < P.L - 0.1 && b.y > 0.1 && b.y < P.W - 0.1) continue
             var drop = b.x < -r || b.x > P.L + r || b.y < -r || b.y > P.W + r
-            if (!drop && b.z < P.R * 0.6) for (p in Table.pockets) {
+            // The Gauntlet's cups: a ball going faster than this rattles over the cup instead of dropping.
+            val tooFast = Table.gauntlet && b.vx * b.vx + b.vy * b.vy > Gauntlet.CUP_MAX_SPEED * Gauntlet.CUP_MAX_SPEED
+            if (!drop && !tooFast && b.z < P.R * 0.6) for (p in Table.pockets) {
                 val dx = b.x - p.cx; val dy = b.y - p.cy
                 if (dx * dx + dy * dy < p.capR * p.capR) { drop = true; break }
             }
@@ -850,7 +1067,8 @@ class World {
         else if (x < r || x > P.L - r || y < r || y > P.W - r) return false
         if (Table.gap && x > Table.GAP_X0 - 0.6 * r && x < Table.GAP_X1 + 0.6 * r) return false
         for (pt in Table.posts) if ((pt.x - x) * (pt.x - x) + (pt.y - y) * (pt.y - y) < (r + pt.r + 0.001) * (r + pt.r + 0.001)) return false
-        if (Table.bumper || Table.octagon) for (pk in Table.pockets) if ((pk.cx - x) * (pk.cx - x) + (pk.cy - y) * (pk.cy - y) < (pk.capR + r) * (pk.capR + r)) return false
+        if (Table.gauntlet && !Gauntlet.placeable(x, y)) return false
+        if (Table.bumper || Table.octagon || Table.gauntlet) for (pk in Table.pockets) if ((pk.cx - x) * (pk.cx - x) + (pk.cy - y) * (pk.cy - y) < (pk.capR + r) * (pk.capR + r)) return false
         val m = (2 * r + 0.0005)
         for (b in balls) {
             if (!b.onTable || b.id == ignore) continue

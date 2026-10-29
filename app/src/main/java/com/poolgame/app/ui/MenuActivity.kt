@@ -47,6 +47,11 @@ class MenuActivity : Activity() {
     // The octagon table: 2, 3 or 4 players, two teams of two (with 4), and which bumper layout.
     private var octPlayers = 4
     private var octTeams = false
+    /** The Gauntlet: players (2 to 4), teams, red's partner in 2 v 2 (1 across, 2 blue, 3 yellow), and balls each. */
+    private var gPlayers = 4
+    private var gTeams = false
+    private var gPartner = 1
+    private var gEach = 7
     private var octLayout = 0
     private val stats by lazy { Stats(this) }
     private var recordText: TextView? = null
@@ -98,6 +103,10 @@ class MenuActivity : Activity() {
         askTutorial = prefs.getBoolean("askTutorial", true)
         octPlayers = prefs.getInt("octPlayers", 4).coerceIn(2, 4)
         octTeams = prefs.getBoolean("octTeams", false) && octPlayers == 4
+        gPlayers = prefs.getInt("gPlayers", 4).coerceIn(2, 4)
+        gTeams = prefs.getBoolean("gTeams", false) && gPlayers == 4
+        gPartner = prefs.getInt("gPartner", 1).coerceIn(1, 3)
+        gEach = prefs.getInt("gEach", 7).coerceIn(6, 8)
         octLayout = prefs.getInt("octLayout", 0).coerceIn(0, com.poolgame.app.core.Table.OCT_LAYOUTS.size - 1)
         build()
         // Each time the app is opened (not when the screen is merely recreated), offer the tutorial.
@@ -157,6 +166,8 @@ class MenuActivity : Activity() {
         val name = Stats.modeName(mode)
         t.text = (if (mode == GameMode.OCTAGON) {
             stats.octSummary(Stats.octVariant(octPlayers, octTeams), vsCpu, level)
+        } else if (mode == GameMode.GAUNTLET) {
+            stats.octSummary(Stats.octVariant(gPlayers, gTeams), vsCpu, level, GameMode.GAUNTLET)
         } else if (mode == GameMode.CUTTHROAT && !vsCpu) {
             "$name pass & play wins:  Player 1  ${stats.cutthroatWins(0)} · Player 2  ${stats.cutthroatWins(1)} · Player 3  ${stats.cutthroatWins(2)}"
         } else if (mode == GameMode.CUTTHROAT) {
@@ -178,7 +189,8 @@ class MenuActivity : Activity() {
             .putInt("opp", opp).putBoolean("practiceRules", practiceRules).putInt("practiceLevel", practiceLevel)
             .putInt("aimSens", aimSens).putInt("callMode", callMode).putBoolean("scratchKitchen", scratchKitchen).putInt("trickSet", trickSet).putString("tableSize", tableSize.name)
             .putBoolean("prediction", prediction)
-            .putInt("octPlayers", octPlayers).putBoolean("octTeams", octTeams).putInt("octLayout", octLayout).apply()
+            .putInt("octPlayers", octPlayers).putBoolean("octTeams", octTeams).putInt("octLayout", octLayout)
+            .putInt("gPlayers", gPlayers).putBoolean("gTeams", gTeams).putInt("gPartner", gPartner).putInt("gEach", gEach).apply()
         refreshRecord()
     }
 
@@ -257,11 +269,17 @@ class MenuActivity : Activity() {
             "in a cup that isn't yours, a ball off the table or a jump shot is a foul: everyone else (in teams, the other " +
             "team) drops one in. First to sink all five wins; in teams, a player whose five are down shoots their " +
             "partner's, and the team wins when all ten are down.")
+        val gauntHelp = help("The Gauntlet: an 80″ square bumper table with cushions, a cup in the middle of each side and 68 " +
+            "bumpers. Nothing goes in from where the balls start in one stroke. In the middle is the Cage: two loop-de-loops " +
+            "crossing over a hanging dish. Your own curved ramp points straight at your cup: hit it right, jump the gap onto " +
+            "the dish and it flings the ball on toward the cup. Through a loop, a deflector bumper sends it at a cup. A cup " +
+            "only catches a ball that's not going too fast. Two to four players or 2 v 2, 6 to 8 balls each, the octagon's " +
+            "rules: your marked ball first, every marked ball goes at once to open, and a foul lets everyone else drop one in.")
         val modes = listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS,
-            GameMode.CUTTHROAT, GameMode.BUMPER, GameMode.OCTAGON, GameMode.TRICK)
-        card.addView(segmentedGrid(listOf("8-Ball", "9-Ball", "Circuit", "Pocket Wars", "Cutthroat", "Bumper", "Octagon", "Trick"), 4,
+            GameMode.CUTTHROAT, GameMode.BUMPER, GameMode.OCTAGON, GameMode.GAUNTLET, GameMode.TRICK)
+        card.addView(segmentedGrid(listOf("8-Ball", "9-Ball", "Circuit", "Pocket Wars", "Cutthroat", "Bumper", "Octagon", "Gauntlet", "Trick"), 3,
             modes.indexOf(mode).coerceAtLeast(0)) { mode = modes[it]; refresh(); save() })
-        for (h in listOf(circuitHelp, warsHelp, cutHelp, trickHelp, bumperHelp, octHelp)) card.addView(h)
+        for (h in listOf(circuitHelp, warsHelp, cutHelp, trickHelp, bumperHelp, octHelp, gauntHelp)) card.addView(h)
         // Trick shots: which set of levels a match plays.
         val trickSetBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         trickSetBlock.addView(section("TRICK SHOTS"))
@@ -298,6 +316,35 @@ class MenuActivity : Activity() {
         octBlock.addView(preview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(190f)).apply { topMargin = dpi(8f) })
         refreshOct()
         card.addView(octBlock)
+
+        // The Gauntlet: how many play, who partners whom in 2 v 2, and how many balls each.
+        val gBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        gBlock.addView(section("PLAYERS"))
+        val gPlayersHelp = help("")
+        val partnerBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun refreshG() {
+            val mate = when (gPartner) { 1 -> "white (across the table)"; 2 -> "blue (beside you)"; else -> "yellow (beside you)" }
+            gPlayersHelp.text = when {
+                gTeams -> "Two teams of two: red & $mate against the other two. Turns always swap teams. " +
+                    (if (vsCpu) "You're red, with a CPU as your partner." else "")
+                vsCpu -> "You against ${if (gPlayers == 2) "one CPU" else "${gPlayers - 1} CPUs"}, all at the skill below."
+                else -> "$gPlayers people sharing the phone."
+            }
+            partnerBlock.visibility = if (gTeams) View.VISIBLE else View.GONE
+        }
+        gBlock.addView(segmented(playerOpts, if (gTeams) 3 else gPlayers - 2) {
+            gTeams = it == 3; gPlayers = if (it == 3) 4 else it + 2; refreshG(); save()
+        })
+        gBlock.addView(gPlayersHelp)
+        partnerBlock.addView(section("PARTNERS"))
+        partnerBlock.addView(segmented(listOf("Across", "Beside: blue", "Beside: yellow"), gPartner - 1) {
+            gPartner = it + 1; refreshG(); save()
+        })
+        gBlock.addView(partnerBlock)
+        gBlock.addView(section("BALLS EACH"))
+        gBlock.addView(segmented(listOf("6", "7", "8"), gEach - 6) { gEach = it + 6; save() })
+        refreshG()
+        card.addView(gBlock)
 
         // Opponent: the computer, a friend, or practice on your own.
         card.addView(section("OPPONENT"))
@@ -355,14 +402,19 @@ class MenuActivity : Activity() {
         card.addView(practiceBlock)
 
         refresh = {
-            val poolTable = mode != GameMode.TRICK && mode != GameMode.BUMPER && mode != GameMode.OCTAGON
+            val poolTable = mode != GameMode.TRICK && mode != GameMode.BUMPER && mode != GameMode.OCTAGON && mode != GameMode.GAUNTLET
             practiceBlock.visibility = if (practice) View.VISIBLE else View.GONE
             rulesBlock.visibility = if (practice && poolTable) View.VISIBLE else View.GONE
             levelBlock.visibility = if (practice && mode == GameMode.TRICK) View.VISIBLE else View.GONE
             bumperPracticeHelp.visibility = if (practice && mode == GameMode.BUMPER) View.VISIBLE else View.GONE
-            octPracticeHelp.visibility = if (practice && mode == GameMode.OCTAGON) View.VISIBLE else View.GONE
+            octPracticeHelp.visibility = if (practice && (mode == GameMode.OCTAGON || mode == GameMode.GAUNTLET)) View.VISIBLE else View.GONE
+            octPracticeHelp.text = if (mode == GameMode.GAUNTLET) "The Gauntlet on your own, with every colour's balls, no rules: tap any ball to shoot it, hold one to move it."
+                else "The octagon table on your own, with every colour's balls and the layout above, no rules: tap any ball to shoot it, hold one to move it."
             octHelp.visibility = if (mode == GameMode.OCTAGON) View.VISIBLE else View.GONE
             octBlock.visibility = if (mode == GameMode.OCTAGON) View.VISIBLE else View.GONE
+            gauntHelp.visibility = if (mode == GameMode.GAUNTLET) View.VISIBLE else View.GONE
+            gBlock.visibility = if (mode == GameMode.GAUNTLET) View.VISIBLE else View.GONE
+            refreshG()
             refreshOct()
             rulesHelp.text = if (practiceRules) "On your own with the ${Stats.modeName(mode)} rules: you take every shot, and each " +
                 "one is judged as in a game (fouls give you ball in hand). Retry a shot, re-rack, or hold a ball to move it."
@@ -379,6 +431,7 @@ class MenuActivity : Activity() {
             skillTitleRef?.text = when {
                 mode == GameMode.CUTTHROAT -> "COMPUTER SKILL (BOTH CPUs)"
                 mode == GameMode.OCTAGON && octPlayers > 2 -> "COMPUTER SKILL (ALL CPUs)"
+                mode == GameMode.GAUNTLET && gPlayers > 2 -> "COMPUTER SKILL (ALL CPUs)"
                 else -> "COMPUTER SKILL"
             }
             // Trick shots are always on the 9 ft table (with its gap) and bumper pool on its own table.
@@ -752,8 +805,10 @@ class MenuActivity : Activity() {
             putExtra(GameActivity.EXTRA_SOUND, sound)
             putExtra(GameActivity.EXTRA_CLOCK, if (clockOn && !practice) clockSec else 0)
             putExtra(GameActivity.EXTRA_PRACTICE, practice)
-            putExtra(GameActivity.EXTRA_OCT_PLAYERS, octPlayers)
-            putExtra(GameActivity.EXTRA_OCT_TEAMS, octTeams)
+            putExtra(GameActivity.EXTRA_OCT_PLAYERS, if (mode == GameMode.GAUNTLET) gPlayers else octPlayers)
+            putExtra(GameActivity.EXTRA_OCT_TEAMS, if (mode == GameMode.GAUNTLET) gTeams else octTeams)
+            putExtra(GameActivity.EXTRA_G_EACH, gEach)
+            putExtra(GameActivity.EXTRA_PARTNER, gPartner)
             putExtra(GameActivity.EXTRA_OCT_LAYOUT, octLayout)
             putExtra(GameActivity.EXTRA_TRICK_SET, trickSet)
         })

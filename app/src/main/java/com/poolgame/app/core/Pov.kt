@@ -177,6 +177,12 @@ class PovScene {
         const val POST_TOP = 0xFFB9BFC5.toInt()
         const val RING_RED = 0xFFC62828.toInt()
         const val RING_WHITE = 0xFFEDE6D2.toInt()
+        /** The Gauntlet: its ramps (varnished wood), the dish (felt-lined) and the loops' steel track. */
+        const val RAMP = 0xFFB97A34.toInt()
+        const val RAMP_SIDE = 0xFF7A4A1C.toInt()
+        const val DISH = 0xFF8C7BC0.toInt()
+        const val DISH_RIM = 0xFF4E4370.toInt()
+        const val STEEL = 0xFFB4C2CB.toInt()
 
         const val NOSE_H = 0.036     // cushion nose height
         const val RAIL_H = 0.044     // top of the rails
@@ -332,7 +338,7 @@ class PovScene {
         clothR = cam.focal * L * 0.75 / q[2].coerceAtLeast(0.3)
 
         // ---- layer 1: pockets and holes in the cloth, and the balls' shadows.
-        if (Table.bumper) for ((i, pk) in Table.pockets.withIndex())
+        if (Table.bumper || Table.gauntlet) for ((i, pk) in Table.pockets.withIndex())
             disc(pk.cx, pk.cy, 0.0003, pk.capR + 0.009, cupRings?.getOrNull(i) ?: if (i == 1) RING_RED else RING_WHITE, 1, 24)
         for (pk in Table.pockets) {
             if (Table.gap && Table.overGap(pk.cx)) continue
@@ -393,6 +399,7 @@ class PovScene {
         }
         // Bumpers.
         for (pt in Table.posts) post(pt)
+        if (Table.gauntlet) gauntletParts()
         // Balls.
         for (b in w.balls) {
             if (!b.onTable) continue
@@ -527,6 +534,89 @@ class PovScene {
     }
 
     /** A bumper: a short round post, black rubber with a red band, and a metal cap. */
+    /**
+     * The Gauntlet's Cage: the four curved ramps (top in slices, sides and back), the dish (a grid on its sphere,
+     * with its rim), and the two loops' steel tracks standing on the diagonals.
+     */
+    private fun gauntletParts() {
+        val m = Gauntlet.MID
+        val l = DoubleArray(4)
+        val len = Gauntlet.RAMP_FOOT - Gauntlet.RAMP_LIP
+        val hw = Gauntlet.RAMP_HALF_W
+        for (k in 0 until 4) {
+            Gauntlet.rampLocal(k, m, m, l)
+            val dx = l[2]; val dy = l[3]
+            val wx = -dy * hw; val wy = dx * hw
+            val fx = m - dx * Gauntlet.RAMP_FOOT; val fy = m - dy * Gauntlet.RAMP_FOOT
+            val slices = 8
+            for (i in 0 until slices) {
+                val s0 = len * i / slices; val s1 = len * (i + 1) / slices
+                val h0 = Gauntlet.rampHeight(s0); val h1 = Gauntlet.rampHeight(s1)
+                val ax = fx + dx * s0; val ay = fy + dy * s0; val bx2 = fx + dx * s1; val by2 = fy + dy * s1
+                val sl = (h1 - h0) / (s1 - s0); val inv = 1 / sqrt(1 + sl * sl)
+                quad(ax - wx, ay - wy, h0, bx2 - wx, by2 - wy, h1, bx2 + wx, by2 + wy, h1, ax + wx, ay + wy, h0,
+                    lit(RAMP, -dx * sl * inv, -dy * sl * inv, inv), 2)
+                quad(ax + wx, ay + wy, h0, bx2 + wx, by2 + wy, h1, bx2 + wx, by2 + wy, 0.0, ax + wx, ay + wy, 0.0,
+                    lit(RAMP_SIDE, wx / hw, wy / hw, 0.0), 2)
+                quad(ax - wx, ay - wy, h0, bx2 - wx, by2 - wy, h1, bx2 - wx, by2 - wy, 0.0, ax - wx, ay - wy, 0.0,
+                    lit(RAMP_SIDE, -wx / hw, -wy / hw, 0.0), 2)
+            }
+            val lx = fx + dx * len; val ly = fy + dy * len; val lh = Gauntlet.rampHeight(len)
+            quad(lx - wx, ly - wy, lh, lx + wx, ly + wy, lh, lx + wx, ly + wy, 0.0, lx - wx, ly - wy, 0.0, lit(RAMP_SIDE, dx, dy, 0.0), 2)
+        }
+        // The dish: a 6 x 6 grid on its sphere, and its rim.
+        val half = Gauntlet.DISH_HALF
+        val g = 6
+        val cz = Gauntlet.DISH_LOW + Gauntlet.DISH_SPHERE
+        for (i in 0 until g) for (j in 0 until g) {
+            val x0 = m - half + 2 * half * i / g; val x1 = m - half + 2 * half * (i + 1) / g
+            val y0 = m - half + 2 * half * j / g; val y1 = m - half + 2 * half * (j + 1) / g
+            val xc = (x0 + x1) / 2 - m; val yc = (y0 + y1) / 2 - m
+            val hc = Gauntlet.dishHeight(m + xc, m + yc)
+            val nl = sqrt(xc * xc + yc * yc + (cz - hc) * (cz - hc))
+            quad(x0, y0, Gauntlet.dishHeight(x0, y0), x1, y0, Gauntlet.dishHeight(x1, y0), x1, y1, Gauntlet.dishHeight(x1, y1),
+                x0, y1, Gauntlet.dishHeight(x0, y1), lit(DISH, -xc / nl, -yc / nl, (cz - hc) / nl), 2)
+        }
+        val th = Gauntlet.DISH_THICK
+        for (e in 0 until 4) {
+            val g2 = 6
+            for (i in 0 until g2) {
+                val t0 = -half + 2 * half * i / g2; val t1 = -half + 2 * half * (i + 1) / g2
+                val (ax, ay, bx2, by2) = when (e) {
+                    0 -> listOf(m - half, m + t0, m - half, m + t1)
+                    1 -> listOf(m + half, m + t0, m + half, m + t1)
+                    2 -> listOf(m + t0, m - half, m + t1, m - half)
+                    else -> listOf(m + t0, m + half, m + t1, m + half)
+                }
+                val ha = Gauntlet.dishHeight(ax, ay); val hb = Gauntlet.dishHeight(bx2, by2)
+                quad(ax, ay, ha, bx2, by2, hb, bx2, by2, hb - th, ax, ay, ha - th, DISH_RIM, 2)
+            }
+        }
+        // The loops: a steel ribbon round each, and the flat track out to its mouths.
+        val ld = DoubleArray(2)
+        val rt = Gauntlet.LOOP_R + P.R
+        val ch = Gauntlet.LOOP_R + P.R
+        val tw = Gauntlet.LOOP_HALF_W
+        for (i in 0..1) {
+            Gauntlet.loopDir(i, ld)
+            val ux = ld[0]; val uy = ld[1]
+            val wx = -uy * tw; val wy = ux * tw
+            val segs = 28
+            for (k in 0 until segs) {
+                val a0 = 2 * PI * k / segs; val a1 = 2 * PI * (k + 1) / segs
+                val x0 = m + ux * rt * sin(a0); val y0 = m + uy * rt * sin(a0); val h0 = ch - rt * cos(a0)
+                val x1 = m + ux * rt * sin(a1); val y1 = m + uy * rt * sin(a1); val h1 = ch - rt * cos(a1)
+                val am = (a0 + a1) / 2
+                quad(x0 - wx, y0 - wy, h0, x1 - wx, y1 - wy, h1, x1 + wx, y1 + wy, h1, x0 + wx, y0 + wy, h0,
+                    lit(STEEL, -ux * sin(am), -uy * sin(am), cos(am)), 2)
+            }
+            for (sgn in doubleArrayOf(-1.0, 1.0)) {
+                val ex = m + ux * sgn * Gauntlet.LOOP_MOUTH; val ey = m + uy * sgn * Gauntlet.LOOP_MOUTH
+                quad(m - wx, m - wy, 0.003, ex - wx, ey - wy, 0.003, ex + wx, ey + wy, 0.003, m + wx, m + wy, 0.003, STEEL, 1)
+            }
+        }
+    }
+
     private fun post(pt: Post) {
         val segs = 14
         val h1 = Table.POST_H * 0.45; val h2 = Table.POST_H * 0.78; val h3 = Table.POST_H

@@ -229,6 +229,36 @@ table's bumpers (same size, look and bounce); each cup has one either side of it
 - **Practice** (Octagon, Opponent → Practice): the octagon table on your own with all four colours and the chosen
   layout, no rules, as in bumper practice.
 
+## The Gauntlet (menu → Game → Gauntlet)
+
+A square bumper table, **80″ cushion to cushion**, with ordinary cushions on all four sides and a cup in the middle of
+each side, 5.1″ off the cushion. `core/Gauntlet.kt` has every measurement.
+
+- **68 bumpers** in a pinwheel, turned four ways. Each cup has a bumper either side of it. From the starting spots
+  there is no shot into your cup straight, off one cushion or off one bumper; every ball takes at least two shots, or
+  one very good one.
+- **The Cage**, in the middle:
+  - **Two loop-de-loops**, 18″ across, standing on end along the diagonals and crossing at the top and bottom. Red and
+    white share one loop, blue and yellow the other. A ball has to come in along the diagonal (within about 1.5″ of it)
+    and firmly: about 3.5 m/s from 20″ back. Too soft and it falls off the top and rolls back out toward you. Rolled
+    in from the side, it bounces off the track. Past each loop exit stands a deflector bumper that turns the ball
+    toward a cup, not straight in.
+  - **The dish**: a 10″ square cut from a sphere (radius 11.8″), dip up, its lowest point 3″ off the cloth, with no
+    lip. It hangs inside the loops.
+  - **Four ramps**, one on each side, each aimed straight across at the cup the player on that side shoots into. Each
+    is a smooth concave curve, 12″ long, rising 4″ at its lip (about 37°), with a gap before the dish. You jump the
+    gap, land on the dish, and roll off it toward your cup. That's hard: too soft and the ball falls short into the
+    gap, too hard and it sails over the dish.
+- **Cups only catch a slow ball**: faster than 1.5 m/s, a ball skims over the cup (on this table only). A ball off a
+  ramp or out of a loop never drops straight in.
+- **Players**: 2, 3 or 4, or **2 v 2**. **6, 7 or 8 balls each** (menu → BALLS EACH). Colours, cups and the opening
+  are as on the octagon. In 2 v 2 you choose your partner: **across** (white), or **beside** you (blue or yellow).
+  Turns always alternate between the teams.
+- **Rules** are the octagon's: marked ball first, everyone's opening shot goes at once, and a foul means every other
+  player drops one in by hand. Nothing can be placed on a ramp, the dish or a loop's track.
+- The computer looks at straight shots, cushion banks, ramp shots and loop shots, and weighs them by how often its own
+  shaky aim would still make them.
+
 ## Circuit Pool (menu → Game → Circuit)
 
 A hidden-objective game on the regulation table with all fifteen balls, racked in any order. At the start each player

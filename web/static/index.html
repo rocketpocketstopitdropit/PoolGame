@@ -33,7 +33,7 @@
   .seg button.on { background: #2F8F5B; color: #fff; }
   .seg.wrap { flex-wrap: wrap; }
   .seg.wrap button { flex: 1 1 30%; }
-  #seg-mode button { flex: 1 1 22%; font-size: 14px; }
+  #seg-mode button { flex: 1 1 30%; font-size: 14px; }
   .val { color: #fff; font: bold 15px "Arial Narrow", Arial, sans-serif; margin: 2px 0; }
   input[type=range] { width: 100%; accent-color: #F2C94C; height: 32px; }
   input[type=range]:disabled { opacity: 0.35; }
@@ -95,7 +95,7 @@
     <p class="sub">8-Ball · 9-Ball · Circuit Pool · Pocket Wars · Cutthroat · bumper pool · octagon bumper · trick shots</p>
 
     <div class="sec">GAME</div>
-    <div class="seg wrap" id="seg-mode"><button>8-Ball</button><button>9-Ball</button><button>Circuit</button><button>Pocket Wars</button><button>Cutthroat</button><button>Bumper</button><button>Octagon</button><button>Trick</button></div>
+    <div class="seg wrap" id="seg-mode"><button>8-Ball</button><button>9-Ball</button><button>Circuit</button><button>Pocket Wars</button><button>Cutthroat</button><button>Bumper</button><button>Octagon</button><button>Gauntlet</button><button>Trick</button></div>
     <p class="help" id="circuitHelp" style="display:none">Circuit Pool: each player is secretly dealt three of the fifteen
       balls; the other nine are neutral. Hit any ball first. Sinking your own or a neutral ball keeps you shooting;
       sinking one of your opponent's counts for them and ends your turn. You see your own targets and how many your
@@ -121,6 +121,23 @@
       ball in a cup that isn't yours, a ball off the table or a jump shot is a foul: everyone else (in teams, the other
       team) drops one in. First to sink all five wins; in teams, a player whose five are down shoots their partner's,
       and the team wins when all ten are down.</p>
+    <p class="help" id="gauntHelp" style="display:none">The Gauntlet: an 80″ square bumper table with cushions, a cup in the
+      middle of each side and 68 bumpers. Nothing goes in from where the balls start in one stroke. In the middle is the Cage:
+      two loop-de-loops crossing over a hanging dish. Your own curved ramp points straight at your cup: hit it right, jump the
+      gap onto the dish and it flings the ball on toward the cup. Through a loop, a deflector bumper sends it at a cup. A cup
+      only catches a ball that's not going too fast. Two to four players or 2 v 2, 6 to 8 balls each, the octagon's rules:
+      your marked ball first, every marked ball goes at once to open, and a foul lets everyone else drop one in.</p>
+    <div id="gBlock" style="display:none">
+      <div class="sec">PLAYERS</div>
+      <div class="seg" id="seg-gp"><button>2</button><button>3</button><button>4</button><button>2 v 2</button></div>
+      <p class="help" id="gpHelp" style="margin-top:6px"></p>
+      <div id="gPartnerBlock" style="display:none">
+        <div class="sec">PARTNERS</div>
+        <div class="seg" id="seg-gpartner"><button>Across</button><button>Beside: blue</button><button>Beside: yellow</button></div>
+      </div>
+      <div class="sec">BALLS EACH</div>
+      <div class="seg" id="seg-geach"><button>6</button><button>7</button><button>8</button></div>
+    </div>
     <div id="octBlock" style="display:none">
       <div class="sec">PLAYERS</div>
       <div class="seg" id="seg-octp"><button>2</button><button>3</button><button>4</button><button>2 v 2</button></div>

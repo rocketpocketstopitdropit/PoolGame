@@ -28,6 +28,7 @@ import com.poolgame.app.core.GameMode
 import com.poolgame.app.core.Group
 import com.poolgame.app.core.Match
 import com.poolgame.app.core.P
+import com.poolgame.app.core.Gauntlet
 import com.poolgame.app.core.Plan
 import com.poolgame.app.core.PovCam
 import com.poolgame.app.core.PovControl
@@ -74,7 +75,9 @@ class GameView(
     private val octTeams: Boolean = false,       // octagon table, four players: two teams of two
     private val octLayout: Int = 0,              // octagon table: the bumper layout
     private val scratchKitchen: Boolean = false, // bar rules: ball in hand in the kitchen after a scratch
-    private val trickSet: Int = 0                // trick-shot match: 0 the gap jumps, 1 the classics
+    private val trickSet: Int = 0,               // trick-shot match: 0 the gap jumps, 1 the classics
+    private val gauntEach: Int = 7,              // the Gauntlet: balls each (6 to 8)
+    private val partner: Int = 1                 // the Gauntlet, 2 v 2: red's partner (1 across, 2 or 3 beside)
 ) : View(context), Choreographer.FrameCallback {
 
     interface Host {
@@ -125,12 +128,16 @@ class GameView(
     private val cutthroat = mode == GameMode.CUTTHROAT
     /** The octagon bumper table: two to four players (or two teams of two), four cups, ramps for cushions. */
     private val octagon = mode == GameMode.OCTAGON
+    /** The Gauntlet: the octagon's rules (two to four players, or teams) on the square table with the Cage in the middle. */
+    private val gauntlet = mode == GameMode.GAUNTLET
+    /** Either four-way bumper game. */
+    private val fourWay = octagon || gauntlet
     private val names = when {
         // (Practice on the octagon table puts out all four colours, so it has four seats.)
-        octagon && practiceMode -> arrayOf("Red", "White", "Blue", "Yellow")
-        octagon && vsCpu && octPlayers == 2 -> arrayOf("You", "CPU")
-        octagon && vsCpu -> Array(octPlayers) { if (it == 0) "You" else "CPU $it" }
-        octagon -> Array(octPlayers) { "Player ${it + 1}" }
+        fourWay && practiceMode -> arrayOf("Red", "White", "Blue", "Yellow")
+        fourWay && vsCpu && octPlayers == 2 -> arrayOf("You", "CPU")
+        fourWay && vsCpu -> Array(octPlayers) { if (it == 0) "You" else "CPU $it" }
+        fourWay -> Array(octPlayers) { "Player ${it + 1}" }
         cutthroat && vsCpu -> arrayOf("You", "CPU 1", "CPU 2")
         cutthroat && rulesPractice -> arrayOf("You", "Opponent 1", "Opponent 2")
         cutthroat -> arrayOf("Player 1", "Player 2", "Player 3")
@@ -214,7 +221,7 @@ class GameView(
      * Bumper pool, on the small table or the octagon: no cue ball (you shoot your own balls), its own
      * table, and an opening shot every player takes at once.
      */
-    private val bumper = mode == GameMode.BUMPER || octagon
+    private val bumper = mode == GameMode.BUMPER || fourWay
     /** Bumper pool practice: the bumper table on your own, any ball, no rules. */
     private val bumperPractice = practice && bumper
     /** Circuit Pool: three secret target balls each. */
@@ -339,7 +346,7 @@ class GameView(
         povBalls.plain = balls.plain
         balls.bumper = bumper
         povBalls.bumper = bumper
-        if (bumper) povScene.cupRings = BumperColors.cupRings(octagon, names.size)
+        if (bumper) povScene.cupRings = BumperColors.cupRings(fourWay, names.size)
         // Cutthroat has no rock, paper, scissors (three players): the first breaker is drawn at random.
         if (resume == null || !resumeGame(resume)) newGame(if (cutthroat && !practiceMode) rng.nextInt(3) else 0)
     }
@@ -370,6 +377,7 @@ class GameView(
         match = Match(mode, names)
         match.trick.set = trickSet.coerceIn(0, Trick.SETS.size - 1)
         match.teams = octTeams && names.size == 4 && !practiceMode
+        if (gauntlet) { match.each = gauntEach; match.partner = partner }
         match.world.trackOrientation = true
         match.world.listener = makeListener()
         match.rack(rng, breaker)
@@ -464,13 +472,14 @@ class GameView(
     fun isPractice() = practiceMode
 
     private fun settings() = GameSettings(mode, vsCpu, cpuLevel, shotClock, practiceMode, breaker, match.callMode, tableSize, rulesPractice,
-        octPlayers, octTeams, octLayout, match.scratchKitchen, match.trick.set)
+        octPlayers, octTeams, octLayout, match.scratchKitchen, match.trick.set, match.each.coerceIn(6, 8), match.partner)
 
     private fun useTable() {
         when (mode) {
             GameMode.TRICK -> {}
             GameMode.BUMPER -> Table.useBumper()
             GameMode.OCTAGON -> Table.useOctagon(octLayout)
+            GameMode.GAUNTLET -> Table.useGauntlet()
             else -> Table.useStandard(tableSize)
         }
     }
@@ -521,7 +530,7 @@ class GameView(
         .replace("Opponent to break", "break again")
 
     private fun practiceHint() =
-        if (bumperPractice) "${if (octagon) "Octagon" else "Bumper"} practice · tap a ball to shoot it, hold it to move it" else "Practice · hold any ball to move it"
+        if (bumperPractice) "${if (octagon) "Octagon" else if (gauntlet) "Gauntlet" else "Bumper"} practice · tap a ball to shoot it, hold it to move it" else "Practice · hold any ball to move it"
 
     private fun startTurn() {
         match.prepareTurn()
@@ -877,8 +886,8 @@ class GameView(
                     tut?.onShotDone(!match.world.balls[Tutorial.TARGET_BALL].onTable)
                     if (bumperPractice) {
                         // (On the octagon table a ball flying off a ramp is just physics; only the cue's jump counts.)
-                        val bit = 1 shl match.world.cue
-                        val jumped = ((if (octagon) match.world.log.cueJumps or match.world.log.scoops else match.world.log.air) and bit) != 0
+                        val bit = 1L shl match.world.cue
+                        val jumped = ((if (fourWay) match.world.log.cueJumps or match.world.log.scoops else match.world.log.air) and bit) != 0L
                         // The ball you shot went down: carry on with the nearest one left.
                         if (!match.world.cueBall.onTable) bumperPracticePick(-1)
                         message = when {
@@ -1258,7 +1267,7 @@ class GameView(
         }
         msgL = leftCard.right + 10 * dp
         msgR = (if (cutthroat && !practice) midCard.left else rightCard.left) - 10 * dp
-        if (octagon && !practice && names.size > 2) {
+        if (fourWay && !practice && names.size > 2) {
             // Three or four players, in the order they shoot: three cards like Cutthroat's, or two each side.
             val n = names.size
             val cw = if (n == 4) min(w * 0.155f, 170 * dp) else min(w * 0.19f, 200 * dp)
@@ -1393,10 +1402,12 @@ class GameView(
         if (Table.gap) c.clipOutRect(gapRect)
         for ((pi, pk) in Table.pockets.withIndex()) {
             val r = (pk.capR * scale).toFloat()
-            if (Table.bumper) {
+            if (Table.bumper || Table.gauntlet) {
                 // Bumper pool: each cup is ringed in the colour of the player who shoots into it.
                 val own = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    style = Paint.Style.STROKE; strokeWidth = 4f * dp; color = if (pi == 1) 0xFFC62828.toInt() else 0xFFEDE6D2.toInt()
+                    style = Paint.Style.STROKE; strokeWidth = 4f * dp
+                    color = if (Table.gauntlet) BumperColors.cupRings(true, names.size)[pi]
+                        else if (pi == 1) 0xFFC62828.toInt() else 0xFFEDE6D2.toInt()
                 }
                 c.drawCircle(sx(pk.cx), sy(pk.cy), r + 5 * dp, own)
             }
@@ -1420,6 +1431,7 @@ class GameView(
         c.restore()
         val nose = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f * dp; color = 0xFF0E4A2D.toInt(); strokeCap = Paint.Cap.ROUND }
         for (sg in Table.segs) c.drawLine(sx(sg.ax), sy(sg.ay), sx(sg.bx), sy(sg.by), nose)
+        if (Table.gauntlet) drawGauntlet(c)
         // Bumpers: a black rubber ring with a red band and a metal cap, seen from above.
         for (pt in Table.posts) {
             val px = sx(pt.x); val py = sy(pt.y); val pr = (pt.r * scale).toFloat()
@@ -1446,7 +1458,7 @@ class GameView(
             diamond(c, sx(-dOff), sy(y), dr, p)
             if (!(Table.gap && i == 2)) diamond(c, sx(P.L + dOff), sy(y), dr, p)
         }
-        if (Table.gap || Table.bumper) return
+        if (Table.gap || Table.bumper || Table.gauntlet) return
         val hs = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1f * dp; color = 0x30FFFFFF; pathEffect = DashPathEffect(floatArrayOf(4 * dp, 6 * dp), 0f) }
         c.drawLine(sx(P.HEAD_X), sy(0.0), sx(P.HEAD_X), sy(P.W), hs)
         p.color = 0x55FFFFFF
@@ -1454,9 +1466,97 @@ class GameView(
         c.drawCircle(sx(P.HEAD_X), sy(P.FOOT_Y), 2.5f * dp, p)
     }
 
-    /** How high ball [b] is off the surface under it (on the octagon table's ramps, above the ramp). */
-    private fun airOf(b: com.poolgame.app.core.Ball): Double =
-        if (octagon) (b.z - Table.surfaceZ(b.x, b.y)).coerceAtLeast(0.0).let { if (it < 0.002) 0.0 else it } else b.z
+    /** How high ball [b] is off the surface under it (on the octagon table's ramps, above the ramp; the Gauntlet's ramps and dish). */
+    private fun airOf(b: com.poolgame.app.core.Ball): Double {
+        if (Table.gauntlet) {
+            Gauntlet.surface(b.x, b.y, b.z, gSurf)
+            return (b.z - gSurf[0]).coerceAtLeast(0.0).let { if (it < 0.002) 0.0 else it }
+        }
+        return if (octagon) (b.z - Table.surfaceZ(b.x, b.y)).coerceAtLeast(0.0).let { if (it < 0.002) 0.0 else it } else b.z
+    }
+    private val gSurf = DoubleArray(4)
+
+    /**
+     * The Gauntlet's Cage from above: the loops' tracks along the diagonals, the four curved ramps (contour lines
+     * closer together as they steepen, a shadow in the gap past each lip), the dish hanging in the middle (darkest
+     * where it dips), and the loops' tops crossing over it.
+     */
+    private fun drawGauntlet(c: Canvas) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        val st = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        val m = Gauntlet.MID
+        val ld = DoubleArray(2)
+        val loopHalf = Gauntlet.LOOP_R + P.R
+        val tw = Gauntlet.LOOP_HALF_W
+        val gpath = Path()
+        fun strip(ux: Double, uy: Double, a: Double, hw: Double) {
+            val wx = -uy * hw; val wy = ux * hw
+            gpath.reset()
+            gpath.moveTo(sx(m - ux * a - wx), sy(m - uy * a - wy)); gpath.lineTo(sx(m + ux * a - wx), sy(m + uy * a - wy))
+            gpath.lineTo(sx(m + ux * a + wx), sy(m + uy * a + wy)); gpath.lineTo(sx(m - ux * a + wx), sy(m - uy * a + wy)); gpath.close()
+        }
+        // The loops' tracks (their lower halves and the run out to each mouth).
+        for (i in 0..1) {
+            Gauntlet.loopDir(i, ld)
+            strip(ld[0], ld[1], loopHalf, tw)
+            p.color = 0x66000000; c.save(); c.translate(2 * dp, 3 * dp); c.drawPath(gpath, p); c.restore()
+            p.color = 0xFF8E9BA4.toInt(); c.drawPath(gpath, p)
+            st.color = 0xFF4F5C64.toInt(); st.strokeWidth = 1.2f * dp; c.drawPath(gpath, st)
+        }
+        // The ramps.
+        val l = DoubleArray(4)
+        val len = Gauntlet.RAMP_FOOT - Gauntlet.RAMP_LIP
+        val hw = Gauntlet.RAMP_HALF_W
+        for (k in 0 until 4) {
+            Gauntlet.rampLocal(k, m, m, l)
+            val dx = l[2]; val dy = l[3]
+            val wx = -dy * hw; val wy = dx * hw
+            val fx = m - dx * Gauntlet.RAMP_FOOT; val fy = m - dy * Gauntlet.RAMP_FOOT
+            val lx = fx + dx * len; val ly = fy + dy * len
+            // Shadow in the gap beyond the lip.
+            val gx = m - dx * Gauntlet.DISH_HALF; val gy = m - dy * Gauntlet.DISH_HALF
+            gpath.reset()
+            gpath.moveTo(sx(lx - wx), sy(ly - wy)); gpath.lineTo(sx(gx - wx), sy(gy - wy)); gpath.lineTo(sx(gx + wx), sy(gy + wy)); gpath.lineTo(sx(lx + wx), sy(ly + wy)); gpath.close()
+            p.color = 0x55000000; c.drawPath(gpath, p)
+            gpath.reset()
+            gpath.moveTo(sx(fx - wx), sy(fy - wy)); gpath.lineTo(sx(lx - wx), sy(ly - wy)); gpath.lineTo(sx(lx + wx), sy(ly + wy)); gpath.lineTo(sx(fx + wx), sy(fy + wy)); gpath.close()
+            p.shader = LinearGradient(sx(fx), sy(fy), sx(lx), sy(ly), 0xFF8C6A3C.toInt(), 0xFFE0A84A.toInt(), Shader.TileMode.CLAMP)
+            c.drawPath(gpath, p); p.shader = null
+            // Contour lines every half inch of height: closer together where it's steeper.
+            st.color = 0x80583A12.toInt(); st.strokeWidth = 0.8f * dp
+            var h = 0.5 * Gauntlet.IN
+            while (h < Gauntlet.rampHeight(len)) {
+                val r = Gauntlet.RAMP_RADIUS
+                val s = kotlin.math.sqrt(r * r - (r - h) * (r - h))
+                val ax = fx + dx * s; val ay = fy + dy * s
+                c.drawLine(sx(ax - wx), sy(ay - wy), sx(ax + wx), sy(ay + wy), st)
+                h += 0.5 * Gauntlet.IN
+            }
+            st.color = 0xFF3C2408.toInt(); st.strokeWidth = 1.5f * dp
+            c.drawPath(gpath, st)
+            st.strokeWidth = 2.5f * dp
+            c.drawLine(sx(lx - wx), sy(ly - wy), sx(lx + wx), sy(ly + wy), st)
+        }
+        // The dish, hanging in the middle (with its shadow on the cloth).
+        val half = Gauntlet.DISH_HALF
+        val dl = sx(m - half); val dt = sy(m - half); val dr = sx(m + half); val db = sy(m + half)
+        p.color = 0x66000000; c.drawRect(dl + 4 * dp, dt + 6 * dp, dr + 4 * dp, db + 6 * dp, p)
+        p.shader = RadialGradient(sx(m), sy(m), (half * 1.42 * scale).toFloat(), intArrayOf(0xFF4E3F84.toInt(), 0xFF7E6CB6.toInt(), 0xFFC4B4EA.toInt()),
+            floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+        c.drawRect(dl, dt, dr, db, p); p.shader = null
+        st.color = 0xFF3A2F62.toInt(); st.strokeWidth = 1.6f * dp; c.drawRect(dl, dt, dr, db, st)
+        st.color = 0x55FFFFFF; st.strokeWidth = 0.8f * dp
+        c.drawCircle(sx(m), sy(m), (half * 0.45 * scale).toFloat(), st)
+        c.drawCircle(sx(m), sy(m), (half * 0.85 * scale).toFloat(), st)
+        // The loops' tops cross over the dish.
+        for (i in 0..1) {
+            Gauntlet.loopDir(i, ld)
+            val wx = -ld[1] * tw; val wy = ld[0] * tw
+            st.color = 0xDDB4C2CB.toInt(); st.strokeWidth = 2f * dp
+            for (sgn in doubleArrayOf(-1.0, 1.0)) c.drawLine(sx(m - ld[0] * loopHalf + sgn * wx), sy(m - ld[1] * loopHalf + sgn * wy),
+                sx(m + ld[0] * loopHalf + sgn * wx), sy(m + ld[1] * loopHalf + sgn * wy), st)
+        }
+    }
 
     private fun diamond(c: Canvas, x: Float, y: Float, r: Float, p: Paint) {
         path.reset()
@@ -2155,7 +2255,7 @@ class GameView(
         text.textSize = min(16 * dp, leftCard.height() * 0.32f); text.color = Color.WHITE
         val title = when {
             rulesPractice -> "${Stats.modeName(mode).uppercase()} PRACTICE"
-            bumperPractice -> if (octagon) "OCTAGON PRACTICE" else "BUMPER PRACTICE"
+            bumperPractice -> if (octagon) "OCTAGON PRACTICE" else if (gauntlet) "GAUNTLET PRACTICE" else "BUMPER PRACTICE"
             else -> "PRACTICE"
         }
         canvas.drawText(ellipsize(title, leftCard.width() - 20 * dp), leftCard.left + 12 * dp, leftCard.top + leftCard.height() * 0.42f, text)
@@ -2261,8 +2361,8 @@ class GameView(
 
     /** Player [p]'s card at the top of the screen: the cards go in the order the players shoot. */
     private fun cardOf(p: Int): RectF = when {
-        octagon && names.size == 4 -> when (p) { 0 -> leftCard; 2 -> midCard; 1 -> card4; else -> rightCard }
-        octagon && names.size == 3 -> when (p) { 0 -> leftCard; 2 -> midCard; else -> rightCard }
+        fourWay && names.size == 4 -> when (p) { 0 -> leftCard; 2 -> midCard; 1 -> card4; else -> rightCard }
+        fourWay && names.size == 3 -> when (p) { 0 -> leftCard; 2 -> midCard; else -> rightCard }
         cutthroat -> when (p) { 0 -> leftCard; 1 -> midCard; else -> rightCard }
         else -> if (p == 0) leftCard else rightCard
     }
@@ -2378,7 +2478,7 @@ class GameView(
             val arrow = when (match.targetCup(player)) { 0 -> "◀"; 1 -> "▶"; 2 -> "▲"; else -> "▼" }
             val q = match.partnerOf(player)
             val dir = when {
-                octagon && names.size == 4 && match.ballsLeft(player) == 0 && q >= 0 -> "done · shoots ${names[q]}'s"
+                fourWay && names.size == 4 && match.ballsLeft(player) == 0 && q >= 0 -> "done · shoots ${names[q]}'s"
                 names.size > 2 -> "$arrow"
                 else -> "${match.colorName(player)} · shoots $arrow"
             }
@@ -2810,7 +2910,7 @@ class GameView(
         if (first && menuBtn.contains(x, y) && phase != Phase.OVER) { ptrMode[id] = Touch.BUTTON; host.onMenuRequested(); return }
         if (phase == Phase.OVER) {
             if (first) {
-                if (rematchBtn.contains(x, y)) newGame(if (practiceMode || octagon) 0 else if (cutthroat) (breaker + 1) % 3 else 1 - breaker)
+                if (rematchBtn.contains(x, y)) newGame(if (practiceMode || fourWay) 0 else if (cutthroat) (breaker + 1) % 3 else 1 - breaker)
                 else if (menuExitBtn.contains(x, y)) host.onExitToMenu()
             }
             ptrMode[id] = Touch.BUTTON

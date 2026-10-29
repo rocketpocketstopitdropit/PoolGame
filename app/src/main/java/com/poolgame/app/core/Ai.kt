@@ -70,7 +70,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong(), defence: Boolea
         val ideal = when (m.mode) {
             GameMode.TRICK -> trickShot(m)
             GameMode.BUMPER -> bumperShot(m)
-            GameMode.OCTAGON -> octShot(m)
+            GameMode.OCTAGON, GameMode.GAUNTLET -> octShot(m)
             GameMode.CIRCUIT -> choose(circuitView(m))
             else -> { pocketWars = m.mode == GameMode.POCKET_WARS; cutthroat = m.mode == GameMode.CUTTHROAT; choose(m) }
         }
@@ -536,7 +536,7 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong(), defence: Boolea
                 // Balls down for this player: good for its side, bad for the other. An opponent close to
                 // finishing is the bigger threat.
                 val down = left0[p] - s.ballsLeft(p)
-                v += if (s.sameTeam(p, me)) 5.0 * down else -5.0 * down * (1.0 + (5 - left0[p]) * 0.15) / opps
+                v += if (s.sameTeam(p, me)) 5.0 * down else -5.0 * down * (1.0 + (m.each - left0[p]) * 0.15) / opps
             }
             if (out.foul) v -= 3.0
             v += if (out.keepTurn) 2.0 - 1.5 * nearest(s, me)
@@ -552,10 +552,16 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong(), defence: Boolea
             return t / samples
         }
 
-        // Aim points: the cup, and its mirror image across each ramp's foot.
+        // Aim points: the cup, and its mirror image across each ramp's foot (the Gauntlet: each cushion).
         val aims = ArrayList<DoubleArray>()
         aims += doubleArrayOf(cup.cx, cup.cy)
-        if (level >= 3) for (i in 0 until 8) {
+        if (m.mode == GameMode.GAUNTLET) {
+            if (level >= 3) {
+                val r = P.R
+                aims += doubleArrayOf(cup.cx, 2 * r - cup.cy); aims += doubleArrayOf(cup.cx, 2 * (P.W - r) - cup.cy)
+                aims += doubleArrayOf(2 * r - cup.cx, cup.cy); aims += doubleArrayOf(2 * (P.L - r) - cup.cx, cup.cy)
+            }
+        } else if (level >= 3) for (i in 0 until 8) {
             val d = Table.octSide(i, cup.cx, cup.cy) - Table.FLAT_D
             aims += doubleArrayOf(cup.cx - 2 * d * Table.octNx(i), cup.cy - 2 * d * Table.octNy(i))
         }
@@ -569,6 +575,38 @@ class Ai(val level: Int, seed: Long = Random.Default.nextLong(), defence: Boolea
                 val v0 = 1.5 * sqrt(2 * P.MU_ROLL * P.G * (d + 0.1)) + 0.3
                 val ang = atan2(a[1] - b.y, a[0] - b.x) + toRad(off)
                 for (f in speedF) cands += doubleArrayOf(id.toDouble(), ang, v0 * f)
+            }
+        }
+        // The Gauntlet's shortcuts: up the ramp that faces the cup (straight in along its axis), and into the loop
+        // whose far end's deflector points at the cup — a little to one side of the line, past the near deflector.
+        if (m.mode == GameMode.GAUNTLET && level >= 3) {
+            val mid = Gauntlet.MID
+            val rampK = m.homeCupRamp(mine)
+            val rl = DoubleArray(4)
+            Gauntlet.rampLocal(rampK, mid, mid, rl)
+            val dx = rl[2]; val dy = rl[3]
+            val loopSpeeds = if (level <= 5) doubleArrayOf(3.2, 3.8) else doubleArrayOf(3.0, 3.4, 3.8, 4.4)
+            val rampSpeeds = if (level <= 5) doubleArrayOf(2.0, 2.8) else doubleArrayOf(1.8, 2.1, 2.4, 2.8, 3.1)
+            for (id in ids) {
+                val b = work.world.balls[id]
+                // Ramp: aim at a point well out along the ramp's axis, so the ball arrives square-ish.
+                for (back in doubleArrayOf(0.0, 0.15)) {
+                    val tx = mid - dx * (Gauntlet.RAMP_FOOT + back); val ty = mid - dy * (Gauntlet.RAMP_FOOT + back)
+                    val far = hypot(tx - b.x, ty - b.y)
+                    for (sp in rampSpeeds) cands += doubleArrayOf(id.toDouble(), atan2(mid - b.y, mid - b.x).let { a ->
+                        if (back == 0.0) atan2(ty - b.y, tx - b.x) else a }, sp * (1 + far * 0.25))
+                }
+                // Loops: each mouth, slightly off the line.
+                val ld = DoubleArray(2)
+                for (li in 0..1) {
+                    Gauntlet.loopDir(li, ld)
+                    for (sgn in doubleArrayOf(-1.0, 1.0)) for (lat in doubleArrayOf(-0.9, 0.9)) {
+                        val mx = mid + ld[0] * sgn * Gauntlet.LOOP_MOUTH - ld[1] * lat * Gauntlet.IN
+                        val my = mid + ld[1] * sgn * Gauntlet.LOOP_MOUTH + ld[0] * lat * Gauntlet.IN
+                        val far = hypot(mx - b.x, my - b.y)
+                        for (sp in loopSpeeds) cands += doubleArrayOf(id.toDouble(), atan2(my - b.y, mx - b.x), sp + far * 0.4)
+                    }
+                }
             }
         }
         // Also nudge the others' balls around (a few shots straight at each), in case nothing goes.

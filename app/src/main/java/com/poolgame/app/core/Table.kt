@@ -116,6 +116,9 @@ object Table {
     /** True while the bumper pool table is in use. */
     var bumper = false
         private set
+    /** True while the Gauntlet (the square four-player bumper table) is in use. */
+    var gauntlet = false
+        private set
     /** The ordinary table is in use for one of the classic trick shots (so a trick match's copies keep it). */
     var trickClassic = false
     /** True while the gap table is in use (balls over the gap fall to the floor). */
@@ -137,7 +140,7 @@ object Table {
     /** The regulation table: four corner pockets and two side pockets, in [s] (default: the size in use). */
     fun useStandard(s: TableSize = size) {
         trickClassic = false
-        if (segs.isNotEmpty() && !gap && !bumper && !octagon && s == size) return
+        if (segs.isNotEmpty() && !gap && !bumper && !octagon && !gauntlet && s == size) return
         size = s
         P.resize(s)
         val L = P.L; val W = P.W
@@ -172,6 +175,7 @@ object Table {
         gap = false
         bumper = false
         octagon = false
+        gauntlet = false
         holeKey = ""
         hasHoles = false
         version++
@@ -192,6 +196,7 @@ object Table {
     /** The bumper pool table. Pocket 0 is the cup at the left end (x = 0), pocket 1 the one at the right. */
     fun useBumper() {
         if (bumper) return
+        gauntlet = false
         P.resize(BUMPER_L, BUMPER_W)
         val L = P.L; val W = P.W
         val cy = W / 2
@@ -210,6 +215,7 @@ object Table {
         gap = false
         bumper = true
         octagon = false
+        gauntlet = false
         holeKey = ""
         hasHoles = true
         version++
@@ -361,8 +367,9 @@ object Table {
         return (p[i + 1] - p[i]) / PROF_STEP
     }
 
-    /** Height of a resting ball's bottom at (x, y): 0 everywhere but the octagon table's ramps. */
+    /** Height of a resting ball's bottom at (x, y): 0 everywhere but the octagon table's ramps and the Gauntlet's. */
     fun surfaceZ(x: Double, y: Double): Double {
+        if (gauntlet) return Gauntlet.rampSurface(x, y)
         if (!octagon) return 0.0
         val z = surfZ(octDist(x, y))
         return if (z == Double.NEGATIVE_INFINITY) 0.0 else z
@@ -394,6 +401,7 @@ object Table {
         gap = false
         bumper = false
         octagon = true
+        gauntlet = false
         octLayout = lay
         holeKey = ""
         hasHoles = true
@@ -483,6 +491,31 @@ object Table {
     )
 
     /**
+     * The Gauntlet ([Gauntlet]): 80" square, cushions all round, a cup in the middle of each side (0 left, 1 right,
+     * 2 top, 3 bottom, as on the octagon table), and 68 bumpers. The ramps, the dish and the loops live in [Gauntlet].
+     */
+    fun useGauntlet() {
+        if (gauntlet) return
+        val l = 2 * Gauntlet.HALF
+        P.resize(l, l)
+        segs = arrayOf(Seg(0.0, 0.0, l, 0.0), Seg(0.0, l, l, l), Seg(0.0, 0.0, 0.0, l), Seg(l, 0.0, l, l))
+        val m = Gauntlet.MID
+        val cups = listOf(CUP_IN to m, l - CUP_IN to m, m to CUP_IN, m to l - CUP_IN)
+        pockets = cups.map { (x, y) ->
+            Pocket(x, y, CUP_R, x, y, false, doubleArrayOf(x - CUP_R, y, x + CUP_R, y), CUP_R - P.R * 0.5, hole = true)
+        }.toTypedArray()
+        posts = Gauntlet.posts().map { Post(it[0], it[1], POST_R) }.toTypedArray()
+        gap = false
+        bumper = false
+        octagon = false
+        gauntlet = true
+        holeKey = ""
+        hasHoles = true
+        trickClassic = false
+        version++
+    }
+
+    /**
      * The trick-shot table: the second quarter (from the head string to the side pockets) is gone.
      * The near section keeps its two corner pockets; the far section has just its two corner pockets
      * at the far end. The edges facing the gap have no cushion: a ball that rolls off falls.
@@ -519,6 +552,7 @@ object Table {
         posts = emptyArray()
         bumper = false
         octagon = false
+        gauntlet = false
         gap = true
         holeKey = key
         hasHoles = holes.isNotEmpty()
