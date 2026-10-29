@@ -1,7 +1,7 @@
 # Pool — 8-Ball, 9-Ball & Trick Shots for Android
 
 A landscape pool game on a 7, 8 or 9 ft table, with real cue-ball spin, a 3D view down the cue, physically real jump shots (and
-illegal scoops), 8-ball and 9-ball rules, Circuit Pool (three secret target balls each), Pocket Wars (a fight over the six pockets), Cutthroat (three players, three groups of five), bumper pool on its own table, octagon bumper pool for up to four players (or two teams) on an eight-sided table with ramps for cushions, a trick-shot mode on a table with a gap cut out of it, a computer opponent with ten skill levels, and pass-and-play for two people (three in Cutthroat). Pure Kotlin, no third-party libraries,
+illegal scoops), 8-ball and 9-ball rules, Circuit Pool (three secret target balls each), Pocket Wars (a fight over the six pockets), Cutthroat (three players, three groups of five), bumper pool on its own table, octagon bumper pool for up to four players (or two teams) on an eight-sided table with ramps for cushions, trick shots (jumps across a table with a gap cut out of it, and eight classic trick shots), a computer opponent with ten skill levels, and pass-and-play for two people (three in Cutthroat). Pure Kotlin, no third-party libraries,
 no image or sound assets (balls are rendered per-pixel and sounds are synthesized).
 
 ## Build & run
@@ -144,12 +144,20 @@ the menu and after each game.
   then sink the 8. Sinking the 8 early, or scratching on it, loses. 8 on the break is respotted.
 - **9-ball:** hit the lowest-numbered ball first; any legal pot keeps the turn. Pot the 9 legally
   (combos and breaks count) to win. Three fouls in a row loses.
-- **Call pocket** (menu: Off / 8 & 9 only / Every shot): tap a pocket to call it (tap again to cancel).
+- **Call pocket** (menu: Off / 8 & 9 only / Every shot), in every game on the regulation table (8-ball, 9-ball,
+  Circuit Pool, Pocket Wars, Cutthroat): tap a pocket to call it (tap again to cancel). Circuit, Pocket Wars and
+  Cutthroat have no money ball, so only *Every shot* applies there: a ball in the called pocket keeps your turn, anything
+  else is slop (in Pocket Wars a slopped ball is spotted and scores nothing; one in the opponent's pocket still scores
+  for them).
   *8 & 9 only*: the 8 (8-ball) or the 9 (9-ball) must go in the called pocket — an 8 in the wrong pocket
   loses, an uncalled 9 is respotted. *Every shot*: only one of your balls in the called pocket keeps your
   turn; anything else is slop (no foul, the opponent shoots, slopped balls stay down). The CPU calls too.
 - **Fouls** (scratch, no ball hit, wrong ball first, no rail after contact, a ball jumped off the
-  table, a scoop jump) give the opponent ball in hand anywhere. Legal jumps come off an elevated cue; digging under
+  table, a scoop jump) give the opponent ball in hand anywhere.
+- **After a scratch** (menu): *Ball in hand anywhere*, or *In the kitchen (bar rules)*: after a scratch (the cue ball
+  in a pocket or off the table) the next player places it behind the head string and has to shoot out of the kitchen:
+  a ball behind the line can't be hit first unless the cue ball crosses the line before touching it (the aim guide
+  marks such a ball with a red X). Other fouls still give ball in hand anywhere. Applies to every regulation-table game. Legal jumps come off an elevated cue; digging under
   the cue ball to lift it is a foul. A miscue on its own isn't. Jumped object balls are respotted; jumping the 8
   off in 8-ball loses (except on the break).
 - Not modelled: push-outs, break rail-count requirement.
@@ -255,7 +263,9 @@ table: you're trying to sink the other two players' balls. Turns go Player 1 →
   contact or a scoop jump: the next player gets ball in hand anywhere, and each of the fouler's opponents gets their
   lowest pocketed ball back on the foot spot.
 - **Out**: a player with none of their group left is out and their turns are skipped — until a foul by someone else
-  brings one of their balls back.
+  brings one of their balls back. A player who never got a group is out as soon as every group nobody has is off the
+  table (so sinking everything but your own five wins straight away); a group with nothing left on the table can't be
+  picked.
 - **Winning**: the last player with a ball on the table. If one shot clears everyone, the player whose last ball
   dropped last wins.
 - No called pockets. Rules after the common open-table version of Cutthroat; fouls follow the rest of the app (ball in
@@ -281,6 +291,10 @@ owner's colour, and each player's card shows points, pockets and how many to go.
 
 ## Trick shots (menu → Game → Trick)
 
+Two sets, picked under TRICK SHOTS in the menu: **Gap jumps** and **Classics**. Practice lists every level from both.
+
+### Gap jumps
+
 The table's second quarter — from the head string to the side pockets — is cut away. The cue ball starts in
 the break area (the near section; drag it anywhere there) and has to be jumped across the 25″ gap to sink the
 1-ball on the far section. A ball that rolls off either edge falls to the floor; one that comes down just short of
@@ -302,6 +316,25 @@ Your score on a level is the attempt you made it on minus your bonus — so maki
 extra ball counts as 3. Lower score wins the level; an equal score goes to whoever earned more bonus (the tie
 goes to the runner). A player who can no longer catch up stops early. Most levels won takes the match; a tie
 goes to sudden death. The balls reset after every attempt.
+
+### Classics
+
+Famous trick shots on an ordinary 9 ft table (`core/Classics.kt`), easiest first. The cue ball goes in a small marked
+area; most are about getting the 1 in round, over or between other balls.
+
+| Level | What it asks |
+|---|---|
+| Line of four | Four frozen balls in a row, pointing just off the corner: hit the 4 at the back and sink the 1 at the front |
+| Frozen combo | The 2 and the 1 frozen, lined up 7° off the corner: hit the 2 first and throw the 1 in |
+| Railroad | The 2 and the 1 frozen to the top cushion: sink both |
+| Bank it | The 1 has to hit a cushion before it drops |
+| Eye of the needle | Send the 1 between two balls with barely a ball's width between them, touching neither |
+| Dodgeball | A wall of three balls stands square across the line to the 1: the cue ball may touch only the 1 (kick, massé or jump) |
+| Over the wall | A solid row of seven: over it or round it, touching only the 1 |
+| Snookered | The cue ball sits in a horseshoe of balls: it has to hit a cushion before the 1 (extra cushions take a shot off) |
+
+Scoring and turns are the same as the gap jumps. Every classic has known working shots found with the physics engine
+(a search harness fired 30,000 random shots at each; the unit test checks they still go in).
 
 **Practice a trick shot**: Trick, Opponent → Practice, then pick the level. Unlimited attempts on your
 own, with a made/attempts count; ◀ Level / Level ▶ switch levels and Reset puts the balls back. Every level was checked with the physics engine
@@ -361,6 +394,11 @@ Trick shots: it starts from the known working shots for the level, searches for 
 and picks the one that still goes in most often with its own aim and speed error. Headless, a level-1 CPU made
 2–10% of attempts, level 5 10–45%, and level 10 about 85% or better on every level.
 
+Levels 8–10 play defence: what they leave the next player counts for more (×1.5 to ×2.5), a pot is judged on where the
+balls end up if it misses (two deliberately missed versions are run through the physics), they look for a safety
+whenever the best pot isn't a good one, and a safety has to hold up with their own aim and speed error. Headless, 24
+games each, a defensive L10 against the same level without it: 18–6 at 9-ball, 13–11 at 8-ball, playing about 1.6 times as many safeties.
+
 | Level | Aim error (σ) | Plays position | Spin | Safeties |
 |---|---|---|---|---|
 | 1 | 1.8° | – | – | – |
@@ -405,7 +443,7 @@ app/src/main/java/com/poolgame/app/
           Cutthroat.kt (Cutthroat: each player's group, and the open-table pick)
           BumperColors.kt (bumper pool's ball, spot and cup-ring colours, for both tables)
           Crowd.kt (synthesized crowd "aww", shared with the web version)
-          Trick.kt (trick-shot levels, match state, known shots)
+          Trick.kt (trick-shot levels, match state, known shots)   Classics.kt (the classic trick shots)
           Cough.kt (synthesized cough, the foul sound until you record one)
           Voice.kt (cleans up your recorded foul voice)
           Tutorial.kt (tutorial steps, table setup, demo finger)
