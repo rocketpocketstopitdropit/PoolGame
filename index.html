@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Pool</title>
+<meta name="description" content="8-ball, 9-ball and practice with real spin, jump shots and a CPU opponent with 10 skill levels.">
+<meta name="theme-color" content="#0B2419">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Pool">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0A0F12; color: #DDE3E8; overflow: hidden;
+    font-family: -apple-system, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  #game { display: none; position: fixed; left: 0; top: 0; touch-action: none; }
+  #menu { position: fixed; inset: 0; display: flex; justify-content: center; align-items: flex-start; overflow-y: auto;
+    -webkit-overflow-scrolling: touch; background: linear-gradient(135deg, #0F3D27, #0B2419 55%, #0A0F12);
+    padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); box-sizing: border-box; }
+  .card { background: rgba(21,27,32,0.92); border: 1px solid rgba(255,255,255,0.2); border-radius: 20px;
+    padding: 22px 24px; width: 100%; max-width: 560px; box-sizing: border-box; margin: auto 0; }
+  h1 { margin: 0; text-align: center; letter-spacing: 0.25em; font: bold 38px "Arial Narrow", "Roboto Condensed", Arial, sans-serif; color: #fff; }
+  .sub { margin: 2px 0 10px; text-align: center; color: #9AA7B1; font-size: 14px; }
+  .sec { margin: 16px 0 6px; color: #7F8C96; font: bold 11.5px "Arial Narrow", Arial, sans-serif; letter-spacing: 0.12em; }
+  .seg { display: flex; background: #0E1215; border-radius: 12px; padding: 4px; gap: 4px; }
+  .seg button { flex: 1; height: 42px; border: 0; border-radius: 9px; background: transparent; color: #9AA7B1;
+    font: bold 15px "Arial Narrow", Arial, sans-serif; }
+  .seg button.on { background: #2F8F5B; color: #fff; }
+  .seg.wrap { flex-wrap: wrap; }
+  .seg.wrap button { flex: 1 1 30%; }
+  #seg-mode button { flex: 1 1 30%; font-size: 14px; }
+  .val { color: #fff; font: bold 15px "Arial Narrow", Arial, sans-serif; margin: 2px 0; }
+  input[type=range] { width: 100%; accent-color: #F2C94C; height: 32px; }
+  input[type=range]:disabled { opacity: 0.35; }
+  .row { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; font-size: 15px; }
+  .row input { width: 20px; height: 20px; accent-color: #2F8F5B; }
+  .rec { font-size: 14px; line-height: 1.5; }
+  .link { background: none; border: 0; color: #EB5757; padding: 8px 0 2px; font-size: 13px; }
+  .play { width: 100%; height: 54px; margin-top: 18px; border: 0; border-radius: 14px; background: #F2C94C; color: #1A1A1A;
+    font: bold 20px "Arial Narrow", Arial, sans-serif; letter-spacing: 0.15em; }
+  .resume { width: 100%; height: 50px; margin-top: 18px; border: 0; border-radius: 14px; background: #2F8F5B; color: #fff;
+    font: bold 17px "Arial Narrow", Arial, sans-serif; display: none; }
+  .vrow { display: flex; gap: 8px; margin: 8px 0 6px; }
+  .vrow button { flex: 1; height: 44px; border: 0; border-radius: 12px; background: #39434C; color: #fff;
+    font: bold 15px "Arial Narrow", Arial, sans-serif; }
+  .vrow button.vrec { background: #B23A3A; }
+  .vrow button:disabled { opacity: 0.35; }
+  input.txt { width: 100%; height: 44px; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.2); border-radius: 12px;
+    background: #0E1215; color: #fff; font: 17px -apple-system, system-ui, Arial, sans-serif; padding: 0 12px; -webkit-user-select: text; user-select: text; }
+  .vrow input.txt.code { flex: 2; text-transform: uppercase; letter-spacing: 0.3em; font: bold 20px "Arial Narrow", Arial, sans-serif; text-align: center; }
+  #lobby { display: none; position: fixed; inset: 0; background: linear-gradient(135deg, #0F3D27, #0B2419 55%, #0A0F12); z-index: 7;
+    justify-content: center; align-items: flex-start; overflow-y: auto; padding: max(16px, env(safe-area-inset-top)) 16px 16px; box-sizing: border-box; }
+  #lobby .card { max-width: 460px; }
+  #lobby h2 { margin: 0; text-align: center; color: #fff; font: bold 22px "Arial Narrow", Arial, sans-serif; letter-spacing: 0.15em; }
+  #lobbyCode { text-align: center; color: #F2C94C; font: bold 46px "Arial Narrow", Arial, sans-serif; letter-spacing: 0.3em; margin: 6px 0 0; }
+  #lobbyStatus { text-align: center; font-size: 13px; color: #9AA7B1; min-height: 18px; }
+  #lobbyGame { text-align: center; color: #DDE3E8; font-size: 14px; margin: 8px 0 2px; }
+  .seat { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-top: 6px; border-radius: 12px; background: #0E1215; font-size: 15px; }
+  .seat .dot { width: 10px; height: 10px; border-radius: 5px; background: #3CCB7F; flex: none; }
+  .seat.empty { color: #6B7780; } .seat.empty .dot { background: #39434C; }
+  .seat.off .dot { background: #EB5757; }
+  #lobby .btns { display: flex; gap: 8px; margin-top: 12px; }
+  #lobby .btns button { flex: 1; height: 46px; border: 0; border-radius: 12px; background: #39434C; color: #fff; font: bold 16px "Arial Narrow", Arial, sans-serif; }
+  #lobby button#lobbyStart { background: #F2C94C; color: #1A1A1A; }
+  #lobby button#lobbyStart:disabled { opacity: 0.4; }
+  #lobby button#lobbyShare { background: #2F8F5B; }
+  .help { color: #8A97A1; font-size: 12.5px; line-height: 1.45; margin: 14px 0 0; }
+  #iosHint { color: #F2C94C; }
+  #pause { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); justify-content: center; align-items: center; z-index: 5; }
+  #pause .card { max-width: 300px; text-align: center; }
+  #pause h2 { margin: 0 0 12px; color: #fff; }
+  #pause button { display: block; width: 100%; height: 46px; margin-top: 10px; border: 0; border-radius: 12px; background: #39434C;
+    color: #fff; font: bold 16px "Arial Narrow", Arial, sans-serif; }
+  #pause button#resume { background: #F2C94C; color: #1A1A1A; }
+  .vrow button.vgo { background: #2F8F5B; }
+  #tutAsk { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); justify-content: center; align-items: center; z-index: 6; padding: 16px; box-sizing: border-box; }
+  #tutAsk .card { max-width: 380px; }
+  #tutAsk h2 { margin: 0 0 8px; color: #fff; font: bold 22px "Arial Narrow", Arial, sans-serif; }
+  #tutAsk p { margin: 0 0 6px; font-size: 14.5px; line-height: 1.45; }
+  #tutAsk .btns { display: flex; gap: 8px; margin-top: 12px; }
+  #tutAsk .btns button { flex: 1; height: 46px; border: 0; border-radius: 12px; background: #39434C; color: #fff; font: bold 16px "Arial Narrow", Arial, sans-serif; }
+  #tutAsk .btns button#tutYes { background: #F2C94C; color: #1A1A1A; }
+  #guide { display: none; position: fixed; inset: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; z-index: 4;
+    background: linear-gradient(135deg, #0F3D27, #0B2419 55%, #0A0F12);
+    padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); box-sizing: border-box; }
+  #guide .wrap { max-width: 820px; margin: 0 auto; }
+  #guide .top { display: flex; align-items: center; gap: 10px; }
+  #guide .top h1 { flex: 1; font-size: 26px; letter-spacing: 0.2em; }
+  #guide .top button { height: 42px; padding: 0 16px; border: 0; border-radius: 12px; background: #39434C; color: #fff; font: bold 16px "Arial Narrow", Arial, sans-serif; }
+  #guide .top button#guideTut { background: #2F8F5B; }
+  #guide .intro { text-align: center; color: #9AA7B1; font-size: 13px; margin: 10px 0; }
+  #map { display: block; width: 100%; margin: 0 auto; touch-action: manipulation; }
+  .gitem { display: flex; gap: 12px; margin-top: 8px; padding: 12px 16px 12px 14px; border-radius: 14px;
+    background: rgba(21,27,32,0.92); border: 1px solid rgba(255,255,255,0.2); }
+  .gitem.on { background: #233A2E; border: 2px solid #F2C94C; }
+  .gnum { flex: none; width: 30px; height: 30px; border-radius: 15px; background: #F2C94C; color: #1A1A1A;
+    display: flex; align-items: center; justify-content: center; font: bold 16px "Arial Narrow", Arial, sans-serif; }
+  .gname { color: #fff; font: bold 17px "Arial Narrow", Arial, sans-serif; }
+  .gwhere { color: #F2C94C; font-size: 12px; margin-bottom: 4px; }
+  .gitem ul, .gsec ul { margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.45; }
+  .gitem li, .gsec li { margin: 3px 0; }
+  .gsec { padding: 10px 16px; border-radius: 14px; background: rgba(21,27,32,0.92); border: 1px solid rgba(255,255,255,0.2); }
+</style>
+</head>
+<body>
+<div id="menu">
+  <div class="card">
+    <h1>POOL</h1>
+    <p class="sub">8-Ball · 9-Ball · Circuit Pool · Pocket Wars · Cutthroat · bumper pool · octagon bumper · trick shots</p>
+
+    <div class="sec">GAME</div>
+    <div class="seg wrap" id="seg-mode"><button>8-Ball</button><button>9-Ball</button><button>Circuit</button><button>Pocket Wars</button><button>Cutthroat</button><button>Bumper</button><button>Octagon</button><button>Gauntlet</button><button>Trick</button></div>
+    <p class="help" id="circuitHelp" style="display:none">Circuit Pool: each player is secretly dealt three of the fifteen
+      balls; the other nine are neutral. Hit any ball first. Sinking your own or a neutral ball keeps you shooting;
+      sinking one of your opponent's counts for them and ends your turn. You see your own targets and how many your
+      opponent has down, never which. First to sink all three wins.</p>
+    <p class="help" id="warsHelp" style="display:none">Pocket Wars: all six pockets start open. Sink a ball in an open
+      pocket to claim it (it's ringed in your colour); every ball scores its number. Your own pockets keep you shooting;
+      a ball in your opponent's pocket scores for them and ends your turn, unless you banked it in off a rail, which
+      steals the pocket. A foul spots the balls back. First to 61 points wins.</p>
+    <p class="help" id="cutHelp" style="display:none">Cutthroat: three players, three groups — 1–5, 6–10 and 11–15.
+      After the break the table is open: the first player to sink a ball picks any group, the next picks one of the
+      other two, and the last player gets what's left. Keep your own balls up and sink everyone else's; any ball you
+      sink keeps you shooting. A foul gives the next player ball in hand and each opponent one of their balls back.
+      The last player with a ball on the table wins. Against the computer you play two CPUs, both at the level below;
+      pass &amp; play is for three people sharing the phone.</p>
+    <p class="help" id="bumperHelp" style="display:none">Bumper pool: a small table with a cup at each end and twelve
+      bumpers in the way. No cue ball: you shoot your own five balls (red, or white) into the far cup, your marked
+      (spotted) ball first. Both marked balls go at once to open. Your ball in your own cup, a ball off the table or a
+      jump shot is a foul: your opponent drops two of theirs in. First to sink all five wins.</p>
+    <p class="help" id="octHelp" style="display:none">Octagon bumper: a big eight-sided bumper table with a cup on every
+      side and ramps instead of cushions — 45°, 6″ high, with a hard corner at the bottom. A ball thumps into one, loses
+      speed and rolls back down; hit it hard enough and it goes over the top and off the table. Two to four players (or two teams of two), five balls each: you shoot into the cup across
+      from you, your marked ball first. Every marked ball goes at once to open, in any direction (no jump shots). Your
+      ball in a cup that isn't yours, a ball off the table or a jump shot is a foul: everyone else (in teams, the other
+      team) drops one in. First to sink all five wins; in teams, a player whose five are down shoots their partner's,
+      and the team wins when all ten are down.</p>
+    <p class="help" id="gauntHelp" style="display:none">The Gauntlet: an 80″ square bumper table with cushions, a cup in the
+      middle of each side and 68 bumpers. Nothing goes in from where the balls start in one stroke. In the middle is the Cage:
+      two loop-de-loops crossing over a hanging dish. Your own curved ramp points straight at your cup: hit it right, jump the
+      gap onto the dish and it flings the ball on toward the cup. Through a loop, a deflector bumper sends it at a cup. A cup
+      only catches a ball that's not going too fast. Two to four players or 2 v 2, 6 to 8 balls each, the octagon's rules:
+      your marked ball first, every marked ball goes at once to open, and a foul lets everyone else drop one in.</p>
+    <div id="gBlock" style="display:none">
+      <div class="sec">PLAYERS</div>
+      <div class="seg" id="seg-gp"><button>2</button><button>3</button><button>4</button><button>2 v 2</button></div>
+      <p class="help" id="gpHelp" style="margin-top:6px"></p>
+      <div id="gPartnerBlock" style="display:none">
+        <div class="sec">PARTNERS</div>
+        <div class="seg" id="seg-gpartner"><button>Across</button><button>Beside: blue</button><button>Beside: yellow</button></div>
+      </div>
+      <div class="sec">BALLS EACH</div>
+      <div class="seg" id="seg-geach"><button>6</button><button>7</button><button>8</button></div>
+    </div>
+    <div id="octBlock" style="display:none">
+      <div class="sec">PLAYERS</div>
+      <div class="seg" id="seg-octp"><button>2</button><button>3</button><button>4</button><button>2 v 2</button></div>
+      <p class="help" id="octpHelp" style="margin-top:6px"></p>
+      <div class="sec">BUMPER LAYOUT</div>
+      <div class="seg" id="seg-octl"><button>Scatter</button><button>Chevrons</button><button>Goal gates</button></div>
+      <p class="help" id="octlHelp" style="margin-top:6px"></p>
+      <canvas id="octPreview" style="display:block;width:100%;height:190px;margin-top:8px"></canvas>
+    </div>
+    <p class="help" id="trickHelp" style="display:none">Trick shots, taking turns with the computer or a friend: whoever makes
+      each level in fewer shots wins it, and most levels wins the match. Gap jumps: half the table's missing between the
+      break area and the far end; jump the cue ball across and sink the 1. Classics: famous trick shots on an ordinary
+      table, mostly getting the 1 in round, over or between other balls.</p>
+    <div id="trickSetBlock" style="display:none">
+      <div class="sec">TRICK SHOTS</div>
+      <div class="seg" id="seg-tset"><button>Gap jumps</button><button>Classics</button></div>
+    </div>
+
+    <div class="sec">OPPONENT</div>
+    <div class="seg" id="seg-opp"><button>Computer</button><button>Pass &amp; Play</button><button>Online</button><button>Practice</button></div>
+
+    <div id="onlineOpts" style="display:none">
+      <p class="help" style="margin-top:8px">Play friends on their own phones or computers, wherever they are. Host a game
+        with the settings on this page, then send them the code or the invite link. Each phone takes its own shots;
+        everyone sees every shot the same.</p>
+      <div class="sec">YOUR NAME</div>
+      <input class="txt" id="netName" maxlength="14" placeholder="Your name" autocomplete="nickname">
+      <div class="sec">JOIN A FRIEND'S GAME</div>
+      <div class="vrow"><input class="txt code" id="joinCode" maxlength="5" placeholder="CODE" autocapitalize="characters" autocomplete="off" spellcheck="false"><button id="joinBtn" class="vgo">Join</button></div>
+    </div>
+
+    <div id="practiceOpts" style="display:none">
+      <div class="sec">PRACTICE</div>
+      <div id="prulesBlock">
+        <div class="seg" id="seg-prules"><button>With the rules</button><button>Free table</button></div>
+        <p class="help" id="prulesHelp" style="margin-top:6px"></p>
+      </div>
+      <p class="help" id="pbumperHelp">The bumper table on your own, no rules: tap any ball to shoot it, hold one to move it.</p>
+      <p class="help" id="poctHelp">The octagon table on your own, with every colour's balls and the layout above, no rules: tap any ball to shoot it, hold one to move it.</p>
+      <div id="plevelBlock">
+        <div class="sec">WHICH TRICK SHOT</div>
+        <div class="seg wrap" id="seg-plevel"></div>
+      </div>
+    </div>
+    <div id="sizeBlock">
+      <div class="sec">TABLE SIZE</div>
+      <div class="seg" id="seg-size"><button>7 ft</button><button>8 ft</button><button>9 ft</button></div>
+      <p class="help" id="sizeHelp" style="margin-top:6px"></p>
+    </div>
+    <div id="matchOpts">
+      <div id="skillBlock">
+        <div class="sec" id="skillTitle">COMPUTER SKILL</div>
+        <div class="val" id="skillLabel"></div>
+        <input type="range" id="skill" min="1" max="10" step="1">
+      </div>
+
+      <div id="callBlock">
+      <div class="sec">CALL POCKET</div>
+      <div class="seg" id="seg-call"><button>Off</button><button>8 &amp; 9 only</button><button>Every shot</button></div>
+      <p class="help" style="margin-top:6px">Tap a pocket to call it. A ball in the wrong pocket is slop: your turn ends
+        (the 8 in the wrong pocket loses; a 9 in the wrong pocket is respotted). Circuit, Pocket Wars and Cutthroat
+        use Every shot only (in Pocket Wars a slopped ball is spotted and scores nothing).</p>
+      </div>
+
+      <div id="scratchBlock">
+      <div class="sec">AFTER A SCRATCH</div>
+      <div class="seg" id="seg-scratch"><button>Ball in hand anywhere</button><button>In the kitchen (bar rules)</button></div>
+      <p class="help" style="margin-top:6px">Bar rules: after a scratch the next player places the cue ball behind the
+        head string and must shoot out of the kitchen: a ball behind the line can't be hit until the cue ball has crossed
+        it. Other fouls still give ball in hand anywhere.</p>
+      </div>
+
+      <div class="sec">SHOT CLOCK</div>
+      <label class="row"><input type="checkbox" id="clockOn"> Time limit for each shot</label>
+      <div class="val" id="clockLabel"></div>
+      <input type="range" id="clockSec" min="10" max="120" step="5">
+
+      <div class="sec">YOUR RECORD</div>
+      <div class="rec" id="record"></div>
+      <button class="link" id="resetRec">Reset record</button>
+    </div>
+
+    <div class="sec">CONTROLS</div>
+    <p class="help" style="margin-top:0">Learn what every button, slider and gesture on the game screen does.</p>
+    <div class="vrow"><button id="tutBtn" class="vgo">&#9654; Tutorial</button><button id="guideBtn">Screen guide</button></div>
+    <label class="row"><input type="checkbox" id="askTut"> Offer the tutorial when the app opens</label>
+    <div class="val" id="sensLabel"></div>
+    <input type="range" id="aimSens" min="1" max="10" step="1">
+    <label class="row"><input type="checkbox" id="prediction"> Show shot prediction (where the balls will go)</label>
+
+    <label class="row"><input type="checkbox" id="sound"> Sound effects</label>
+    <div class="sec">FOUL VOICE</div>
+    <p class="help" style="margin-top:0">Plays when someone hits nothing, hits the wrong ball first, or gets no rail with
+      nothing potted. Tap Record and say it (up to 3 seconds).</p>
+    <div class="vrow"><button id="voiceRec" class="vrec">&#9679; Record</button><button id="voicePlay">&#9654; Play</button><button id="voiceDel">Delete</button></div>
+    <div class="rec" id="voiceStatus"></div>
+    <button class="resume" id="resumeBtn">RESUME</button>
+    <button class="play" id="play">PLAY</button>
+
+    <p class="help" id="iosHint">On iPhone: tap the Share button, then <b>Add to Home Screen</b> to install Pool like an app (full screen, works offline).</p>
+    <p class="help">Turn your phone sideways to play. Rock, paper, scissors decides who breaks (in Cutthroat the break goes round). Drag on the table to
+      aim, fine-tune with the wheel (slow drags are extra fine, fast swipes swing the cue a long way), touch the
+      cue ball on the right to add spin, then pull the power bar down and let go to shoot. Tap a ball to look down the
+      cue in 3D: drag up there to raise the cue for a jump shot. With ball in hand, drag the cue ball to place it. You can hold the power bar and aim with another finger.</p>
+  </div>
+</div>
+
+<canvas id="game"></canvas>
+
+<div id="pause">
+  <div class="card">
+    <h2>Paused</h2>
+    <button id="resume">Resume</button>
+    <button id="predToggle">Shot prediction: On</button>
+    <button id="restart">Restart rack</button>
+    <button id="quit">Main menu (game is saved)</button>
+  </div>
+</div>
+
+<div id="lobby">
+  <div class="card">
+    <h2>ONLINE GAME</h2>
+    <div id="lobbyCode">·····</div>
+    <div id="lobbyStatus"></div>
+    <div id="lobbyGame"></div>
+    <div class="btns"><button id="lobbyShare">Send invite</button><button id="lobbyCopy">Copy code</button></div>
+    <div class="sec">PLAYERS</div>
+    <div id="lobbySeats"></div>
+    <div class="sec">YOUR NAME</div>
+    <input class="txt" id="lobbyName" maxlength="14" placeholder="Your name" autocomplete="nickname">
+    <p class="help" id="lobbyHelp"></p>
+    <div class="btns"><button id="lobbyLeave">Leave</button><button id="lobbyStart">Start game</button></div>
+  </div>
+</div>
+
+<div id="tutAsk">
+  <div class="card">
+    <h2>Want a quick tutorial?</h2>
+    <p>A one-minute, hands-on tour of the controls on a real table. You can also find it any time under CONTROLS in the menu.</p>
+    <label class="row"><input type="checkbox" id="tutNever"> Don't ask again</label>
+    <div class="btns"><button id="tutNo">Not now</button><button id="tutYes">Show me</button></div>
+  </div>
+</div>
+
+<div id="guide">
+  <div class="wrap">
+    <div class="top"><button id="guideBack">&lsaquo; Back</button><h1>CONTROLS</h1><button id="guideTut">&#9654; Tutorial</button></div>
+    <p class="intro">The game screen, held sideways. Tap a number to outline that control and jump to how it works.</p>
+    <canvas id="map"></canvas>
+    <div id="guideList"></div>
+  </div>
+</div>
+
+<script src="pool.js"></script>
+</body>
+</html>
