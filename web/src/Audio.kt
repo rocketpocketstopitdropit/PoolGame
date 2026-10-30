@@ -197,6 +197,10 @@ object Store {
         val k = key(mode, vsCpu, level, slot)
         set(k, (getInt(k, 0) + 1).toString())
     }
+    /** Online games: wins and losses per game type. */
+    fun recordOnline(mode: String, won: Boolean) { val k = "rec_online_${mode}_${if (won) "w" else "l"}"; set(k, (getInt(k, 0) + 1).toString()) }
+    fun onlineWins(mode: String) = getInt("rec_online_${mode}_w", 0)
+    fun onlineLosses(mode: String) = getInt("rec_online_${mode}_l", 0)
     fun wins(mode: String, vsCpu: Boolean, level: Int) = getInt(key(mode, vsCpu, level, "w"), 0)
     fun losses(mode: String, vsCpu: Boolean, level: Int) = getInt(key(mode, vsCpu, level, "l"), 0)
     /** Cutthroat pass & play: games won by player [p] (0, 1 or 2). */

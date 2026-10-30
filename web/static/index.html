@@ -50,6 +50,25 @@
     font: bold 15px "Arial Narrow", Arial, sans-serif; }
   .vrow button.vrec { background: #B23A3A; }
   .vrow button:disabled { opacity: 0.35; }
+  input.txt { width: 100%; height: 44px; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.2); border-radius: 12px;
+    background: #0E1215; color: #fff; font: 17px -apple-system, system-ui, Arial, sans-serif; padding: 0 12px; -webkit-user-select: text; user-select: text; }
+  .vrow input.txt.code { flex: 2; text-transform: uppercase; letter-spacing: 0.3em; font: bold 20px "Arial Narrow", Arial, sans-serif; text-align: center; }
+  #lobby { display: none; position: fixed; inset: 0; background: linear-gradient(135deg, #0F3D27, #0B2419 55%, #0A0F12); z-index: 7;
+    justify-content: center; align-items: flex-start; overflow-y: auto; padding: max(16px, env(safe-area-inset-top)) 16px 16px; box-sizing: border-box; }
+  #lobby .card { max-width: 460px; }
+  #lobby h2 { margin: 0; text-align: center; color: #fff; font: bold 22px "Arial Narrow", Arial, sans-serif; letter-spacing: 0.15em; }
+  #lobbyCode { text-align: center; color: #F2C94C; font: bold 46px "Arial Narrow", Arial, sans-serif; letter-spacing: 0.3em; margin: 6px 0 0; }
+  #lobbyStatus { text-align: center; font-size: 13px; color: #9AA7B1; min-height: 18px; }
+  #lobbyGame { text-align: center; color: #DDE3E8; font-size: 14px; margin: 8px 0 2px; }
+  .seat { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-top: 6px; border-radius: 12px; background: #0E1215; font-size: 15px; }
+  .seat .dot { width: 10px; height: 10px; border-radius: 5px; background: #3CCB7F; flex: none; }
+  .seat.empty { color: #6B7780; } .seat.empty .dot { background: #39434C; }
+  .seat.off .dot { background: #EB5757; }
+  #lobby .btns { display: flex; gap: 8px; margin-top: 12px; }
+  #lobby .btns button { flex: 1; height: 46px; border: 0; border-radius: 12px; background: #39434C; color: #fff; font: bold 16px "Arial Narrow", Arial, sans-serif; }
+  #lobby button#lobbyStart { background: #F2C94C; color: #1A1A1A; }
+  #lobby button#lobbyStart:disabled { opacity: 0.4; }
+  #lobby button#lobbyShare { background: #2F8F5B; }
   .help { color: #8A97A1; font-size: 12.5px; line-height: 1.45; margin: 14px 0 0; }
   #iosHint { color: #F2C94C; }
   #pause { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); justify-content: center; align-items: center; z-index: 5; }
@@ -157,7 +176,17 @@
     </div>
 
     <div class="sec">OPPONENT</div>
-    <div class="seg" id="seg-opp"><button>Computer</button><button>Pass &amp; Play</button><button>Practice</button></div>
+    <div class="seg" id="seg-opp"><button>Computer</button><button>Pass &amp; Play</button><button>Online</button><button>Practice</button></div>
+
+    <div id="onlineOpts" style="display:none">
+      <p class="help" style="margin-top:8px">Play friends on their own phones or computers, wherever they are. Host a game
+        with the settings on this page, then send them the code or the invite link. Each phone takes its own shots;
+        everyone sees every shot the same.</p>
+      <div class="sec">YOUR NAME</div>
+      <input class="txt" id="netName" maxlength="14" placeholder="Your name" autocomplete="nickname">
+      <div class="sec">JOIN A FRIEND'S GAME</div>
+      <div class="vrow"><input class="txt code" id="joinCode" maxlength="5" placeholder="CODE" autocapitalize="characters" autocomplete="off" spellcheck="false"><button id="joinBtn" class="vgo">Join</button></div>
+    </div>
 
     <div id="practiceOpts" style="display:none">
       <div class="sec">PRACTICE</div>
@@ -244,6 +273,22 @@
     <button id="predToggle">Shot prediction: On</button>
     <button id="restart">Restart rack</button>
     <button id="quit">Main menu (game is saved)</button>
+  </div>
+</div>
+
+<div id="lobby">
+  <div class="card">
+    <h2>ONLINE GAME</h2>
+    <div id="lobbyCode">·····</div>
+    <div id="lobbyStatus"></div>
+    <div id="lobbyGame"></div>
+    <div class="btns"><button id="lobbyShare">Send invite</button><button id="lobbyCopy">Copy code</button></div>
+    <div class="sec">PLAYERS</div>
+    <div id="lobbySeats"></div>
+    <div class="sec">YOUR NAME</div>
+    <input class="txt" id="lobbyName" maxlength="14" placeholder="Your name" autocomplete="nickname">
+    <p class="help" id="lobbyHelp"></p>
+    <div class="btns"><button id="lobbyLeave">Leave</button><button id="lobbyStart">Start game</button></div>
   </div>
 </div>
 

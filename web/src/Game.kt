@@ -70,11 +70,32 @@ class Game(
     private val scratchKitchen: Boolean = false, // bar rules: ball in hand in the kitchen after a scratch
     private val trickSet: Int = 0,               // trick-shot match: 0 the gap jumps, 1 the classics
     private val gauntEach: Int = 7,              // the Gauntlet: balls each (6 to 8)
-    private val partner: Int = 1                 // the Gauntlet, 2 v 2: red's partner (1 across, 2 or 3 beside)
-) {
-    private enum class Phase { RPS, HANDOFF, PICK, HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER }
+    private val partner: Int = 1,                // the Gauntlet, 2 v 2: red's partner (1 across, 2 or 3 beside)
+    /** Online play: the room. Each phone plays its own seat; the others' turns arrive over the network. */
+    private val online: Online? = null,
+    /** Online: the act to build the game from (a game that's started, or one in progress); null when we start it. */
+    netStart: dynamic = null,
+    /** Online: everyone's names, by seat. */
+    seatNames: Array<String>? = null
+) : NetGameListener {
+    // REMOTE: another phone's turn (online) — we show their aim as it arrives and wait for their shot.
+    private enum class Phase { RPS, HANDOFF, PICK, HUMAN, CPU_THINK, CPU_ANIM, RUNNING, PAUSE, OVER, REMOTE }
     private enum class Rps { PICK, SHAKE, REVEAL }
     private enum class Touch { NONE, AIM, POWER, SPIN, WHEEL, MOVE_CUE, BUTTON, PENDING, MOVE_BALL, TAP_BALL, POV, CAM }
+
+    /** Online: this phone's seat (-1 just watching). Offline, seat 0 is you. */
+    private val mySeat = online?.mySeat ?: 0
+    /** Online: the room's act number this game is up to, and the act that started this rack. */
+    private var netVer = 0
+    private var netGame = 0
+    private val pendingActs = ArrayList<dynamic>()
+    private var replay: Replay? = null
+    private var replayAct: dynamic = null
+    private var remoteAim = 0.0
+    private var aimSentAt = 0.0
+    private val aimLast = DoubleArray(9) { Double.NaN }
+    private val myPicks = ArrayList<Int>()
+    private var rpsSentAt = 0.0
 
     /** Free-table practice: no rules, move any ball. (The tutorial runs on the practice table too.) */
     private val practice = practiceMode && mode != GameMode.TRICK
@@ -109,6 +130,7 @@ class Game(
     /** Either four-way bumper game. */
     private val fourWay = octagon || gauntlet
     private val names = when {
+        seatNames != null -> seatNames
         // (Practice on the octagon table puts out all four colours, so it has four seats.)
         fourWay && practiceMode -> arrayOf("Red", "White", "Blue", "Yellow")
         fourWay && vsCpu && octPlayers == 2 -> arrayOf("You", "CPU")
@@ -222,7 +244,7 @@ class Game(
      * Circuit Pool: whose targets are on show (-1 for nobody). Against the CPU it's always you; in pass & play
      * they're hidden at each change of turn until the next player taps to see theirs.
      */
-    private var revealTo = if (vsCpu || practiceMode) 0 else -1
+    private var revealTo = revealDefault()
     /** Pocket Wars: pockets ringed in their owner's colour. */
     private val pocketWars = mode == GameMode.POCKET_WARS
     private var bannerLevel = -1
@@ -293,8 +315,14 @@ class Game(
         povBalls.bumper = bumper
         if (bumper) povScene.cupRings = BumperColors.cupRings(fourWay, names.size)
         // Cutthroat has no rock, paper, scissors (three players): the first breaker is drawn at random.
-        if (resume == null || !resumeGame(resume)) newGame(if (cutthroat && !practiceMode) rng.nextInt(3) else 0)
+        if (online != null) {
+            online.game = this
+            if (netStart != null) newGame((netStart.b as Int?) ?: 0, netStart) else newGame(if (cutthroat) rng.nextInt(3) else 0)
+        } else if (resume == null || !resumeGame(resume)) newGame(if (cutthroat && !practiceMode) rng.nextInt(3) else 0)
     }
+
+    /** Whose Circuit Pool targets this screen shows: yours against the CPU or online; nobody's until tapped in pass & play. */
+    private fun revealDefault() = if (vsCpu || practiceMode) 0 else if (online != null) mySeat else -1
 
     private fun makeListener() = object : WorldListener {
         override fun onBallHit(speed: Double) = sfx.ball(speed)
@@ -312,10 +340,15 @@ class Game(
     private fun crowdAww() { window.setTimeout({ sfx.aww() }, 180) }
 
     private fun isCpu(player: Int) = vsCpu && player != 0
+    /** Online: a player on another phone. */
+    private fun isRemote(player: Int) = online != null && player != mySeat
+    /** Whether this screen takes this player's taps (rock, paper, scissors). */
+    private fun canPick(player: Int) = !isCpu(player) && !isRemote(player)
 
     // ------------------------------------------------------------------ game flow
 
-    fun newGame(breakerPlayer: Int) {
+    /** A new rack. Online, [netAct] is the act it comes from (another phone started it, or we're joining). */
+    fun newGame(breakerPlayer: Int, netAct: dynamic = null) {
         generation++
         breaker = breakerPlayer
         useTable()
@@ -325,10 +358,10 @@ class Game(
         if (gauntlet) { match.each = gauntEach; match.partner = partner }
         match.world.trackOrientation = true
         match.world.listener = makeListener()
-        match.rack(rng, breaker)
+        if (netAct != null) NetState.apply(netAct.post as String, match, false) else match.rack(rng, breaker)
         match.callMode = if (practice) CallMode.OFF else callMode
         match.scratchKitchen = scratchKitchen && !practice
-        revealTo = if (vsCpu || practiceMode) 0 else -1
+        revealTo = revealDefault()
         rpShots = 0; rpFouls = 0; practiceMatch = null; practiceSnapshot = null
         if (rulesPractice) match.message = "${gameName()} practice · you take every shot · place the cue ball and break"
         else if (practice) {
@@ -360,13 +393,260 @@ class Game(
         message = match.message
         // Trick shots don't need rock, paper, scissors (who goes first doesn't matter), nor does
         // bumper pool (both players open at the same moment). Cutthroat's break goes round the three players.
+        if (cutthroat && !practice && netAct == null) match.setBreaker(breaker)
+        if (online != null) {
+            netBegin(netAct)
+            // Joining a game that's already under way: straight to whoever's turn it is.
+            if (netAct != null && netAct.k != "start") { message = match.message; startTurn(); return }
+        }
         if (cutthroat && !practice) {
-            match.setBreaker(breaker)
             message = "${names[breaker]} ${if (breaker == 0 && vsCpu) "break" else "breaks"} · the break goes round, one rack each"
             match.message = message
             startTurn()
         } else if (practice || trick || bumper) startTurn() else startRps(false)
         if (tutorialMode) aimAngle = Tutorial.lineUp(match.world)
+    }
+
+    // ------------------------------------------------------------------ online
+
+    /** A new rack online: tell the room (when it's ours) or take the room's numbering (when it came from there). */
+    private fun netBegin(a: dynamic) {
+        val net = online ?: return
+        pendingActs.clear(); replay = null; replayAct = null
+        myPicks.clear(); rpsSentAt = 0.0
+        aimLast.fill(Double.NaN)
+        if (a == null) {
+            netVer = max(netVer, (net.lastAct?.v as Int?) ?: 0) + 1
+            netGame = netVer
+            val act = newAct("start")
+            act.b = breaker
+            act.post = NetState.write(match, settings())
+            net.sendAct(act)
+        } else {
+            netVer = a.v as Int
+            netGame = (a.g as Int?) ?: netVer
+        }
+    }
+
+    private fun newAct(kind: String): dynamic {
+        val a: dynamic = js("({})")
+        a.v = netVer; a.s = mySeat; a.k = kind; a.g = netGame
+        return a
+    }
+
+    /** Something that's not a shot (a group picked, an opening shot set, the clock ran out…): send the new state. */
+    private fun publishState(kind: String, msg: String, pause: Double) {
+        val net = online ?: return
+        netVer++
+        val a = newAct(kind)
+        a.post = NetState.write(match, settings())
+        a.m = msg; a.p = pause
+        net.sendAct(a)
+    }
+
+    /**
+     * Our shot, online: run it to the end here (recording it), judge it, send the recording and the result,
+     * then play the recording like everyone else. Every phone shows exactly the same shot that way, whatever
+     * its frame rate or browser.
+     */
+    private fun netShoot(angle: Double, speed: Double, side: Double, vert: Double, elev: Double) {
+        val net = online ?: return
+        clearTouches()
+        val pre: String
+        val opening = match.openingPending()
+        if (opening) {
+            power = 0.0
+            if (!match.setOpening(angle, speed, side, vert, elev)) {
+                // Not everyone's opening shot is in yet: it stays secret, and the next player sets theirs.
+                message = match.message
+                publishState("open", message, 0.9)
+                phase = Phase.PAUSE; pauseT = 0.9
+                return
+            }
+            pre = NetState.write(match, settings())
+            match.fireOpening()
+        } else {
+            pre = NetState.write(match, settings())
+            match.shoot(angle, speed, side, vert, elev)
+        }
+        val rec = ShotRecorder.record(match.world)
+        val out = match.resolve()
+        netVer++
+        val a = newAct("shot")
+        a.pre = pre
+        a.post = NetState.write(match, settings())
+        a.f = rec.frames; a.e = rec.events
+        a.m = out.message
+        a.p = if (trick) (if (out.made) 1.6 else 1.3) else if (out.foul || out.winner >= 0) 0.9 else 0.45
+        a.h = if (out.heckle) 1 else 0
+        a.sp = if (opening) max(speed, 1.0) else speed
+        net.sendAct(a)
+        startReplay(a)
+    }
+
+    /** Play a recorded shot: from the state it was struck in, ball by ball as it happened. */
+    private fun startReplay(a: dynamic) {
+        NetState.apply(a.pre as String, match, true)
+        replay = Replay(a.f as String, a.e as String)
+        replayAct = a
+        cpuPlan = null
+        clearTouches(); movingBall = -1
+        sfx.strike((a.sp as Number).toDouble())
+        lockPov()
+        phase = Phase.RUNNING
+    }
+
+    private fun stepReplay(dt: Double) {
+        val r = replay ?: return
+        // Fallen behind (the phone was asleep, or the next shot's already here): catch up.
+        if (pendingActs.isNotEmpty() || dt > 0.5) r.finish(match.world) else r.advance(dt, match.world, match.world.listener)
+        if (r.finished || pendingActs.isNotEmpty()) finishReplay()
+    }
+
+    private fun finishReplay() {
+        val a = replayAct
+        replay = null; replayAct = null
+        if (a == null) return
+        NetState.apply(a.post as String, match, true)
+        message = (a.m as String?) ?: match.message
+        phase = Phase.PAUSE
+        pauseT = (a.p as Number).toDouble()
+        if (a.h == 1) window.setTimeout({ sfx.heckle() }, 260)
+    }
+
+    /** Take a new state that isn't a shot. */
+    private fun snapTo(a: dynamic) {
+        replay = null; replayAct = null
+        NetState.apply(a.post as String, match, true)
+        message = (a.m as String?) ?: match.message
+        clearTouches(); power = 0.0; movingBall = -1
+        phase = Phase.PAUSE
+        pauseT = ((a.p as Number?) ?: 0.5).toDouble()
+    }
+
+    override fun onNetAct(a: dynamic) {
+        if ((a.v as Int) <= netVer) return   // old news (or our own)
+        pendingActs.add(a); drainActs()
+    }
+
+    private fun drainActs() {
+        while (pendingActs.isNotEmpty()) {
+            if (replay != null) return                          // the shot on screen finishes first
+            if (phase == Phase.RPS && rps != Rps.PICK) return   // and the hands
+            takeAct(pendingActs.removeAt(0))
+        }
+    }
+
+    private fun takeAct(a: dynamic) {
+        val v = a.v as Int
+        if (v <= netVer) return
+        when (a.k as String) {
+            "start" -> newGame((a.b as Int?) ?: 0, a)
+            "shot" -> { netVer = v; netGame = (a.g as Int?) ?: netGame; startReplay(a) }
+            else -> { netVer = v; netGame = (a.g as Int?) ?: netGame; snapTo(a) }
+        }
+    }
+
+    /** The other player's aim, as they line up. */
+    override fun onNetAim(a: dynamic) {
+        if (phase != Phase.REMOTE || a.v != netVer || a.s != match.current) return
+        remoteAim = (a.a as Number).toDouble()
+        spinX = (a.x as Number).toDouble(); spinY = (a.y as Number).toDouble()
+        elevDeg = (a.e as Number).toDouble(); power = (a.p as Number).toDouble()
+        val b = a.b as Int
+        if (bumper && b != match.world.cue) match.selectBall(b)
+        if (match.ballInHand) { val c = match.world.cueBall; c.x = (a.cx as Number).toDouble(); c.y = (a.cy as Number).toDouble() }
+        match.calledPocket = a.k as Int
+    }
+
+    override fun onNetRps(a: dynamic) {
+        if (phase != Phase.RPS || rps != Rps.PICK || a.g != netGame) return
+        val seat = a.s as Int
+        if (seat !in 0..1 || seat == mySeat || rpsPick[seat] >= 0) return
+        val c = (a.c as String).split(',').getOrNull(rpsRounds)?.toIntOrNull() ?: return
+        if (c !in 0..2) return
+        rpsPick[seat] = c
+        if (rpsPick[0] >= 0 && rpsPick[1] >= 0) { rps = Rps.SHAKE; rpsT = 0.0; rpsBeat = 0 }
+    }
+
+    override fun onNetPresence() {}
+
+    /** Our picks so far this game (one per throw, ties included), so a phone that missed one catches up. */
+    private fun sendPicks() {
+        val net = online ?: return
+        rpsSentAt = now()
+        val a: dynamic = js("({})")
+        a.g = netGame; a.s = mySeat; a.c = myPicks.joinToString(",")
+        net.sendRps(a)
+    }
+
+    /** Our aim, a few times a second while it's changing (opening shots in bumper pool stay secret). */
+    private fun sendAim() {
+        val net = online ?: return
+        if (match.openingPending()) return
+        val t = now()
+        if (t - aimSentAt < 90) return
+        val c = match.world.cueBall
+        val v = doubleArrayOf(aimAngle, spinX, spinY, elevDeg, power, c.x, c.y, match.world.cue.toDouble(), match.calledPocket.toDouble())
+        var same = true
+        for (i in v.indices) if (v[i] != aimLast[i]) { same = false; aimLast[i] = v[i] }
+        if (same) return
+        aimSentAt = t
+        fun r(x: Double, k: Double) = kotlin.math.round(x * k) / k
+        val a: dynamic = js("({})")
+        a.v = netVer; a.s = mySeat
+        a.a = r(aimAngle, 1e6); a.x = r(spinX, 1e3); a.y = r(spinY, 1e3); a.e = r(elevDeg, 100.0); a.p = r(power, 1e3)
+        a.cx = c.x; a.cy = c.y; a.b = match.world.cue; a.k = match.calledPocket
+        net.sendAim(a)
+    }
+
+    private fun beginRemoteTurn() {
+        phase = Phase.REMOTE
+        spinX = 0.0; spinY = 0.0; power = 0.0; elevDeg = 0.0
+        clearTouches(); movingBall = -1
+        aimAtNearestTarget()
+        remoteAim = aimAngle
+    }
+
+    private fun remoteHud(): String {
+        val p = if (cutthroat && match.cut.choosing >= 0) match.cut.choosing else match.current
+        return when {
+            online?.seatOnline(p) == false -> "${names[p]} has lost connection — waiting for them to come back"
+            cutthroat && match.cut.choosing >= 0 -> "${names[p]} is picking a group…"
+            match.openingPending() -> "${names[p]} is setting their opening shot (it stays secret)"
+            message.isNotEmpty() -> message
+            else -> "${names[p]}'s turn"
+        }
+    }
+
+    /** A player's name on their card: "· you" on your own, "· offline" while they're away. */
+    private fun onlineName(p: Int): String {
+        val net = online ?: return names[p]
+        return names[p] + when {
+            p == mySeat -> if (net.status == "online") " · you" else " · reconnecting…"
+            !net.seatOnline(p) -> " · offline"
+            else -> ""
+        }
+    }
+
+    /** For automated tests (`?debug=1`): where things are and what state the game is in. */
+    fun debugJson(): String {
+        val d: dynamic = js("({})")
+        d.phase = phase.name; d.current = match.current; d.mySeat = mySeat; d.netVer = netVer; d.netGame = netGame
+        d.winner = match.winner; d.message = message; d.bih = match.ballInHand; d.rps = rps.name
+        d.choosing = if (cutthroat) match.cut.choosing else -1
+        d.picks = "${rpsPick[0]},${rpsPick[1]} mine=${myPicks.joinToString(",")} r=$rpsRounds"
+        d.power = arrayOf(powerRect.l, powerRect.t, powerRect.r, powerRect.b)
+        d.table = arrayOf(tableArea.l, tableArea.t, tableArea.r, tableArea.b)
+        d.rpsBtn = if (mySeat in 0..1) arrayOf(rpsBtn[mySeat][0].cx, rpsBtn[mySeat][0].cy, rpsBtn[mySeat][1].cx, rpsBtn[mySeat][1].cy) else arrayOf<Double>()
+        d.pick = arrayOf(pickBtn[0].cx, pickBtn[0].cy, pickBtn[1].cx, pickBtn[1].cy, pickBtn[2].cx, pickBtn[2].cy)
+        d.rematch = arrayOf(rematchBtn.cx, rematchBtn.cy)
+        d.aim = aimAngle
+        d.cue = "${match.world.cueBall.x},${match.world.cueBall.y} bih=${match.ballInHand} phase=$phase replay=${replay != null}"
+        val w = match.world
+        d.balls = w.balls.filter { it.onTable }.joinToString(";") { "${it.id}:${kotlin.math.round(it.x * 1e5) / 1e5},${kotlin.math.round(it.y * 1e5) / 1e5}" }
+        d.state = NetState.write(match, settings()).lines().filter { !it.startsWith("msg=") && !(it.startsWith("b") && it.contains(",")) }.joinToString("|")
+        return kotlin.js.JSON.stringify(d)
     }
 
     // ------------------------------------------------------------------ rock, paper, scissors
@@ -386,6 +666,11 @@ class Game(
         rpsPick[player] = choice
         sfx.ball(1.2)
         if (vsCpu) rpsPick[1] = rng.nextInt(3)
+        if (online != null && player == mySeat) {
+            while (myPicks.size < rpsRounds) myPicks += -1
+            if (myPicks.size == rpsRounds) myPicks += choice else myPicks[rpsRounds] = choice
+            sendPicks()
+        }
         if (rpsPick[0] >= 0 && rpsPick[1] >= 0) { rps = Rps.SHAKE; rpsT = 0.0; rpsBeat = 0 }
     }
 
@@ -398,17 +683,21 @@ class Game(
     private fun rpsDone() {
         val w = rpsWinner()
         if (w < 0) { startRps(true); return }
-        host.onRpsFinished(w, rpsRounds)
+        if (online == null) host.onRpsFinished(w, rpsRounds)
         breaker = w
         match.setBreaker(w)
         message = match.message
+        // Online: the winner's phone tells the room (for anyone who missed a pick, or joins later).
+        if (online != null && w == mySeat) publishState("rps", message, 0.0)
         startTurn()
     }
 
-    fun restart() = newGame(breaker)
+    fun restart() { if (online == null) newGame(breaker) }
 
-    /** The game just finished: whether you (player 1) are on the winning side. */
-    fun youWon() = match.won(0)
+    /** The game just finished: whether you (player 1, or your seat online) are on the winning side. */
+    fun youWon() = match.won(if (online != null) mySeat.coerceAtLeast(0) else 0)
+
+    fun isOnline() = online != null
 
     /** The winner's seat (0 to 3), or in team play the winning team (0 red & white, 1 blue & yellow). */
     fun winningSeat() = if (match.teams) match.teamOf(match.winner) else match.winner
@@ -448,7 +737,7 @@ class Game(
         potN = 0
         spinX = 0.0; spinY = 0.0; power = 0.0; elevDeg = 0.0
         gameOverTitle = ""; recordLine = ""
-        revealTo = if (vsCpu || practiceMode) 0 else -1
+        revealTo = revealDefault()
         message = when {
             rulesPractice -> "Practice resumed · " + match.message
             practice -> practiceHint()
@@ -462,7 +751,7 @@ class Game(
 
     /** The game to save when leaving it, or null when it's over. A rolling shot is undone. */
     fun saveState(): String? {
-        if (tutorialMode) return null
+        if (tutorialMode || online != null) return null
         if (match.winner >= 0 || phase == Phase.OVER || phase == Phase.RPS) return null
         return when (phase) {
             Phase.HUMAN, Phase.PAUSE, Phase.PICK -> GameSave.write(match, settings())
@@ -491,6 +780,9 @@ class Game(
             val w = match.winner
             gameOverTitle = when {
                 rulesPractice -> if (w == 0) "Rack won!" else "Rack lost"
+                online != null && mySeat < 0 -> if (match.teams) "${match.teamName(w)} win!" else "${names[w]} wins!"
+                online != null && match.teams -> if (match.won(mySeat)) "Your team wins!" else "${match.teamName(w)} win"
+                online != null -> if (w == mySeat) "You win!" else "${names[w]} wins"
                 match.teams && vsCpu -> if (match.won(0)) "Your team wins!" else "${match.teamName(w)} win"
                 match.teams -> "${match.teamName(w)} win!"
                 vsCpu && w == 0 -> "You win!"
@@ -509,6 +801,7 @@ class Game(
         val chooser = if (cutthroat) match.cut.choosing else -1
         if (chooser >= 0) {
             if (isCpu(chooser) || (rulesPractice && chooser != 0)) { cutPick(match.cutSuggestedGroup()); return }
+            if (isRemote(chooser)) { phase = Phase.REMOTE; clearTouches(); return }
             phase = Phase.PICK
             clearTouches()
             return
@@ -528,6 +821,8 @@ class Game(
                     window.setTimeout({ if (gen == generation) beginCpuAnim(plan) }, max(0.0, wait))
                 }
             }, 60)
+        } else if (isRemote(match.current)) {
+            beginRemoteTurn()
         } else if (circuit && revealTo != match.current) {
             // Circuit Pool, pass & play: hide the targets while the phone changes hands.
             revealTo = -1
@@ -547,6 +842,7 @@ class Game(
         sfx.ball(1.2)
         phase = Phase.PAUSE
         pauseT = if (out.winner >= 0) 0.6 else 0.9
+        if (online != null) publishState("pick", message, pauseT)
     }
 
     private fun beginHumanTurn() {
@@ -610,6 +906,7 @@ class Game(
     private fun powerFor(speed: Double) = ((speed - 0.25) / (P.MAX_CUE_SPEED - 0.25)).coerceIn(0.0, 1.0).pow(1 / 1.6)
 
     private fun shoot(angle: Double, speed: Double, side: Double, vert: Double, elev: Double) {
+        if (online != null) { netShoot(angle, speed, side, vert, elev); return }
         if (match.openingPending()) { openingShot(angle, speed, side, vert, elev); return }
         if (practice) practiceSnapshot = World().also { it.copyFrom(match.world) }
         if (rulesPractice) practiceMatch = Match(mode, names).also { it.copyFrom(match) }
@@ -626,6 +923,7 @@ class Game(
      * then both marked balls go at the same moment.
      */
     private fun openingShot(angle: Double, speed: Double, side: Double, vert: Double, elev: Double) {
+        if (online != null) { netShoot(angle, speed, side, vert, elev); return }
         clearTouches()
         power = 0.0
         if (!match.setOpening(angle, speed, side, vert, elev)) {
@@ -767,6 +1065,10 @@ class Game(
 
     fun update(dt: Double) {
         updateTutorial(dt)
+        if (online != null) {
+            drainActs()
+            if (phase == Phase.RPS && myPicks.isNotEmpty() && now() - rpsSentAt > 1500) sendPicks()
+        }
         if (bannerT > 0) bannerT -= dt
         if (sinks.isNotEmpty()) {
             for (s in sinks) s.age += dt
@@ -785,6 +1087,7 @@ class Game(
                 else -> {}
             }
             Phase.HUMAN -> {
+                if (online != null) sendAim()
                 checkLongPress()
                 if (!practiceMode && shotClock > 0 && !menuOpen && clockStarted) {
                     clockLeft -= dt
@@ -796,11 +1099,12 @@ class Game(
                         else {
                             message = match.timeFoul().message
                             phase = Phase.PAUSE; pauseT = 1.0
+                            if (online != null) publishState("time", message, 1.0)
                         }
                     }
                 }
             }
-            Phase.RUNNING -> {
+            Phase.RUNNING -> if (replay != null) stepReplay(dt) else {
                 match.world.advance(dt)
                 if (!match.world.anyMoving()) {
                     if (rulesPractice) {
@@ -850,6 +1154,13 @@ class Game(
                 }
             }
             Phase.PAUSE -> { pauseT -= dt; if (pauseT <= 0) startTurn() }
+            Phase.REMOTE -> {
+                // Ease toward the other player's aim (it arrives a few times a second).
+                var d = remoteAim - aimAngle
+                while (d > PI) d -= 2 * PI
+                while (d < -PI) d += 2 * PI
+                aimAngle += d * min(1.0, dt * 14)
+            }
             Phase.CPU_ANIM -> {
                 val p = cpuPlan ?: return
                 animT += dt
@@ -1500,7 +1811,7 @@ class Game(
             ctx.setLineDash(noDash)
         }
 
-        val showCue = (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) ||
+        val showCue = (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) || (phase == Phase.REMOTE && !match.openingPending()) ||
             (phase == Phase.CPU_ANIM && (plan == null || !plan.hasPlacement || animT >= 0.45))
         if (showCue && cue.onTable) drawCueStick(ctx, sx(cueX), sy(cueY))
 
@@ -1576,7 +1887,7 @@ class Game(
     }
 
     private fun drawPocketCall(ctx: Ctx2D) {
-        if (phase != Phase.HUMAN && phase != Phase.CPU_ANIM) return
+        if (phase != Phase.HUMAN && phase != Phase.CPU_ANIM && phase != Phase.REMOTE) return
         val called = match.calledPocket
         val pulse = 0.5 + 0.5 * sin(now() / 200.0)
         ctx.setLineDash(noDash)
@@ -1740,6 +2051,7 @@ class Game(
             Phase.HANDOFF -> "${names[match.current]}'s turn — pass it over"
             Phase.PICK -> "${names[match.cut.choosing.coerceAtLeast(0)]}: pick your group"
             Phase.CPU_THINK, Phase.CPU_ANIM -> if (message.isNotEmpty()) message else "${names[match.current]} is thinking…"
+            Phase.REMOTE -> remoteHud()
             Phase.HUMAN -> when {
                 pov && match.ballInHand -> "${names[match.current]}: ball in hand — tap Top view to move the cue ball"
                 trick && match.ballInHand -> "${names[match.current]}: jump the gap and sink the 1 · drag the cue ball to move it"
@@ -1903,7 +2215,7 @@ class Game(
         if (active) { ctx.strokeStyle = "#F2C94C"; ctx.lineWidth = 2.0; ctx.roundRect(r, 10.0); ctx.stroke() }
         ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"
         ctx.font = font(min(16.0, r.h * 0.32), true); ctx.fillStyle = "#FFF"
-        ctx.fillText(ellipsize(ctx, if (isCpu(player)) "${names[player]} · Lv $cpuLevel" else names[player],
+        ctx.fillText(ellipsize(ctx, if (isCpu(player)) "${names[player]} · Lv $cpuLevel" else if (online != null) onlineName(player) else names[player],
             r.w - (if (active && shotClock > 0) 64 else 20)), r.l + 12, r.t + r.h * 0.4)
         if (active && phase == Phase.HUMAN && shotClock > 0) {
             val secs = max(0, ceil(clockLeft).toInt())
@@ -2074,7 +2386,7 @@ class Game(
     private var tipLast = 0
 
     private fun tipState(): Int {
-        if (phase != Phase.HUMAN && phase != Phase.CPU_ANIM) return 0
+        if (phase != Phase.HUMAN && phase != Phase.CPU_ANIM && phase != Phase.REMOTE) return 0
         val pw = if (power > 0.02) power else lastPower
         if (tipKey[0] == spinX && tipKey[1] == spinY && tipKey[2] == elevDeg && tipKey[3] == pw) return tipLast
         tipKey[0] = spinX; tipKey[1] = spinY; tipKey[2] = elevDeg; tipKey[3] = pw
@@ -2172,13 +2484,13 @@ class Game(
         val sub = when (rps) {
             Rps.PICK -> when {
                 rpsTie -> "Tie! Go again · round ${rpsRounds + 1}"
-                vsCpu -> if (trick) "Pick your hand · the winner shoots first" else "Pick your hand · the winner breaks"
+                vsCpu || online != null -> if (trick) "Pick your hand · the winner shoots first" else "Pick your hand · the winner breaks"
                 else -> if (trick) "Both pick on your own side · the winner shoots first" else "Both pick on your own side · the winner breaks"
             }
             Rps.SHAKE -> SHAKE_WORDS[(rpsT / RPS_BEAT).toInt().coerceIn(0, 2)]
             Rps.REVEAL -> when {
                 win < 0 -> "Shoot! · Tie — go again"
-                vsCpu && win == 0 -> if (trick) "Shoot! · You win — you go first!" else "Shoot! · You win — you break!"
+                (vsCpu && win == 0) || (online != null && win == mySeat) -> if (trick) "Shoot! · You win — you go first!" else "Shoot! · You win — you break!"
                 vsCpu -> if (trick) "Shoot! · CPU wins — CPU goes first" else "Shoot! · CPU wins — CPU breaks"
                 else -> "Shoot! · ${names[win]} wins — ${names[win]} ${if (trick) "goes first" else "breaks"}!"
             }
@@ -2216,7 +2528,7 @@ class Game(
             }
             val bs = min(pw * 0.5 / 3.5, ph * 0.26)
             val by = p.b - 12 - bs
-            if (picking && !isCpu(pl) && rpsPick[pl] < 0) {
+            if (picking && canPick(pl) && rpsPick[pl] < 0) {
                 val gap = bs * 0.18
                 var bx = cx - (3 * bs + 2 * gap) / 2
                 for (c in 0..2) {
@@ -2234,7 +2546,8 @@ class Game(
             } else if (picking) {
                 for (c in 0..2) rpsBtn[pl][c].set(0.0, 0.0, 0.0, 0.0)
                 ctx.font = font(14.0, true); ctx.fillStyle = "#3CCB7F"
-                ctx.fillText(if (isCpu(pl)) "Ready" else "Ready ✓", cx, by + bs / 2 + 5)
+                if (rpsPick[pl] < 0) ctx.fillStyle = "#9AA7B1"
+                ctx.fillText(if (rpsPick[pl] < 0) "Picking…" else if (isCpu(pl)) "Ready" else "Ready ✓", cx, by + bs / 2 + 5)
             }
         }
         if (rps == Rps.REVEAL && rpsT > 0.6) {
@@ -2274,7 +2587,7 @@ class Game(
         val p = match.cut.choosing.coerceAtLeast(0)
         ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"
         ctx.font = font(min(22.0, ph * 0.1), true); ctx.fillStyle = "#FFF"
-        ctx.fillText(if (p == 0 && (vsCpu || rulesPractice)) "Pick your group" else "${names[p]}: pick your group", overPanel.cx, overPanel.t + ph * 0.15)
+        ctx.fillText(if ((p == 0 && (vsCpu || rulesPractice)) || (online != null && p == mySeat)) "Pick your group" else "${names[p]}: pick your group", overPanel.cx, overPanel.t + ph * 0.15)
         ctx.font = font(min(13.0, ph * 0.06), false); ctx.fillStyle = "#B8C2CA"
         ctx.fillText(ellipsize(ctx, "These are the balls you keep on the table — the others try to sink them", pw - 24),
             overPanel.cx, overPanel.t + ph * 0.26)
@@ -2348,7 +2661,7 @@ class Game(
         if (first && menuBtn.contains(x, y) && phase != Phase.OVER) { ptrMode[id] = Touch.BUTTON; host.onMenuRequested(); return }
         if (phase == Phase.OVER) {
             if (first) {
-                if (rematchBtn.contains(x, y)) newGame(if (practiceMode || fourWay) 0 else if (cutthroat) (breaker + 1) % 3 else 1 - breaker)
+                if (rematchBtn.contains(x, y) && (online == null || mySeat >= 0)) newGame(if (practiceMode || fourWay) 0 else if (cutthroat) (breaker + 1) % 3 else 1 - breaker)
                 else if (menuExitBtn.contains(x, y)) host.onExitToMenu()
             }
             ptrMode[id] = Touch.BUTTON
@@ -2367,7 +2680,7 @@ class Game(
         if (phase == Phase.RPS) {
             ptrMode[id] = Touch.BUTTON
             when (rps) {
-                Rps.PICK -> for (pl in 0..1) if (!isCpu(pl)) for (c in 0..2) if (rpsBtn[pl][c].contains(x, y)) rpsChoose(pl, c)
+                Rps.PICK -> for (pl in 0..1) if (canPick(pl)) for (c in 0..2) if (rpsBtn[pl][c].contains(x, y)) rpsChoose(pl, c)
                 Rps.REVEAL -> if (rpsT > 0.6) rpsDone()
                 else -> {}
             }
@@ -2792,8 +3105,8 @@ class Game(
             ctx.fill()
         }
         if (sc.guideAt >= sc.n) { if (showGuide) drawPovGuide(ctx); drawPovMarks(ctx, cueX, cueY) }
-        if (humanTurn || phase == Phase.CPU_ANIM) drawPovCalled(ctx)
-        val showCue = (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) ||
+        if (humanTurn || phase == Phase.CPU_ANIM || phase == Phase.REMOTE) drawPovCalled(ctx)
+        val showCue = (humanTurn && !anyTouch(Touch.MOVE_CUE) && movingBall < 0) || (phase == Phase.REMOTE && !match.openingPending()) ||
             (phase == Phase.CPU_ANIM && (plan == null || !plan.hasPlacement || animT >= 0.45))
         if (showCue && c.onTable) drawPovCue(ctx, cueX, cueY)
         ctx.restore()

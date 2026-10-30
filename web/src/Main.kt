@@ -12,7 +12,7 @@ fun main() {
 }
 
 /** Wires the HTML menu, the canvas, touch input and the frame loop. */
-class App : GameHost {
+class App : GameHost, NetHost {
     private val canvas: dynamic = document.getElementById("game")
     private val ctx: Ctx2D = ctxOf(canvas)
     private val sounds = Sounds()
@@ -53,6 +53,9 @@ class App : GameHost {
     private var octLayout = Store.getInt("octLayout", 0).coerceIn(0, com.poolgame.app.core.Table.OCT_LAYOUTS.size - 1)
     private var playingOct = "4"
     private val guide = Guide()
+    /** Online play: the room we're in (or hosting), if any. */
+    private val online = Online(this)
+    private var playingOnline = false
 
     // What the current game is (may differ from the menu when resuming a saved game)
     private var playingCpu = true
@@ -69,7 +72,7 @@ class App : GameHost {
         val stored = GameMode.values().firstOrNull { it.name == Store.get("game", "") }
         if (stored != null) {
             gameMode = stored
-            opp = Store.getInt("opp", if (vsCpu) 0 else 1).coerceIn(0, 2)
+            opp = Store.getInt("opp", if (vsCpu) 0 else 1).coerceIn(0, 3)
         } else {
             // From before practice was an opponent choice: one number for the game type, with Practice as one of them.
             when (Store.getInt("modeIdx", 0)) {
@@ -111,11 +114,12 @@ class App : GameHost {
         canvas.addEventListener("wheel", { e: dynamic -> wheel(e) }, opts)
 
         // Each time the app is opened, offer the tutorial (unless they've said not to ask).
-        if (askTutorial) el("tutAsk").style.display = "flex"
+        if (askTutorial && !joiningByLink) el("tutAsk").style.display = "flex"
 
         try {
             if (navigator.serviceWorker != null && window.location.protocol == "https:") navigator.serviceWorker.register("sw.js")
         } catch (e: dynamic) { }
+        if ((window.location.search as String).contains("debug=1")) window.poolDebug = { game?.debugJson() }
         window.requestAnimationFrame(::frame)
     }
 
@@ -183,7 +187,8 @@ class App : GameHost {
 
     private fun wireMenu() {
         segment("seg-mode") { gameMode = GAMES[it]; save(); refreshMenu() }
-        segment("seg-opp") { opp = it; vsCpu = it == 0; save(); refreshMenu() }
+        // The buttons: Computer, Pass & Play, Online, Practice (stored as 0, 1, 3, 2: practice was there first).
+        segment("seg-opp") { opp = OPP_OF_BUTTON[it]; vsCpu = opp == 0; save(); refreshMenu() }
         segment("seg-prules") { practiceRules = it == 0; save(); refreshMenu() }
         segment("seg-call") { callIdx = it; save(); refreshMenu() }
         segment("seg-scratch") { scratchKitchen = it == 1; save(); refreshMenu() }
@@ -213,7 +218,8 @@ class App : GameHost {
         el("voiceDel").addEventListener("click", { VoiceStore.clear(); refreshVoice(null) })
         el("aimSens").addEventListener("input", { aimSens = (el("aimSens").value as String).toInt(); save(); refreshMenu() })
         el("prediction").addEventListener("change", { prediction = el("prediction").checked as Boolean; save() })
-        el("play").addEventListener("click", { sounds.unlock(); startGame(false) })
+        el("play").addEventListener("click", { sounds.unlock(); if (opp == 3) hostOnline() else startGame(false) })
+        wireOnline()
         // Learning the controls: the tutorial, the screen guide, and the opening prompt.
         el("tutBtn").addEventListener("click", { sounds.unlock(); startTutorial() })
         el("guideBtn").addEventListener("click", { guide.show() })
@@ -239,7 +245,7 @@ class App : GameHost {
                 el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
             }
         })
-        el("quit").addEventListener("click", { hidePause(); saveGame(); showMenu() })
+        el("quit").addEventListener("click", { hidePause(); if (playingOnline) leaveOnline() else { saveGame(); showMenu() } })
         // Keep the game if the browser tab is closed or the phone switches apps.
         document.addEventListener("visibilitychange", { if (document.hidden == true) saveGame() })
         window.addEventListener("pagehide", { saveGame() })
@@ -337,9 +343,13 @@ class App : GameHost {
 
     private fun refreshMenu() {
         val practice = opp == 2
+        val net = opp == 3
+        el("onlineOpts").style.display = if (net) "block" else "none"
+        el("netName").value = online.name
+        el("play").textContent = if (net) "HOST ONLINE GAME" else "PLAY"
         val poolTable = gameMode != GameMode.TRICK && gameMode != GameMode.BUMPER && gameMode != GameMode.OCTAGON && gameMode != GameMode.GAUNTLET
         setSegment("seg-mode", GAMES.indexOf(gameMode))
-        setSegment("seg-opp", opp)
+        setSegment("seg-opp", OPP_OF_BUTTON.indexOf(opp))
         setSegment("seg-call", callIdx)
         setSegment("seg-scratch", if (scratchKitchen) 1 else 0)
         setSegment("seg-tset", trickSet)
@@ -366,6 +376,7 @@ class App : GameHost {
             gTeams -> "Two teams of two: red & $mate against the other two. Turns always swap teams. " +
                 (if (vsCpu) "You're red, with a CPU as your partner." else "")
             vsCpu -> "You against ${if (gPlayers == 2) "one CPU" else "${gPlayers - 1} CPUs"}, all at the skill below."
+            opp == 3 -> "$gPlayers players, each on their own phone."
             else -> "$gPlayers people sharing the phone."
         }
         val oct = gameMode == GameMode.OCTAGON
@@ -378,6 +389,7 @@ class App : GameHost {
             octTeams -> "Two teams: red & white against blue & yellow, partners across the table from each other. " +
                 (if (vsCpu) "You're red, with CPU 1 as your partner." else "")
             vsCpu -> "You against ${if (octPlayers == 2) "one CPU" else "${octPlayers - 1} CPUs"}, all at the skill below."
+            opp == 3 -> "$octPlayers players, each on their own phone."
             else -> "$octPlayers people sharing the phone."
         } + " Turns go round the table: red, blue, white, yellow."
         if (oct) window.setTimeout({ drawOctPreview() }, 0)
@@ -422,7 +434,9 @@ class App : GameHost {
         el("resumeBtn").textContent = "RESUME · ${saved ?: ""}"
         val m = modeName()
         val name = nameOf(menuMode())
-        el("record").innerHTML = (if (gameMode == GameMode.OCTAGON)
+        el("record").innerHTML = (if (net)
+            "$name online: <b>${Store.onlineWins(m)} W – ${Store.onlineLosses(m)} L</b>"
+        else if (gameMode == GameMode.OCTAGON)
             Store.octSummary(Store.octVariant(octPlayers, octTeams), vsCpu, level)
         else if (gameMode == GameMode.GAUNTLET)
             Store.octSummary(Store.octVariant(gPlayers, gTeams), vsCpu, level, game = "GAUNTLET")
@@ -476,11 +490,12 @@ class App : GameHost {
 
     private fun saveGame() {
         val g = game ?: return
-        if (g.isTutorial()) return   // never replace a paused game with the tutorial
+        if (g.isTutorial() || g.isOnline()) return   // (an online game lives in its room, not in the saved game)   // never replace a paused game with the tutorial
         Store.set("savedGame", g.saveState() ?: "")
     }
 
     private fun startGame(resume: Boolean) {
+        playingOnline = false
         var practice = opp == 2
         var mode = gameMode
         var rules = practiceRules
@@ -524,6 +539,7 @@ class App : GameHost {
         playingCpu = cpu; playingLevel = lvl; playingMode = mode; playingPractice = practice
         el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
         el("restart").textContent = if (mode == GameMode.TRICK) "Restart match" else "Restart rack"
+        el("restart").style.display = "block"
         el("quit").textContent = "Main menu (game is saved)"
         game = Game(mode, cpu, lvl, clock, practice, practiceLevel, aimSens, prediction, text, call, sounds, this, tableSize = size, practiceRules = rules,
             octPlayers = oPlayers, octTeams = oTeams, octLayout = oLayout, scratchKitchen = barScratch, trickSet = tSet, gauntEach = each, partner = mate)
@@ -532,6 +548,8 @@ class App : GameHost {
 
     /** The hands-on tutorial: a practice table with a guide. Your saved game and record are left alone. */
     private fun startTutorial() {
+        playingOnline = false
+        el("restart").style.display = "block"
         sounds.enabled = sound
         playingCpu = false; playingLevel = level; playingMode = GameMode.EIGHT_BALL; playingPractice = true
         el("predToggle").textContent = "Shot prediction: On"
@@ -568,11 +586,18 @@ class App : GameHost {
         el("pause").style.display = "flex"
     }
 
-    override fun onExitToMenu() = showMenu()
+    override fun onExitToMenu() { if (playingOnline) leaveOnline() else showMenu() }
 
     override fun onRpsFinished(winner: Int, rounds: Int) = Store.recordRps(playingCpu, winner, rounds)
 
     override fun onGameFinished(winner: Int): String {
+        if (playingOnline) {
+            val g = game ?: return ""
+            val m = playingMode.name
+            if (online.mySeat < 0) return ""
+            Store.recordOnline(m, g.youWon())
+            return "Your ${nameOf(playingMode)} online record: ${Store.onlineWins(m)}–${Store.onlineLosses(m)}"
+        }
         Store.set("savedGame", "")
         if (game == null || playingPractice) return ""
         val m = playingMode.name
@@ -591,7 +616,210 @@ class App : GameHost {
         else "$name pass & play: Player 1 ${Store.wins(m, false, 0)} – Player 2 ${Store.losses(m, false, 0)}"
     }
 
+    // ------------------------------------------------------------------ online
+
+    private fun wireOnline() {
+        el("netName").addEventListener("input", { online.name = el("netName").value as String; online.announceName() })
+        el("lobbyName").addEventListener("input", { online.name = el("lobbyName").value as String; online.announceName(); refreshLobby() })
+        el("joinBtn").addEventListener("click", { sounds.unlock(); joinOnline(el("joinCode").value as String) })
+        el("joinCode").addEventListener("keydown", { e: dynamic -> if (e.key == "Enter") { sounds.unlock(); joinOnline(el("joinCode").value as String) } })
+        el("lobbyLeave").addEventListener("click", { leaveOnline() })
+        el("lobbyStart").addEventListener("click", { sounds.unlock(); startOnlineGame(null) })
+        el("lobbyCopy").addEventListener("click", { copyText(online.code, "Code copied") })
+        el("lobbyShare").addEventListener("click", {
+            val link = online.inviteLink()
+            val text = "Play pool with me! Open this link, or open the Pool app → Online and type the code ${online.code}"
+            try {
+                if (navigator.share != null) {
+                    val data: dynamic = js("({})")
+                    data.title = "Pool"; data.text = text; data.url = link
+                    navigator.share(data).catch { _: dynamic -> }
+                } else copyText(link, "Invite link copied")
+            } catch (e: dynamic) { copyText(link, "Invite link copied") }
+        })
+        // Opened from an invite link: straight into that room.
+        val m = Regex("[?&]room=([A-Za-z]+)").find(window.location.search as String)
+        if (m != null) {
+            opp = 3; vsCpu = false; save(); refreshMenu()
+            joiningByLink = true
+            window.setTimeout({ joinOnline(m.groupValues[1]) }, 0)
+        }
+    }
+
+    private var toastUntil = 0.0
+    /** Opened from an invite link (no tutorial question, straight into the room). */
+    private var joiningByLink = false
+
+    private fun copyText(t: String, done: String) {
+        try {
+            navigator.clipboard.writeText(t).then({ _: dynamic -> lobbyNote(done) }, { _: dynamic -> lobbyNote(t) })
+        } catch (e: dynamic) { lobbyNote(t) }
+    }
+
+    private fun lobbyNote(t: String) {
+        el("lobbyStatus").textContent = t
+        toastUntil = now() + 2500
+        window.setTimeout({ refreshLobby() }, 2600)
+    }
+
+    /** The room's settings: what the host picked in the menu. */
+    private fun menuSettings(): dynamic {
+        val s: dynamic = js("({})")
+        s.mode = gameMode.name; s.size = tableSize.name; s.call = callIdx; s.bar = scratchKitchen
+        s.clock = if (clockOn) clockSec else 0; s.tset = trickSet
+        val gaunt = gameMode == GameMode.GAUNTLET
+        s.np = if (gaunt) gPlayers else octPlayers; s.teams = if (gaunt) gTeams else octTeams
+        s.layout = octLayout; s.each = gEach; s.partner = gPartner
+        return s
+    }
+
+    private fun seatsNeeded(s: dynamic): Int = when (GameMode.valueOf(s.mode as String)) {
+        GameMode.CUTTHROAT -> 3
+        GameMode.OCTAGON, GameMode.GAUNTLET -> if (s.teams == true) 4 else (s.np as Int)
+        else -> 2
+    }
+
+    private fun describe(s: dynamic): String {
+        val mode = GameMode.valueOf(s.mode as String)
+        val parts = ArrayList<String>()
+        parts += nameOf(mode)
+        val pool = mode == GameMode.EIGHT_BALL || mode == GameMode.NINE_BALL || mode == GameMode.CIRCUIT ||
+            mode == GameMode.POCKET_WARS || mode == GameMode.CUTTHROAT
+        if (pool) parts += (TableSize.fromName(s.size as String) ?: TableSize.DEFAULT).label
+        if (mode == GameMode.OCTAGON || mode == GameMode.GAUNTLET)
+            parts += if (s.teams == true) "2 v 2" else "${s.np} players"
+        if (mode == GameMode.OCTAGON) parts += com.poolgame.app.core.Table.OCT_LAYOUTS[(s.layout as Int).coerceIn(0, com.poolgame.app.core.Table.OCT_LAYOUTS.size - 1)]
+        if (mode == GameMode.GAUNTLET) parts += "${s.each} balls each"
+        if (mode == GameMode.TRICK) parts += if (s.tset == 1) "Classics" else "Gap jumps"
+        if (pool && (s.call as Int) > 0) parts += if (s.call == 1) "call 8 & 9" else "call every shot"
+        if (pool && s.bar == true) parts += "bar rules"
+        if ((s.clock as Int) > 0) parts += "${s.clock} s shot clock"
+        return parts.joinToString(" · ")
+    }
+
+    private fun hostOnline() {
+        if (online.name.isEmpty()) { online.name = (el("netName").value as String) }
+        val s = menuSettings()
+        online.hostRoom(s, seatsNeeded(s))
+        setRoomInUrl(online.code)
+        showLobby()
+    }
+
+    private fun joinOnline(code: String) {
+        if (online.name.isEmpty()) online.name = el("netName").value as String
+        online.joinRoom(code)
+        if (online.code.isNotEmpty()) setRoomInUrl(online.code)
+        showLobby()
+    }
+
+    private fun leaveOnline() {
+        online.leave()
+        playingOnline = false
+        setRoomInUrl(null)
+        el("lobby").style.display = "none"
+        if (game != null) showMenu() else refreshMenu()
+    }
+
+    private fun setRoomInUrl(code: String?) {
+        try {
+            val loc = window.location
+            val keep = Regex("[?&](broker=[^&]+)").find(loc.search as String)?.groupValues?.get(1)
+            val q = listOfNotNull(code?.let { "room=$it" }, keep).joinToString("&")
+            window.history.replaceState(null, "", loc.pathname + (if (q.isEmpty()) "" else "?$q"))
+        } catch (e: dynamic) { }
+    }
+
+    private fun showLobby() {
+        el("lobby").style.display = "flex"
+        el("lobbyName").value = online.name
+        refreshLobby()
+    }
+
+    private fun refreshLobby() {
+        if (el("lobby").style.display != "flex") return
+        el("lobbyCode").textContent = online.code.ifEmpty { "·····" }
+        if (now() > toastUntil) el("lobbyStatus").textContent = when (online.status) {
+            "connecting" -> "Connecting…"
+            "reconnecting" -> "Connection lost — reconnecting…"
+            "failed" -> "Can't reach the game server — check your connection"
+            else -> if (online.isHost) "Your game is open — send the code to your friends" else if (online.cfg == null) "Looking for the game…" else "Connected"
+        }
+        val c = online.cfg
+        el("lobbyGame").textContent = if (c != null) describe(c.s) else ""
+        val seats = online.seats()
+        val need = online.need()
+        val html = StringBuilder()
+        for (i in 0 until maxOf(need, seats.size)) {
+            val s = seats.getOrNull(i)
+            if (s == null) { html.append("<div class='seat empty'><span class='dot'></span>Waiting for a player…</div>"); continue }
+            val on = online.seatOnline(i)
+            val who = esc(s.second) + (if (s.first == online.netId) " (you)" else "") + (if (i == 0) " · host" else "")
+            html.append("<div class='seat${if (on) "" else " off"}'><span class='dot'></span>$who</div>")
+        }
+        el("lobbySeats").innerHTML = html.toString()
+        val full = seats.size >= need && c != null
+        el("lobbyStart").style.display = if (online.isHost) "block" else "none"
+        el("lobbyStart").disabled = !(full && online.status == "online" && (0 until need).all { online.seatOnline(it) })
+        el("lobbyHelp").textContent = when {
+            online.isHost && !full -> "Waiting for ${need - seats.size} more ${if (need - seats.size == 1) "player" else "players"}. " +
+                "Tap Send invite, or they can open Pool → Online and type the code."
+            online.isHost -> "Everyone's here. Start when you're ready."
+            c == null -> ""
+            online.mySeat < 0 -> "This game is full — you'll be able to watch once it starts."
+            else -> "You're in. Waiting for the host to start the game…"
+        }
+    }
+
+    private fun esc(t: String) = t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    override fun onLobby() = refreshLobby()
+
+    override fun onNetClosed(why: String) {
+        online.leave()
+        playingOnline = false
+        setRoomInUrl(null)
+        el("lobby").style.display = "none"
+        if (game != null) showMenu()
+        window.setTimeout({ window.alert(why) }, 50)
+    }
+
+    override fun onNetStart(act: dynamic) { startOnlineGame(act) }
+
+    /** Start (host: [act] null) or join (the room's act) an online game with the room's settings. */
+    private fun startOnlineGame(act: dynamic) {
+        val c = online.cfg ?: return
+        val s = c.s
+        val mode = GameMode.valueOf(s.mode as String)
+        val size = TableSize.fromName(s.size as String) ?: TableSize.DEFAULT
+        val seats = online.seats()
+        val n = seatsNeeded(s)
+        val names = Array(n) { i -> seats.getOrNull(i)?.second?.trim().orEmpty() }
+        for (i in names.indices) {
+            if (names[i].isEmpty() || names[i].equals("you", true) || names.count { it.equals(names[i], true) } > 1) names[i] = "Player ${i + 1}"
+        }
+        if (act == null) online.markStarted()
+        playingOnline = true
+        sounds.enabled = sound
+        playingCpu = false; playingLevel = 0; playingMode = mode; playingPractice = false
+        playingOct = Store.octVariant(s.np as Int, s.teams == true)
+        el("lobby").style.display = "none"
+        el("predToggle").textContent = if (prediction) "Shot prediction: On" else "Shot prediction: Off"
+        el("restart").style.display = "none"
+        el("quit").textContent = "Leave the game"
+        val pool = mode == GameMode.EIGHT_BALL || mode == GameMode.NINE_BALL || mode == GameMode.CIRCUIT ||
+            mode == GameMode.POCKET_WARS || mode == GameMode.CUTTHROAT
+        val call = if (pool) CallMode.values()[(s.call as Int).coerceIn(0, 2)] else CallMode.OFF
+        game = Game(mode, false, level, s.clock as Int, false, 0, aimSens, prediction, null, call, sounds, this, tableSize = size,
+            practiceRules = false, octPlayers = s.np as Int, octTeams = s.teams == true && (s.np as Int) == 4,
+            octLayout = s.layout as Int, scratchKitchen = s.bar == true && pool, trickSet = s.tset as Int,
+            gauntEach = s.each as Int, partner = s.partner as Int,
+            online = online, netStart = act, seatNames = names)
+        showGame()
+    }
+
     private companion object {
+        /** Which opponent each button picks (0 computer, 1 pass & play, 2 practice, 3 online). */
+        val OPP_OF_BUTTON = listOf(0, 1, 3, 2)
         /** The game buttons, in order. */
         val GAMES = listOf(GameMode.EIGHT_BALL, GameMode.NINE_BALL, GameMode.CIRCUIT, GameMode.POCKET_WARS, GameMode.CUTTHROAT,
             GameMode.BUMPER, GameMode.OCTAGON, GameMode.GAUNTLET, GameMode.TRICK)

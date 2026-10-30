@@ -1,7 +1,7 @@
 # Pool — 8-Ball, 9-Ball & Trick Shots for Android
 
 A landscape pool game on a 7, 8 or 9 ft table, with real cue-ball spin, a 3D view down the cue, physically real jump shots (and
-illegal scoops), 8-ball and 9-ball rules, Circuit Pool (three secret target balls each), Pocket Wars (a fight over the six pockets), Cutthroat (three players, three groups of five), bumper pool on its own table, octagon bumper pool for up to four players (or two teams) on an eight-sided table with ramps for cushions, trick shots (jumps across a table with a gap cut out of it, and eight classic trick shots), a computer opponent with ten skill levels, and pass-and-play for two people (three in Cutthroat). Pure Kotlin, no third-party libraries,
+illegal scoops), 8-ball and 9-ball rules, Circuit Pool (three secret target balls each), Pocket Wars (a fight over the six pockets), Cutthroat (three players, three groups of five), bumper pool on its own table, octagon bumper pool for up to four players (or two teams) on an eight-sided table with ramps for cushions, trick shots (jumps across a table with a gap cut out of it, and eight classic trick shots), a computer opponent with ten skill levels, pass-and-play for two people (three in Cutthroat), and online play on separate devices in the web version. Pure Kotlin, no third-party libraries,
 no image or sound assets (balls are rendered per-pixel and sounds are synthesized).
 
 ## Build & run
@@ -21,6 +21,36 @@ and publishes it with GitHub Pages at **https://rocketpocketstopitdropit.github.
 On iPhone: open the link in Safari → Share → *Add to Home Screen* for a full-screen, offline-capable app icon.
 If the phone is in portrait (e.g. rotation lock), the game draws sideways so it fills the screen held horizontally.
 Local build: `KOTLIN_HOME=/path/to/kotlinc web/build.sh` → `web/build/site`.
+
+### Online play (web version)
+
+Menu → **Opponent → Online** plays friends on their own phones or computers, wherever they are. Every game works
+online: 8-ball, 9-ball, Circuit Pool, Pocket Wars and trick shots for two, Cutthroat for three, bumper pool for two,
+and the octagon table and the Gauntlet for 2–4 (or 2 v 2).
+
+- **Host**: pick the game and its settings (table size, call pocket, bar rules, shot clock…), type your name and tap
+  **HOST ONLINE GAME**. You get a five-letter code. **Send invite** shares a link (or copies it); **Copy code** copies the code.
+- **Join**: open the link, or Opponent → Online, type the code and tap **Join**. The host taps **Start game** once
+  everyone's in. More people than seats can join to watch.
+- Each phone takes its own shots. While someone else is up you see their cue move as they aim (bumper pool's opening
+  shots stay secret), then the shot itself, exactly as it happened on their phone. Rock, paper, scissors works the same
+  way (each picks on their own phone). After a game anyone can tap **Rematch**.
+- A dropped connection (a phone locked, a tunnel) reconnects by itself and catches up; a player who leaves shows as
+  *offline* on their card, and can come back with the same link. Close the game with ☰ → *Leave the game*.
+- Online wins and losses are kept per game type. Online games aren't saved to *Resume*.
+
+How it works (`web/src/Net.kt`, `Mqtt.kt`, `Sync.kt`): there's no game server. The phones talk through a free public
+MQTT broker (`broker.emqx.io`, with `broker.hivemq.com` and `test.mosquitto.org` as fall-backs — the room code's first
+letter says which), over a secure WebSocket, with a tiny MQTT client written for this app. A room is a handful of
+topics: the settings and seats, who's connected, the latest *act* (kept by the broker, so a phone that missed something
+or rejoins just takes the newest), and the live aim and rock-paper-scissors picks. Only the player whose turn it is
+acts: their phone runs the shot through the physics to the end straight away, recording every ball 60 times a second
+(to 0.1 mm), judges it with the rules, and sends the recording plus the complete game state before and after. Every
+phone (the shooter's too) then plays that recording back, so all screens show the same shot whatever their browser or
+frame rate, and ends on exactly the same state. A break is about 30 KB. Anyone who knows a room's code can see its
+messages, so don't put anything private in your name.
+
+For testing against a local broker, add `?broker=ws://localhost:9001` to the page address.
 
 ### Building on GitHub (no Android Studio)
 
@@ -119,8 +149,8 @@ apps or close it. A shot that was still rolling is replayed from the start of th
 **Shot clock** (menu): optional 10–120 s per shot for human players; running out is a foul. With
 ball in hand the clock waits until you aim (table or fine-aim wheel) or touch the power bar.
 
-**Every game three ways**: pick the game (8-Ball, 9-Ball, Circuit, Pocket Wars, Cutthroat, Bumper, Octagon, Trick), then the
-**Opponent**: *Computer* (ten levels), *Pass & Play*, or *Practice* on your own. In Cutthroat, *Computer* means you
+**Every game three ways** (four on the web): pick the game (8-Ball, 9-Ball, Circuit, Pocket Wars, Cutthroat, Bumper, Octagon, Trick), then the
+**Opponent**: *Computer* (ten levels), *Pass & Play*, *Online* (web version, see above), or *Practice* on your own. In Cutthroat, *Computer* means you
 against two CPUs, both at the level on the skill slider, and *Pass & Play* is three people sharing the phone. On the
 octagon table, *Computer* is you against one to three CPUs (all at that level), or you and a CPU partner against two CPUs.
 
